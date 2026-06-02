@@ -3,12 +3,26 @@
 
 const STORAGE_KEY = 'capex_builder_state_v1';
 const DRIVE_TOKEN_KEY = 'capex_builder_drive_token';
+const OPTIONS_KEY = 'capex_options_overrides_v1';
+
+// ---------- Dropdown option overrides (loaded from Excel via import) ----------
+function loadOptionOverrides() {
+  try { return JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}'); }
+  catch { return {}; }
+}
+function getFieldOptions(field) {
+  const ov = loadOptionOverrides();
+  return ov[field.key] || field.options || [];
+}
+function resetOptionOverrides() {
+  localStorage.removeItem(OPTIONS_KEY);
+}
 
 const DEFAULT_STATE = () => ({
   meta: { created: new Date().toISOString(), updated: new Date().toISOString(), version: 1 },
   phase1: {},
   phase2: {},
-  phase3: {}, // keyed by `${groupIdx}.${sectionIdx}.${itemIdx}` -> {qty, unit_cost, notes}
+  phase3: {},
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
 });
 
@@ -62,6 +76,13 @@ function computeField(expr, bag) {
 }
 
 // ---------- Render: generic form ----------
+function formatNumber(v, decimals) {
+  if (v === '' || v === null || v === undefined || !isFinite(v)) return '';
+  if (decimals === 0) return String(Math.round(Number(v)));
+  if (decimals > 0) return Number(v).toFixed(decimals);
+  return String(v);
+}
+
 function renderField(field, value, onChange) {
   const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') });
   wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
@@ -71,7 +92,7 @@ function renderField(field, value, onChange) {
   if (field.type === 'select') {
     input = el('select');
     input.appendChild(el('option', { value: '' }, '—'));
-    field.options.forEach(opt => {
+    getFieldOptions(field).forEach(opt => {
       const o = el('option', { value: opt }, opt);
       if (value === opt) o.selected = true;
       input.appendChild(o);
@@ -85,12 +106,18 @@ function renderField(field, value, onChange) {
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
-    if (field.computed) input.readOnly = true;
-    input.value = value !== undefined && value !== null ? value : '';
+    const initial = field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
+    input.value = initial;
   }
 
   input.addEventListener('input', () => onChange(input.value));
   input.addEventListener('change', () => onChange(input.value));
+  if (field.type === 'number' && field.decimals !== undefined) {
+    input.addEventListener('blur', () => {
+      if (input.value === '') return;
+      input.value = formatNumber(input.value, field.decimals);
+    });
+  }
   wrap.appendChild(input);
   return wrap;
 }
@@ -105,19 +132,26 @@ function renderSchemaForm(sections, bag, onUpdate) {
       if (f.computed) bag[f.key] = value;
       const fieldNode = renderField(f, value, (v) => {
         bag[f.key] = (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
-        // Recompute computed fields in same section
         sec.fields.forEach(ff => {
           if (ff.computed) {
             const cv = computeField(ff.computed, bag);
             bag[ff.key] = cv;
             const inp = body.querySelector(`[data-key="${ff.key}"]`);
-            if (inp) inp.value = isFinite(cv) ? cv : '';
+            if (inp) inp.value = ff.decimals !== undefined ? formatNumber(cv, ff.decimals) : (isFinite(cv) ? cv : '');
           }
         });
+        if (f.partner && bag[f.key] !== '') {
+          const pv = computeField(f.partner.expr, bag);
+          bag[f.partner.target] = pv;
+          const pInp = body.querySelector(`[data-key="${f.partner.target}"]`);
+          if (pInp) {
+            const partnerField = sec.fields.find(x => x.key === f.partner.target);
+            pInp.value = (partnerField && partnerField.decimals !== undefined) ? formatNumber(pv, partnerField.decimals) : (isFinite(pv) ? pv : '');
+          }
+        }
         saveState();
         onUpdate && onUpdate();
       });
-      // tag this field's input with its key so computed re-fill can find it
       const inp = fieldNode.querySelector('input, select, textarea');
       if (inp) inp.setAttribute('data-key', f.key);
       body.appendChild(fieldNode);
@@ -482,11 +516,65 @@ function bindShell() {
   });
   $('#btn-export-xlsx').addEventListener('click', exportXlsx);
   $('#btn-drive-connect').addEventListener('click', driveConnect);
+  $('#btn-import-options').addEventListener('click', () => $('#file-import-options').click());
+  $('#file-import-options').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) importOptionsXlsx(file);
+    e.target.value = '';
+  });
+  $('#btn-reset-options').addEventListener('click', () => {
+    if (confirm('Reset all dropdown options to defaults from the source spreadsheet?')) {
+      resetOptionOverrides();
+      updateOptionsStatus();
+      renderApp();
+      toast('Options reset', 'success');
+    }
+  });
   updateDriveStatus();
+  updateOptionsStatus();
+}
+
+function updateOptionsStatus() {
+  const ov = loadOptionOverrides();
+  const n = Object.keys(ov).length;
+  const s = $('#options-status');
+  if (s) s.textContent = n ? `${n} field${n === 1 ? '' : 's'} overridden` : 'Using defaults';
+}
+
+function importOptionsXlsx(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+      const ws = wb.Sheets['Dropdown Options'] || wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+      const overrides = {};
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const fieldKey = row[2];
+        if (!fieldKey) continue;
+        const opts = row.slice(4)
+          .map(v => v == null ? '' : String(v).trim())
+          .filter(Boolean);
+        if (opts.length) overrides[String(fieldKey).trim()] = opts;
+      }
+      if (!Object.keys(overrides).length) {
+        toast('No options found in Excel (check column layout)', 'error');
+        return;
+      }
+      localStorage.setItem(OPTIONS_KEY, JSON.stringify(overrides));
+      updateOptionsStatus();
+      renderApp();
+      toast(`Imported options for ${Object.keys(overrides).length} fields`, 'success');
+    } catch (err) {
+      toast('Import failed: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 // ---------- Google Drive (stub) ----------
-const GOOGLE_CLIENT_ID = ''; // <-- paste OAuth Web Client ID here
+const GOOGLE_CLIENT_ID = '';
 function updateDriveStatus() {
   const status = $('#drive-status');
   if (!GOOGLE_CLIENT_ID) { status.textContent = 'Add OAuth client ID to enable'; return; }
