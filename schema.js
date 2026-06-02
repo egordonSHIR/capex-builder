@@ -7,7 +7,8 @@ window.SCHEMA = {
     {"key": "city", "label": "City", "type": "text"},
     {"key": "state", "label": "State", "type": "select", "options": ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]},
     {"key": "zip", "label": "ZIP", "type": "text", "pattern": "[0-9]{5}"},
-    {"key": "property_type", "label": "Property Type", "type": "select", "options": ["MFVA","EXSTAY"]}
+    {"key": "property_type", "label": "Property Type", "type": "select", "options": ["MFVA","EXSTAY"]},
+    {"key": "year_built", "label": "Year Built", "type": "number", "min": 1900, "max": 2026}
   ]},
   {"section": "Units & Area", "fields": [
     {"key": "mf_units", "label": "Number of MF Units", "type": "number", "min": 0},
@@ -22,7 +23,7 @@ window.SCHEMA = {
   {"section": "Building & Site", "fields": [
     {"key": "num_buildings", "label": "# Buildings", "type": "number", "min": 0},
     {"key": "vertical_floors", "label": "# Vertical Floors (Per Building)", "type": "number", "min": 0},
-    {"key": "elevators_yn", "label": "# Elevators", "type": "select", "options": ["Yes","No"]},
+    {"key": "elevators_yn", "label": "Elevators?", "type": "select", "options": ["Yes","No"]},
     {"key": "elevator_year_install", "label": "Year Installed", "type": "number", "min": 1900, "max": 2100, "show_if": "elevators_yn === 'Yes'"},
     {"key": "elevator_passenger", "label": "Passenger #", "type": "number", "min": 0, "show_if": "elevators_yn === 'Yes'"},
     {"key": "elevator_freight", "label": "Freight #", "type": "number", "min": 0, "show_if": "elevators_yn === 'Yes'"},
@@ -33,18 +34,24 @@ window.SCHEMA = {
   phase2: [
   {"section": "Basics", "fields": [
     {"key": "construction_type", "label": "Construction Type", "type": "select", "options": ["Wood Frame","Concrete"]},
-    {"key": "flooring", "label": "Flooring", "type": "text"},
+    {"key": "flooring", "label": "Flooring", "type": "select", "options": ["Vinyl Plank","Hardwood","Carpeted","Hard 1st + Carpet 2nd"]},
     {"key": "roof_shape", "label": "Roof Shape", "type": "select", "options": ["Pitched","Flat"]},
     {"key": "roof_material", "label": "Roof Material", "type": "select", "options": ["TPO","Shingles"]},
+    {"key": "corridor", "label": "Corridor", "type": "select", "options": ["Interior (Hallway)","Exterior (Walkway)"]},
     {"key": "garage", "label": "Garage", "type": "select", "options": ["None","Attached","Detached Single","Detached Group"]},
-    {"key": "parking_spots_needed", "label": "Parking Spots Needed", "type": "number", "min": 0}
+    {"key": "parking_spots_to_add", "label": "Parking Spots to Add", "type": "number", "min": 0},
+    {"key": "parking_type", "label": "Type", "type": "select", "options": ["Restripe","New Cover"], "show_if": "parking_spots_to_add > 0"},
+    {"key": "parking_suggestion", "type": "info", "expr": "`Suggestion: ${(parking_spots_to_add||0) <= 0.05 * (p1_parking_spots_existing||0) ? 'Restripe' : 'New Cover'} (adding ${parking_spots_to_add||0} ≈ ${(p1_parking_spots_existing||0) ? Math.round(100*(parking_spots_to_add||0)/p1_parking_spots_existing) : 0}% of existing ${p1_parking_spots_existing||0})`", "show_if": "parking_spots_to_add > 0"},
+    {"key": "parking_cost_info", "type": "info", "expr": "`Estimated cost: $${(parking_type === 'Restripe' ? Math.round((p1_parking_spots_existing||0)/100*5000) : (parking_type === 'New Cover' ? (parking_spots_to_add||0)*300*4 : 0)).toLocaleString()}` + (parking_type === 'Restripe' ? '  (Restripe: $5,000 per 100 existing spots)' : (parking_type === 'New Cover' ? '  (New Cover: $4/Sqft × 300 Sqft/spot)' : ''))", "show_if": "parking_spots_to_add > 0"}
   ]},
   {"section": "Exteriors", "fields": [
     {"key": "landscape_level", "label": "Landscape Level", "type": "select", "options": ["None","Low","Medium","High"]},
     {"key": "new_railing_lf", "label": "New Railing", "type": "number", "min": 0, "hint": "Linear Ft"},
     {"key": "new_railing_panels_sqft", "label": "New Railing Panels", "type": "number", "computed": "new_railing_lf * 3", "decimals": 0, "hint": "Auto: Linear Ft × 36\" (Sqft)"},
     {"key": "private_yards_add", "label": "Private Yards to Add", "type": "number", "min": 0, "hint": "# Yards"},
-    {"key": "yard_perimeter_lf", "label": "Yard Perimeter", "type": "number", "min": 0, "hint": "Linear Ft"}
+    {"key": "yard_perimeter_lf", "label": "Yard Perimeter", "type": "number", "min": 0, "hint": "Linear Ft"},
+    {"key": "balconies", "label": "Balconies", "type": "select", "options": ["Yes","No"]},
+    {"key": "patios", "label": "Patios", "type": "select", "options": ["Yes","No"]}
   ]},
   {"section": "Common Interiors", "fields": [
     {"key": "hallway_length", "label": "Interior Hallway Dimensions — Length", "type": "number", "min": 0, "hint": "Feet"},
