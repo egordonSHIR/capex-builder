@@ -23,6 +23,7 @@ window.SCHEMA = {
   {"section": "Building & Site", "fields": [
     {"key": "num_buildings", "label": "# Buildings", "type": "number", "min": 0},
     {"key": "vertical_floors", "label": "# Vertical Floors (Per Building)", "type": "number", "min": 0},
+    {"key": "roofs_connected", "label": "Roofs Connected?", "type": "select", "options": ["Yes","No"], "show_if": "num_buildings > 1"},
     {"key": "elevators_yn", "label": "Elevators?", "type": "select", "options": ["Yes","No"]},
     {"key": "elevator_year_install", "label": "Year Installed", "type": "number", "min": 1900, "max": 2100, "show_if": "elevators_yn === 'Yes'"},
     {"key": "elevator_passenger", "label": "Passenger #", "type": "number", "min": 0, "show_if": "elevators_yn === 'Yes'"},
@@ -65,6 +66,8 @@ window.SCHEMA = {
     {"key": "heating", "label": "Heating", "type": "select", "options": ["Ind. Furnace","Boiler Radiator","Boiler FCUs"]}
   ]},
   {"section": "Plumbing", "fields": [
+    {"key": "hot_water_type", "label": "Hot Water Type", "type": "select", "options": ["HWH-Gas","HWH-Elec","Boiler"]},
+    {"key": "hot_water_count", "label": "# Hot Water", "type": "number", "min": 0, "dynamic_label": "`# ${hot_water_type || '[Hot Water Type]'}`"},
     {"key": "plumbing_pipes", "label": "Plumbing Pipes", "type": "select", "options": ["Steel","PVC","Cast Iron"]},
     {"key": "showerhead_aerated", "label": "Showerhead Aerated", "type": "select", "options": ["Yes","No"]},
     {"key": "bath_sink_aerated", "label": "Bathroom Sink Aerated", "type": "select", "options": ["Yes","No"]},
