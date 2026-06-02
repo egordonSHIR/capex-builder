@@ -19,9 +19,7 @@ function resetOptionOverrides() {
 
 const DEFAULT_STATE = () => ({
   meta: { created: new Date().toISOString(), updated: new Date().toISOString(), version: 1 },
-  phase1: {},
-  phase2: {},
-  phase3: {},
+  phase1: {}, phase2: {}, phase3: {},
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
 });
 
@@ -56,10 +54,7 @@ function el(tag, attrs = {}, ...children) {
   }
   return e;
 }
-function fmtMoney(n) {
-  if (!isFinite(n)) return '$0';
-  return '$' + Math.round(n).toLocaleString();
-}
+function fmtMoney(n) { if (!isFinite(n)) return '$0'; return '$' + Math.round(n).toLocaleString(); }
 function toast(msg, type = '') {
   const t = $('#toast');
   t.textContent = msg;
@@ -68,7 +63,6 @@ function toast(msg, type = '') {
 }
 function computeField(expr, bag) {
   try {
-    // Keep non-numeric strings as strings (so show_if comparisons like "=== 'Yes'" work).
     const args = Object.values(bag).map(v => {
       if (v === '' || v === null || v === undefined) return 0;
       if (typeof v === 'number') return v;
@@ -100,11 +94,9 @@ function renderField(field, value, onChange) {
     div.textContent = '';
     return div;
   }
-
   const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') });
   wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
   if (field.hint) wrap.appendChild(el('div', { class: 'hint' }, field.hint));
-
   let input;
   if (field.type === 'select') {
     input = el('select');
@@ -123,12 +115,10 @@ function renderField(field, value, onChange) {
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
-    // Computed-only fields are read-only; computed-with-partner remain editable.
     if (field.computed && !field.partner) input.readOnly = true;
     const initial = field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
     input.value = initial;
   }
-
   input.addEventListener('input', () => onChange(input.value));
   input.addEventListener('change', () => onChange(input.value));
   if (field.type === 'number' && field.decimals !== undefined) {
@@ -156,25 +146,32 @@ function refreshSection(sec, body, bag) {
     if (ff.show_if) {
       const node = body.querySelector(`[data-key="${ff.key}"]`);
       const wrap = node && (node.closest ? node.closest('.field') : null);
-      if (wrap) {
+      const inGroup = wrap && wrap.closest && wrap.closest('.expansion-group');
+      if (wrap && !inGroup) {
         const show = !!computeField(ff.show_if, eb);
         wrap.style.display = show ? '' : 'none';
       }
     }
+  });
+  body.querySelectorAll('.expansion-group[data-show-if]').forEach(grp => {
+    const show = !!computeField(grp.getAttribute('data-show-if'), eb);
+    grp.style.display = show ? '' : 'none';
   });
 }
 
 function renderSchemaForm(sections, bag, onUpdate) {
   const frag = document.createDocumentFragment();
   sections.forEach((sec, si) => {
-    const collapsed = window['_collapsed_' + sec.section] === true;
+    // Default to collapsed; preserve user's explicit choice during the session.
+    const collapsed = window['_collapsed_' + sec.section] !== false;
     const body = el('div', { class: 'section-body' });
+    let activeExpGroup = null;
+    let activeExpExpr = null;
     sec.fields.forEach(f => {
       let value;
       if (f.type === 'info') value = '';
       else if (f.computed) { value = computeField(f.computed, getEvalBag(bag)); bag[f.key] = value; }
       else value = bag[f.key];
-
       const fieldNode = renderField(f, value, (v) => {
         bag[f.key] = (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
         if (f.partner && bag[f.key] !== '') {
@@ -192,11 +189,36 @@ function renderSchemaForm(sections, bag, onUpdate) {
       });
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
-      body.appendChild(fieldNode);
+      // Group consecutive same-show_if fields into an indented expansion-group container.
+      if (f.show_if) {
+        if (activeExpExpr !== f.show_if) {
+          const groupKey = sec.section + '::' + f.show_if;
+          const grpCollapsedKey = '_expCollapsed_' + groupKey;
+          const startCollapsed = window[grpCollapsedKey] === true;
+          const grp = el('div', { class: 'expansion-group' + (startCollapsed ? ' collapsed' : '') });
+          grp.setAttribute('data-exp-key', groupKey);
+          grp.setAttribute('data-show-if', f.show_if);
+          const toggleBtn = el('button', { class: 'expansion-toggle', type: 'button', title: 'Collapse / expand' });
+          toggleBtn.textContent = startCollapsed ? '▶' : '▼';
+          toggleBtn.addEventListener('click', () => {
+            const nowCollapsed = !grp.classList.contains('collapsed');
+            grp.classList.toggle('collapsed', nowCollapsed);
+            toggleBtn.textContent = nowCollapsed ? '▶' : '▼';
+            window[grpCollapsedKey] = nowCollapsed;
+          });
+          grp.appendChild(toggleBtn);
+          body.appendChild(grp);
+          activeExpGroup = grp;
+          activeExpExpr = f.show_if;
+        }
+        activeExpGroup.appendChild(fieldNode);
+      } else {
+        activeExpGroup = null;
+        activeExpExpr = null;
+        body.appendChild(fieldNode);
+      }
     });
-
     setTimeout(() => refreshSection(sec, body, bag), 0);
-
     const section = el('section', { class: 'section' + (collapsed ? ' collapsed' : '') },
       el('header', { class: 'section-header',
         onClick: (e) => {
@@ -229,15 +251,10 @@ function renderPhase3() {
   const root = el('div');
   const totals = computeTotals();
   const summary = el('div', { class: 'summary-totals' },
-    el('div', { class: 'summary-row' },
-      el('span', { class: 'label' }, 'Line items entered'),
-      el('span', { class: 'value' }, String(totals.itemCount))),
-    el('div', { class: 'summary-row grand' },
-      el('span', { class: 'label' }, 'Running Subtotal'),
-      el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
+    el('div', { class: 'summary-row' }, el('span', { class: 'label' }, 'Line items entered'), el('span', { class: 'value' }, String(totals.itemCount))),
+    el('div', { class: 'summary-row grand' }, el('span', { class: 'label' }, 'Running Subtotal'), el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
   );
   root.appendChild(summary);
-
   SCHEMA.phase3.forEach((group, gi) => {
     const groupBody = el('div');
     group.sections.forEach((sec, si) => {
@@ -272,12 +289,11 @@ function renderPhase3() {
       });
       const secNode = el('section', { class: 'section collapsed' },
         el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', {}, sec.name),
-          el('span', { class: 'chev' }, '▼')
+          el('span', {}, sec.name), el('span', { class: 'chev' }, '▼')
         ), secBody);
       groupBody.appendChild(secNode);
     });
-    const groupNode = el('section', { class: 'section' },
+    const groupNode = el('section', { class: 'section collapsed' },
       el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
         el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
         el('span', { class: 'chev' }, '▼')
@@ -337,8 +353,9 @@ function renderPhase4() {
     warnings.forEach(w => body.appendChild(el('div', { class: 'field' }, w)));
     root.appendChild(wrap);
   }
-  const adj = el('section', { class: 'section' },
-    el('header', { class: 'section-header' }, el('span', {}, 'Adjustments'), el('span', { class: 'chev' }, '▼')),
+  const adj = el('section', { class: 'section collapsed' },
+    el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+      el('span', {}, 'Adjustments'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' },
       renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 0.01, min: 0, max: 1, hint: 'Decimal (0.10 = 10%)' },
         STATE.phase4.contingency_pct, (v) => { STATE.phase4.contingency_pct = Number(v) || 0; saveState(); renderApp(); }),
@@ -356,8 +373,9 @@ function renderPhase4() {
   totalsCard.appendChild(el('div', { class: 'summary-row grand' }, el('span', { class: 'label' }, 'TOTAL CAPEX'), el('span', { class: 'value' }, fmtMoney(t.grand))));
   totalsCard.appendChild(el('div', { class: 'summary-row' }, el('span', { class: 'label' }, '$ / Unit'), el('span', { class: 'value' }, fmtMoney(t.perUnit))));
   root.appendChild(totalsCard);
-  const byGroupCard = el('section', { class: 'section' },
-    el('header', { class: 'section-header' }, el('span', {}, 'Breakdown by Group'), el('span', { class: 'chev' }, '▼')),
+  const byGroupCard = el('section', { class: 'section collapsed' },
+    el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+      el('span', {}, 'Breakdown by Group'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' })
   );
   const gbody = byGroupCard.querySelector('.section-body');
