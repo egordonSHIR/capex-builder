@@ -102,8 +102,7 @@ window.SCHEMA = {
   phase3: [
   {"name": "Soft Costs", "sections": [
     {"name": "General", "items": [
-      {"category": "ZONING", "name": "ZONING (LEGAL)", "default_cost_per_item": 25000, "notes": null, "gl_account": "17966: CIP Zoning"},
-      {"category": "GENERAL CONDITIONS", "name": "MATERIALS IMPORT TAX/SHIPPING", "default_cost_per_item": null, "notes": null, "gl_account": "17230: CIP Interior - Freight/Overseas Shipping"}
+      {"category": "ZONING", "name": "ZONING (LEGAL)", "default_cost_per_item": 25000, "notes": null, "gl_account": "17966: CIP Zoning"}
     ]},
     {"name": "DESIGN TEAM CONTRACTS", "items": [
       {"category": "DESIGN", "name": "3D Scanning", "default_cost_per_item": 15000, "notes": null, "gl_account": null},
@@ -212,6 +211,7 @@ window.SCHEMA = {
   ]},
   {"name": "Interior", "sections": [
     {"name": "General", "items": [
+      {"category": "GENERAL CONDITIONS", "name": "MATERIALS IMPORT TAX/SHIPPING", "default_cost_per_item": null, "notes": null, "gl_account": "17230: CIP Interior - Freight/Overseas Shipping"},
       {"category": "LABOR", "name": "DEMO LABOR", "default_cost_per_item": null, "notes": null, "gl_account": "17101: CIP Interior - Renovation Labor"}
     ]},
     {"name": "MECHANICAL ROUGH-INS", "items": [
