@@ -19,10 +19,10 @@ window.SCHEMA = {
       {"key": "current_occupancy", "label": "Current Occupancy", "type": "number", "min": 0, "max": 1, "step": 0.01, "hint": "Decimal (0.75 = 75%)"},
       {"key": "mf_rsf", "label": "Multifamily RSF", "type": "number", "min": 0},
       {"key": "commercial_rsf", "label": "Commercial RSF", "type": "number", "min": 0},
-      {"key": "common_sf", "label": "Common (non-rentable) SF", "type": "number", "min": 0},
-      {"key": "overall_rsf", "label": "Overall RSF", "type": "number", "computed": "mf_rsf + commercial_rsf + common_sf"},
-      {"key": "land_sf", "label": "Land SF", "type": "number", "min": 0},
-      {"key": "land_acres", "label": "Land Acreage", "type": "number", "computed": "land_sf / 43560"}
+      {"key": "common_sf", "label": "Common (non-rentable) Sqft", "type": "number", "min": 0, "decimals": 0},
+      {"key": "overall_rsf", "label": "Overall RSF", "type": "number", "computed": "mf_rsf + commercial_rsf + common_sf", "decimals": 0},
+      {"key": "land_sf", "label": "Land Sqft", "type": "number", "min": 0, "decimals": 0, "partner": {"target": "land_acres", "expr": "land_sf / 43560"}},
+      {"key": "land_acres", "label": "Land Acreage", "type": "number", "min": 0, "decimals": 2, "partner": {"target": "land_sf", "expr": "land_acres * 43560"}}
     ]
   },
   {
@@ -47,7 +47,7 @@ window.SCHEMA = {
   {"section": "Exteriors", "fields": [
     {"key": "landscape_level", "label": "Landscape Level", "type": "select", "options": ["None","Low","Medium","High"]},
     {"key": "new_railing_lf", "label": "New Railing", "type": "number", "min": 0, "hint": "Linear Ft"},
-    {"key": "new_railing_panels_sqft", "label": "New Railing Panels", "type": "number", "min": 0, "hint": "SQFT"},
+    {"key": "new_railing_panels_sqft", "label": "New Railing Panels", "type": "number", "min": 0, "hint": "Sqft"},
     {"key": "private_yards_add", "label": "Private Yards to Add", "type": "number", "min": 0, "hint": "# Yards"},
     {"key": "yard_perimeter_lf", "label": "Yard Perimeter", "type": "number", "min": 0, "hint": "Linear Ft"}
   ]},
@@ -81,7 +81,7 @@ window.SCHEMA = {
   ]},
   {"section": "Amenities - Indoor", "fields": [
     {"key": "gym_space", "label": "Gym Space", "type": "select", "options": ["Yes","No"]},
-    {"key": "gym_equipment", "label": "Gym Equipment", "type": "number", "min": 0, "hint": "# Pieces or SQFT"},
+    {"key": "gym_equipment", "label": "Gym Equipment", "type": "number", "min": 0, "hint": "# Pieces or Sqft"},
     {"key": "laundry_facilities", "label": "Laundry Facilities", "type": "number", "min": 0, "hint": "#"},
     {"key": "machines_per_facility", "label": "Machines per Facility", "type": "number", "min": 0},
     {"key": "indoor_pools", "label": "Indoor Pools", "type": "number", "min": 0, "hint": "#"},
@@ -184,7 +184,7 @@ window.SCHEMA = {
     {"name": "FIRE PROTECTION", "items": [
       {"category": "FIRE PROTECTION", "name": "Fire Alarm Monitoring System", "default_cost_per_item": 20000, "notes": null, "gl_account": "17366: CIP Building - Fire Protection - Alarm System"},
       {"category": "FIRE PROTECTION", "name": "Sprinkler - Riser Room", "default_cost_per_item": 25000, "notes": null, "gl_account": "17365: CIP Building - Fire Protection - Sprinklers"},
-      {"category": "FIRE PROTECTION", "name": "Sprinkler  - Building Lines ($ By SF)", "default_cost_per_item": 0, "notes": "Quantity is in SF", "gl_account": "17365: CIP Building - Fire Protection - Sprinklers"},
+      {"category": "FIRE PROTECTION", "name": "Sprinkler  - Building Lines ($ By Sqft)", "default_cost_per_item": 0, "notes": "Quantity is in Sqft", "gl_account": "17365: CIP Building - Fire Protection - Sprinklers"},
       {"category": "FIRE PROTECTION", "name": "Sprinkler - Baseboard Heater", "default_cost_per_item": 2500, "notes": null, "gl_account": "17365: CIP Building - Fire Protection - Sprinklers"},
       {"category": "FIRE PROTECTION", "name": "Sprinkler - Fire Assembly Install", "default_cost_per_item": 0, "notes": "per unit item", "gl_account": "17365: CIP Building - Fire Protection - Sprinklers"}
     ]},
