@@ -143,6 +143,14 @@ function refreshSection(sec, body, bag) {
       const inp = body.querySelector(`[data-key="${ff.key}"]`);
       if (inp) inp.value = ff.decimals !== undefined ? formatNumber(cv, ff.decimals) : (isFinite(cv) ? cv : '');
     }
+    if (ff.dynamic_label) {
+      const node = body.querySelector(`[data-key="${ff.key}"]`);
+      const wrap = node && (node.closest ? node.closest('.field') : null);
+      if (wrap) {
+        const lbl = wrap.querySelector('label');
+        if (lbl) lbl.textContent = String(computeField(ff.dynamic_label, eb) ?? ff.label);
+      }
+    }
     if (ff.show_if) {
       const node = body.querySelector(`[data-key="${ff.key}"]`);
       const wrap = node && (node.closest ? node.closest('.field') : null);
@@ -162,7 +170,6 @@ function refreshSection(sec, body, bag) {
 function renderSchemaForm(sections, bag, onUpdate) {
   const frag = document.createDocumentFragment();
   sections.forEach((sec, si) => {
-    // Default to collapsed; preserve user's explicit choice during the session.
     const collapsed = window['_collapsed_' + sec.section] !== false;
     const body = el('div', { class: 'section-body' });
     let activeExpGroup = null;
@@ -189,29 +196,39 @@ function renderSchemaForm(sections, bag, onUpdate) {
       });
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
-      // Group consecutive same-show_if fields into an indented expansion-group container.
+      // Group consecutive same-show_if fields only when 2+ share the expression.
       if (f.show_if) {
-        if (activeExpExpr !== f.show_if) {
-          const groupKey = sec.section + '::' + f.show_if;
-          const grpCollapsedKey = '_expCollapsed_' + groupKey;
-          const startCollapsed = window[grpCollapsedKey] === true;
-          const grp = el('div', { class: 'expansion-group' + (startCollapsed ? ' collapsed' : '') });
-          grp.setAttribute('data-exp-key', groupKey);
-          grp.setAttribute('data-show-if', f.show_if);
-          const toggleBtn = el('button', { class: 'expansion-toggle', type: 'button', title: 'Collapse / expand' });
-          toggleBtn.textContent = startCollapsed ? '▶' : '▼';
-          toggleBtn.addEventListener('click', () => {
-            const nowCollapsed = !grp.classList.contains('collapsed');
-            grp.classList.toggle('collapsed', nowCollapsed);
-            toggleBtn.textContent = nowCollapsed ? '▶' : '▼';
-            window[grpCollapsedKey] = nowCollapsed;
-          });
-          grp.appendChild(toggleBtn);
-          body.appendChild(grp);
-          activeExpGroup = grp;
-          activeExpExpr = f.show_if;
+        const fi = sec.fields.indexOf(f);
+        const prev = sec.fields[fi - 1];
+        const next = sec.fields[fi + 1];
+        const isPartOfMulti = (prev && prev.show_if === f.show_if) || (next && next.show_if === f.show_if);
+        if (isPartOfMulti) {
+          if (activeExpExpr !== f.show_if) {
+            const groupKey = sec.section + '::' + f.show_if;
+            const grpCollapsedKey = '_expCollapsed_' + groupKey;
+            const startCollapsed = window[grpCollapsedKey] === true;
+            const grp = el('div', { class: 'expansion-group' + (startCollapsed ? ' collapsed' : '') });
+            grp.setAttribute('data-exp-key', groupKey);
+            grp.setAttribute('data-show-if', f.show_if);
+            const toggleBtn = el('button', { class: 'expansion-toggle', type: 'button', title: 'Collapse / expand' });
+            toggleBtn.textContent = startCollapsed ? '▶' : '▼';
+            toggleBtn.addEventListener('click', () => {
+              const nowCollapsed = !grp.classList.contains('collapsed');
+              grp.classList.toggle('collapsed', nowCollapsed);
+              toggleBtn.textContent = nowCollapsed ? '▶' : '▼';
+              window[grpCollapsedKey] = nowCollapsed;
+            });
+            grp.appendChild(toggleBtn);
+            body.appendChild(grp);
+            activeExpGroup = grp;
+            activeExpExpr = f.show_if;
+          }
+          activeExpGroup.appendChild(fieldNode);
+        } else {
+          activeExpGroup = null;
+          activeExpExpr = null;
+          body.appendChild(fieldNode);
         }
-        activeExpGroup.appendChild(fieldNode);
       } else {
         activeExpGroup = null;
         activeExpExpr = null;
