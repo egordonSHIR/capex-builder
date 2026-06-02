@@ -96,7 +96,8 @@ window.SCHEMA = {
     {"key": "sport_court_indoor", "label": "Sport Court (Indoor)", "type": "select", "options": ["Yes","No"]}
   ]},
   {"section": "Leasing Office", "fields": [
-    {"key": "leasing_office", "label": "Leasing Office", "type": "select", "options": ["Yes","No"]}
+    {"key": "leasing_office", "label": "Leasing Office", "type": "select", "options": ["Yes","No"]},
+    {"key": "leasing_office_addons", "label": "Leasing Office Add-Ons", "type": "multiselect", "options": ["Sound System","Business Center"], "hint": "Select all that apply"}
   ]}
 ],
   phase3: [
