@@ -37,11 +37,17 @@
   <input type="file" id="file-import" accept="application/json" hidden />
   <button id="btn-export-xlsx">Export Excel</button>
   <hr/>
+  <h3>Dropdown Options</h3>
+  <button id="btn-import-options">Import Options (XLSX)</button>
+  <input type="file" id="file-import-options" accept=".xlsx,.xls" hidden />
+  <button id="btn-reset-options">Reset to Defaults</button>
+  <div id="options-status" class="muted small"></div>
+  <hr/>
   <h3>Sync</h3>
   <button id="btn-drive-connect">Connect Google Drive</button>
   <div id="drive-status" class="muted">Not connected</div>
   <hr/>
-  <div class="muted small">Auto-saved to this device. v0.1</div>
+  <div class="muted small">Auto-saved to this device. v0.2</div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
