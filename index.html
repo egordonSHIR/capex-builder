@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="theme-color" content="#1e3a8a" />
+<title>Capex Builder</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="app-header">
+  <div class="brand">
+    <span class="logo">SHIR</span>
+    <span class="title">Capex Builder</span>
+  </div>
+  <div class="header-actions">
+    <button id="btn-save" class="btn-icon" title="Save">💾</button>
+    <button id="btn-menu" class="btn-icon" title="Menu">☰</button>
+  </div>
+</header>
+
+<nav class="phase-tabs">
+  <button class="tab active" data-phase="1">1. Basics</button>
+  <button class="tab" data-phase="2">2. Physical</button>
+  <button class="tab" data-phase="3">3. Capex</button>
+  <button class="tab" data-phase="4">4. Review</button>
+</nav>
+
+<main id="phase-content"></main>
+
+<div id="menu-drawer" class="drawer hidden">
+  <button class="drawer-close">✕</button>
+  <h3>Property</h3>
+  <button id="btn-new">New Property</button>
+  <button id="btn-export-json">Export JSON</button>
+  <button id="btn-import-json">Import JSON</button>
+  <input type="file" id="file-import" accept="application/json" hidden />
+  <button id="btn-export-xlsx">Export Excel</button>
+  <hr/>
+  <h3>Sync</h3>
+  <button id="btn-drive-connect">Connect Google Drive</button>
+  <div id="drive-status" class="muted">Not connected</div>
+  <hr/>
+  <div class="muted small">Auto-saved to this device. v0.1</div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="schema.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
