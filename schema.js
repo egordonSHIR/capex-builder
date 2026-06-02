@@ -34,10 +34,10 @@ window.SCHEMA = {
 ],
   phase2: [
   {"section": "Basics", "fields": [
-    {"key": "construction_type", "label": "Construction Type", "type": "select", "options": ["Wood Frame","Concrete"]},
+    {"key": "construction_type", "label": "Construction Type", "type": "select", "options": ["Wood Frame","Concrete","Steel"]},
     {"key": "flooring", "label": "Flooring", "type": "select", "options": ["Vinyl Plank","Hardwood","Carpeted","Hard 1st + Carpet 2nd"]},
     {"key": "roof_shape", "label": "Roof Shape", "type": "select", "options": ["Pitched","Flat"]},
-    {"key": "roof_material", "label": "Roof Material", "type": "select", "options": ["TPO","Shingles"]},
+    {"key": "roof_material", "label": "Roof Material", "type": "select", "options": ["TPO","Shingles","Torchdown","Bitumen","Built-Up","EPDM","PVC","Metal","Tile"]},
     {"key": "corridor", "label": "Corridor", "type": "select", "options": ["Interior (Hallway)","Exterior (Walkway)"]},
     {"key": "garage", "label": "Garage", "type": "select", "options": ["None","Attached","Detached Single","Detached Group"]},
     {"key": "parking_spots_to_add", "label": "Parking Spots to Add", "type": "number", "min": 0},
@@ -52,7 +52,8 @@ window.SCHEMA = {
     {"key": "private_yards_add", "label": "Private Yards to Add", "type": "number", "min": 0, "hint": "# Yards"},
     {"key": "yard_perimeter_lf", "label": "Yard Perimeter", "type": "number", "min": 0, "hint": "Linear Ft"},
     {"key": "balconies", "label": "Balconies", "type": "select", "options": ["Yes","No"]},
-    {"key": "patios", "label": "Patios", "type": "select", "options": ["Yes","No"]}
+    {"key": "patios", "label": "Patios", "type": "select", "options": ["Yes","No"]},
+    {"key": "patio_type", "label": "Patio Type", "type": "select", "options": ["Front - Sliding Door","Back - Sliding Door","Front - Swinging Door","Back - Swinging Door"], "show_if": "patios === 'Yes'"}
   ]},
   {"section": "Common Interiors", "fields": [
     {"key": "hallway_length", "label": "Interior Hallway Dimensions — Length", "type": "number", "min": 0, "hint": "Feet"},
@@ -62,8 +63,8 @@ window.SCHEMA = {
     {"key": "fencing_needed_lf", "label": "Needed Fencing", "type": "number", "min": 0, "hint": "Linear Ft"}
   ]},
   {"section": "Mechanical (HVAC)", "fields": [
-    {"key": "cooling", "label": "Cooling", "type": "select", "options": ["Ind. Condenser","Chiller FCUs"]},
-    {"key": "heating", "label": "Heating", "type": "select", "options": ["Ind. Furnace","Boiler Radiator","Boiler FCUs"]}
+    {"key": "cooling", "label": "Cooling", "type": "select", "options": ["Ind. Condenser","Chiller FCUs","PTAC","VTAC"]},
+    {"key": "heating", "label": "Heating", "type": "select", "options": ["Ind. Furnace","Boiler Radiator","Boiler FCUs","PTAC","VTAC"]}
   ]},
   {"section": "Plumbing", "fields": [
     {"key": "hot_water_type", "label": "Hot Water Type", "type": "select", "options": ["HWH-Gas","HWH-Elec","Boiler"]},
@@ -87,7 +88,7 @@ window.SCHEMA = {
   ]},
   {"section": "Amenities - Indoor", "fields": [
     {"key": "gym_space", "label": "Gym Space", "type": "select", "options": ["Yes","No"]},
-    {"key": "gym_equipment", "label": "Gym Equipment", "type": "number", "min": 0, "hint": "# Pieces or Sqft"},
+    {"key": "gym_equipment", "label": "Gym Equipment", "type": "select", "options": ["Yes","No"]},
     {"key": "laundry_facilities", "label": "Laundry Facilities", "type": "number", "min": 0, "hint": "#"},
     {"key": "machines_per_facility", "label": "Machines per Facility", "type": "number", "min": 0},
     {"key": "indoor_pools", "label": "Indoor Pools", "type": "number", "min": 0, "hint": "#"},
