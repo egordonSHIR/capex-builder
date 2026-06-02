@@ -103,7 +103,7 @@ main {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--primary);
+  color: var(--text);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
@@ -127,7 +127,15 @@ main {
 .field label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--text);
+}
+.field select option { color: var(--text); }
+.field.info-text {
+  color: #6b7280;
+  font-style: italic;
+  font-size: 13px;
+  padding-top: 4px;
+  padding-bottom: 10px;
 }
 .field .hint { font-size: 11px; color: var(--muted); font-style: italic; }
 .field input, .field select, .field textarea {
