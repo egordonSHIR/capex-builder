@@ -196,7 +196,6 @@ function renderSchemaForm(sections, bag, onUpdate) {
       });
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
-      // Group consecutive same-show_if fields only when 2+ share the expression.
       if (f.show_if) {
         const fi = sec.fields.indexOf(f);
         const prev = sec.fields[fi - 1];
@@ -404,50 +403,161 @@ function renderPhase4() {
   return root;
 }
 
-function exportXlsx() {
-  const wb = XLSX.utils.book_new();
-  const p1Rows = [['PROPERTY BASICS', '']];
-  SCHEMA.phase1.forEach(sec => {
-    p1Rows.push([sec.section, '']);
-    sec.fields.forEach(f => { if (f.type !== 'info') p1Rows.push([f.label, STATE.phase1[f.key] ?? '']); });
+// ---------- Excel export ----------
+async function exportXlsx() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Capex Builder';
+  workbook.created = new Date();
+  const propName = STATE.phase1.prop_name || '';
+  const units = Number(STATE.phase1.mf_units) || 0;
+  const contPct = Number(STATE.phase4.contingency_pct) || 0;
+  const feePct = Number(STATE.phase4.mgmt_fee_pct) || 0;
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9', BORDER_LIGHT = 'FFD1D5DB';
+  const styleCurrency = (cell) => { cell.numFmt = '"$"#,##0'; };
+  const stylePct = (cell) => { cell.numFmt = '0%'; };
+
+  const ws = workbook.addWorksheet('Capex Budget', { views: [{ state: 'frozen', xSplit: 0, ySplit: 7 }] });
+  ws.columns = [
+    { width: 52 }, { width: 10 }, { width: 13 },
+    { width: 11 }, { width: 11 }, { width: 11 },
+    { width: 15 }, { width: 30 }, { width: 42 },
+  ];
+
+  const titleRow = ws.addRow(['CAPEX BUDGET']);
+  titleRow.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+  titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  titleRow.height = 24;
+  titleRow.alignment = { vertical: 'middle' };
+  ws.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
+
+  const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
+  const unitsRow = ws.addRow(['# Units:', units]); unitsRow.getCell(1).font = { bold: true };
+  const yrRow = ws.addRow(['Year Built:', STATE.phase1.year_built || '']); yrRow.getCell(1).font = { bold: true };
+  ws.addRow([]);
+
+  const colHeaderRow = ws.addRow(['', '# Items', '$/Item', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
+  colHeaderRow.font = { bold: true };
+  colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+  colHeaderRow.eachCell((c) => {
+    c.border = { bottom: { style: 'medium', color: { argb: NAVY } } };
+    c.alignment = { horizontal: 'center' };
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(p1Rows), 'Property Basics');
-  const p2Rows = [['PHYSICAL CHARACTERISTICS', '']];
-  SCHEMA.phase2.forEach(sec => {
-    p2Rows.push([sec.section, '']);
-    sec.fields.forEach(f => { if (f.type !== 'info') p2Rows.push([f.label, STATE.phase2[f.key] ?? '']); });
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(p2Rows), 'Physical');
-  const p3Rows = [['Group', 'Section', 'Category', 'Item', '# Items', '$/Item', 'Total', 'Notes', 'GL Account']];
-  SCHEMA.phase3.forEach((g, gi) => {
-    g.sections.forEach((s, si) => {
-      s.items.forEach((it, ii) => {
+  ws.addRow([]);
+
+  let grandSubtotal = 0;
+
+  SCHEMA.phase3.forEach((group, gi) => {
+    let groupTotal = 0;
+    const sectionsWithItems = [];
+    group.sections.forEach((sec, si) => {
+      const itemsWithCost = [];
+      sec.items.forEach((it, ii) => {
         const v = getP3(gi, si, ii);
-        const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-        if (total > 0) p3Rows.push([g.name, s.name, it.category, it.name, Number(v.qty) || 0, Number(v.unit_cost) || 0, total, v.notes || '', it.gl_account || '']);
+        const qty = Number(v.qty) || 0;
+        const cost = Number(v.unit_cost) || 0;
+        const total = qty * cost;
+        if (total > 0) { itemsWithCost.push({ it, v, qty, cost, total }); groupTotal += total; }
+      });
+      if (itemsWithCost.length) sectionsWithItems.push({ sec, items: itemsWithCost });
+    });
+    if (!sectionsWithItems.length) return;
+
+    const isInterior = group.name === 'Interior';
+
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', groupTotal, '', '']);
+    gh.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
+    gh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    gh.height = 20;
+    gh.alignment = { vertical: 'middle' };
+    styleCurrency(gh.getCell(7));
+
+    sectionsWithItems.forEach(({ sec, items }) => {
+      const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '']);
+      sr.font = { bold: true, italic: true };
+      sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+
+      items.forEach(({ it, v, qty, cost, total }) => {
+        const pctOr = isInterior && v.pct_original !== undefined && v.pct_original !== '' ? Number(v.pct_original) : '';
+        const pctPa = isInterior && v.pct_partial !== undefined && v.pct_partial !== '' ? Number(v.pct_partial) : '';
+        const pctRe = isInterior && v.pct_reno !== undefined && v.pct_reno !== '' ? Number(v.pct_reno) : '';
+        const r = ws.addRow([
+          '      ' + it.name, qty, cost,
+          pctOr, pctPa, pctRe,
+          total, v.notes || '', it.gl_account || '',
+        ]);
+        styleCurrency(r.getCell(3));
+        styleCurrency(r.getCell(7));
+        stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
+        r.getCell(7).font = { bold: true };
+        r.eachCell({ includeEmpty: false }, (c) => { c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } }; });
       });
     });
+
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', groupTotal, '', '']);
+    subr.font = { bold: true };
+    subr.eachCell({ includeEmpty: true }, (c) => { c.border = { top: { style: 'thin', color: { argb: NAVY } } }; });
+    styleCurrency(subr.getCell(7));
+    ws.addRow([]);
+    grandSubtotal += groupTotal;
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(p3Rows), 'Capex Line Items');
-  const t = computeTotals();
-  const sumRows = [
-    ['Property', STATE.phase1.prop_name || ''],
-    ['Units', STATE.phase1.mf_units || 0],
-    [],
-    ['Subtotal', t.subtotal],
-    [`Contingency (${Math.round((STATE.phase4.contingency_pct||0)*100)}%)`, t.cont],
-    [`Construction Mgmt Fee (${Math.round((STATE.phase4.mgmt_fee_pct||0)*100)}%)`, t.fee],
-    ['TOTAL CAPEX', t.grand],
-    ['$ / Unit', t.perUnit],
-    [],
-    ['Notes', STATE.phase4.notes || ''],
-    [],
-    ['By Group', ''],
-    ...Object.entries(t.byGroup).map(([n, v]) => [n, v]),
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sumRows), 'Summary');
-  const filename = `Capex_${(STATE.phase1.prop_name || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
-  XLSX.writeFile(wb, filename);
+
+  const cont = grandSubtotal * contPct;
+  const fee = grandSubtotal * feePct;
+  const grand = grandSubtotal + cont + fee;
+  const perUnit = units > 0 ? grand / units : 0;
+
+  ws.addRow([]);
+  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', grandSubtotal, '', '']);
+  stRow.font = { bold: true }; styleCurrency(stRow.getCell(7));
+  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', cont, '', '']);
+  styleCurrency(contRow.getCell(7));
+  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', fee, '', '']);
+  styleCurrency(feeRow.getCell(7));
+  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', grand, '', '']);
+  grandRow.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+  grandRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  grandRow.height = 22;
+  styleCurrency(grandRow.getCell(7));
+  const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', perUnit, '', '']);
+  puRow.font = { italic: true, bold: true }; styleCurrency(puRow.getCell(7));
+
+  if (STATE.phase4.notes) {
+    ws.addRow([]);
+    const notesHead = ws.addRow(['Notes:']);
+    notesHead.font = { bold: true };
+    ws.addRow([STATE.phase4.notes]);
+  }
+
+  [
+    { name: 'Property Basics', phase: SCHEMA.phase1, state: STATE.phase1 },
+    { name: 'Physical', phase: SCHEMA.phase2, state: STATE.phase2 },
+  ].forEach(({ name, phase, state }) => {
+    const w = workbook.addWorksheet(name);
+    w.columns = [{ width: 42 }, { width: 32 }];
+    const t = w.addRow([name.toUpperCase()]);
+    t.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+    t.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    w.mergeCells(`A${t.number}:B${t.number}`);
+    w.addRow([]);
+    phase.forEach((sec) => {
+      const sr = w.addRow([sec.section]);
+      sr.font = { bold: true };
+      sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+      w.mergeCells(`A${sr.number}:B${sr.number}`);
+      sec.fields.forEach((f) => { if (f.type === 'info') return; w.addRow([f.label, state[f.key] ?? '']); });
+      w.addRow([]);
+    });
+  });
+
+  const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const buf = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
   toast('Excel exported', 'success');
 }
 
