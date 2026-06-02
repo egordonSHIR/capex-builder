@@ -94,6 +94,25 @@ function renderField(field, value, onChange) {
     div.textContent = '';
     return div;
   }
+  if (field.type === 'multiselect') {
+    const wrap = el('div', { class: 'field' });
+    wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
+    if (field.hint) wrap.appendChild(el('div', { class: 'hint' }, field.hint));
+    const container = el('div', { class: 'multiselect' });
+    container.setAttribute('data-key', field.key);
+    const selected = new Set(Array.isArray(value) ? value : []);
+    getFieldOptions(field).forEach((opt) => {
+      const cb = el('input', { type: 'checkbox' });
+      if (selected.has(opt)) cb.checked = true;
+      cb.addEventListener('change', () => {
+        if (cb.checked) selected.add(opt); else selected.delete(opt);
+        onChange(Array.from(selected));
+      });
+      container.appendChild(el('label', { class: 'ms-option' }, cb, ' ' + opt));
+    });
+    wrap.appendChild(container);
+    return wrap;
+  }
   const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') });
   wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
   if (field.hint) wrap.appendChild(el('div', { class: 'hint' }, field.hint));
@@ -180,7 +199,8 @@ function renderSchemaForm(sections, bag, onUpdate) {
       else if (f.computed) { value = computeField(f.computed, getEvalBag(bag)); bag[f.key] = value; }
       else value = bag[f.key];
       const fieldNode = renderField(f, value, (v) => {
-        bag[f.key] = (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
+        bag[f.key] = (f.type === 'multiselect') ? (Array.isArray(v) ? v : [])
+                   : (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
         if (f.partner && bag[f.key] !== '') {
           const pv = computeField(f.partner.expr, getEvalBag(bag));
           bag[f.partner.target] = pv;
@@ -255,111 +275,13 @@ function renderSchemaForm(sections, bag, onUpdate) {
 function renderPhase1() { const root = el('div'); root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1)); return root; }
 function renderPhase2() { const root = el('div'); root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2)); return root; }
 
-function p3Key(gi, si, ii) { return `${gi}.${si}.${ii}`; }
-function getP3(gi, si, ii) { return STATE.phase3[p3Key(gi, si, ii)] || { qty: '', unit_cost: '', notes: '' }; }
-function setP3(gi, si, ii, patch) {
-  const k = p3Key(gi, si, ii);
-  STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
-  saveState();
-}
-
-function renderPhase3() {
-  const root = el('div');
-  const totals = computeTotals();
-  const summary = el('div', { class: 'summary-totals' },
-    el('div', { class: 'summary-row' }, el('span', { class: 'label' }, 'Line items entered'), el('span', { class: 'value' }, String(totals.itemCount))),
-    el('div', { class: 'summary-row grand' }, el('span', { class: 'label' }, 'Running Subtotal'), el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
-  );
-  root.appendChild(summary);
-  SCHEMA.phase3.forEach((group, gi) => {
-    const groupBody = el('div');
-    group.sections.forEach((sec, si) => {
-      const secBody = el('div', { class: 'section-body' });
-      sec.items.forEach((item, ii) => {
-        const v = getP3(gi, si, ii);
-        const hasValue = (Number(v.qty) || 0) > 0 && (Number(v.unit_cost) || 0) > 0;
-        const itemWrap = el('div', { class: 'capex-item' + (hasValue ? ' has-value' : '') });
-        const header = el('div', { class: 'capex-item-header' },
-          el('div', {},
-            el('div', { class: 'capex-item-name' }, item.name),
-            item.notes ? el('div', { class: 'capex-item-notes' }, item.notes) : null,
-            item.gl_account ? el('div', { class: 'capex-item-gl' }, item.gl_account) : null,
-          ),
-        );
-        itemWrap.appendChild(header);
-        const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-        const row = el('div', { class: 'capex-row' });
-        const qtyField = el('div', { class: 'field' }, el('label', {}, '# Items'),
-          (() => { const i = el('input', { type: 'number', min: 0, step: 'any' }); i.value = v.qty;
-            i.addEventListener('input', () => { setP3(gi, si, ii, { qty: i.value === '' ? '' : Number(i.value) }); renderTotals(itemWrap, gi, si, ii); updatePhase3Summary(summary); }); return i; })());
-        const costField = el('div', { class: 'field' }, el('label', {}, '$/Item'),
-          (() => { const i = el('input', { type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '' }); i.value = v.unit_cost !== '' ? v.unit_cost : '';
-            i.addEventListener('input', () => { setP3(gi, si, ii, { unit_cost: i.value === '' ? '' : Number(i.value) }); renderTotals(itemWrap, gi, si, ii); updatePhase3Summary(summary); }); return i; })());
-        const totalEl = el('div', { class: 'total', 'data-total': true }, fmtMoney(total));
-        const notesField = el('div', { class: 'field' }, el('label', {}, 'Notes'),
-          (() => { const i = el('input', { type: 'text' }); i.value = v.notes || '';
-            i.addEventListener('input', () => setP3(gi, si, ii, { notes: i.value })); return i; })());
-        row.appendChild(qtyField); row.appendChild(costField); row.appendChild(totalEl); row.appendChild(notesField);
-        itemWrap.appendChild(row);
-        secBody.appendChild(itemWrap);
-      });
-      const secNode = el('section', { class: 'section collapsed' },
-        el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', {}, sec.name), el('span', { class: 'chev' }, '▼')
-        ), secBody);
-      groupBody.appendChild(secNode);
-    });
-    const groupNode = el('section', { class: 'section collapsed' },
-      el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-        el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
-        el('span', { class: 'chev' }, '▼')
-      ), groupBody);
-    root.appendChild(groupNode);
-  });
-  return root;
-}
-function renderTotals(itemWrap, gi, si, ii) {
-  const v = getP3(gi, si, ii);
-  const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-  const t = itemWrap.querySelector('[data-total]');
-  if (t) t.textContent = fmtMoney(total);
-  itemWrap.classList.toggle('has-value', total > 0);
-}
-function updatePhase3Summary(node) {
-  const totals = computeTotals();
-  node.querySelectorAll('.value')[0].textContent = String(totals.itemCount);
-  node.querySelectorAll('.value')[1].textContent = fmtMoney(totals.subtotal);
-}
-
-function computeTotals() {
-  let subtotal = 0, itemCount = 0;
-  const byGroup = {};
-  SCHEMA.phase3.forEach((g, gi) => {
-    byGroup[g.name] = 0;
-    g.sections.forEach((s, si) => {
-      s.items.forEach((it, ii) => {
-        const v = getP3(gi, si, ii);
-        const t = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-        if (t > 0) { subtotal += t; itemCount += 1; byGroup[g.name] += t; }
-      });
-    });
-  });
-  const cont = subtotal * (Number(STATE.phase4.contingency_pct) || 0);
-  const fee = subtotal * (Number(STATE.phase4.mgmt_fee_pct) || 0);
-  const grand = subtotal + cont + fee;
-  const units = Number(STATE.phase1.mf_units) || 0;
-  const perUnit = units > 0 ? grand / units : 0;
-  return { subtotal, cont, fee, grand, perUnit, itemCount, byGroup };
-}
-
 function renderPhase4() {
   const root = el('div');
-  const t = computeTotals();
   const warnings = [];
   if (!STATE.phase1.prop_name) warnings.push('Property name is missing (Phase 1).');
-  if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Phase 1) — per-unit metrics will be $0.');
-  if (t.itemCount === 0) warnings.push('No capex line items have quantities and costs entered (Phase 3).');
-  if (Object.values(STATE.phase2).filter(Boolean).length === 0) warnings.push('Physical characteristics (Phase 2) appear empty.');
+  if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Phase 1) — per-unit metric will be $0.');
+  const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
+  if (p2Filled === 0) warnings.push('Physical characteristics (Phase 2) appear empty.');
   if (warnings.length) {
     const wrap = el('div', { class: 'section' },
       el('header', { class: 'section-header', style: 'color:#dc2626' }, 'Sanity Check'),
@@ -371,35 +293,31 @@ function renderPhase4() {
   }
   const adj = el('section', { class: 'section collapsed' },
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-      el('span', {}, 'Adjustments'), el('span', { class: 'chev' }, '▼')),
+      el('span', {}, 'Adjustments (used in Excel export)'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' },
       renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 0.01, min: 0, max: 1, hint: 'Decimal (0.10 = 10%)' },
-        STATE.phase4.contingency_pct, (v) => { STATE.phase4.contingency_pct = Number(v) || 0; saveState(); renderApp(); }),
+        STATE.phase4.contingency_pct, (v) => { STATE.phase4.contingency_pct = Number(v) || 0; saveState(); }),
       renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 0.01, min: 0, max: 1, hint: 'Decimal' },
-        STATE.phase4.mgmt_fee_pct, (v) => { STATE.phase4.mgmt_fee_pct = Number(v) || 0; saveState(); renderApp(); }),
+        STATE.phase4.mgmt_fee_pct, (v) => { STATE.phase4.mgmt_fee_pct = Number(v) || 0; saveState(); }),
       renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea' },
         STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); }),
     )
   );
   root.appendChild(adj);
-  const totalsCard = el('div', { class: 'summary-totals' });
-  totalsCard.appendChild(el('div', { class: 'summary-row' }, el('span', { class: 'label' }, 'Subtotal'), el('span', { class: 'value' }, fmtMoney(t.subtotal))));
-  totalsCard.appendChild(el('div', { class: 'summary-row' }, el('span', { class: 'label' }, `Contingency (${Math.round((STATE.phase4.contingency_pct||0)*100)}%)`), el('span', { class: 'value' }, fmtMoney(t.cont))));
-  totalsCard.appendChild(el('div', { class: 'summary-row' }, el('span', { class: 'label' }, `Construction Mgmt Fee (${Math.round((STATE.phase4.mgmt_fee_pct||0)*100)}%)`), el('span', { class: 'value' }, fmtMoney(t.fee))));
-  totalsCard.appendChild(el('div', { class: 'summary-row grand' }, el('span', { class: 'label' }, 'TOTAL CAPEX'), el('span', { class: 'value' }, fmtMoney(t.grand))));
-  totalsCard.appendChild(el('div', { class: 'summary-row' }, el('span', { class: 'label' }, '$ / Unit'), el('span', { class: 'value' }, fmtMoney(t.perUnit))));
-  root.appendChild(totalsCard);
-  const byGroupCard = el('section', { class: 'section collapsed' },
-    el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-      el('span', {}, 'Breakdown by Group'), el('span', { class: 'chev' }, '▼')),
-    el('div', { class: 'section-body' })
+  const hint = el('div', { class: 'summary-totals', style: 'background:#f0f9ff;border-color:#bfdbfe' },
+    el('div', { style: 'font-size:14px;color:#0f172a;line-height:1.5' },
+      el('strong', {}, 'Capex line items are entered in the exported Excel.'),
+      el('div', { style: 'margin-top:6px;color:#475569' },
+        'Tap Export below. You’ll get a workbook with three sheets: Property Basics, Physical, and a full Capex Budget template. ' +
+        'In the Capex Budget sheet, fill in # Items and $/Item for the relevant rows. Section subtotals, group totals, contingency, mgmt fee, and grand total all recalculate live in Excel.'
+      )
+    )
   );
-  const gbody = byGroupCard.querySelector('.section-body');
-  Object.entries(t.byGroup).forEach(([name, val]) => {
-    gbody.appendChild(el('div', { class: 'summary-row', style: 'padding:8px 16px' }, el('span', { class: 'label' }, name), el('span', { class: 'value' }, fmtMoney(val))));
-  });
-  root.appendChild(byGroupCard);
-  root.appendChild(el('button', { style: 'width:100%;padding:14px;background:#1e3a8a;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;margin-top:16px;cursor:pointer', onClick: exportXlsx }, 'Export to Excel'));
+  root.appendChild(hint);
+  root.appendChild(el('button', {
+    style: 'width:100%;padding:18px;background:#1e3a8a;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
+    onClick: exportXlsx
+  }, '⬇  Export to Excel'));
   return root;
 }
 
@@ -423,19 +341,16 @@ async function exportXlsx() {
     { width: 11 }, { width: 11 }, { width: 11 },
     { width: 15 }, { width: 30 }, { width: 42 },
   ];
-
   const titleRow = ws.addRow(['CAPEX BUDGET']);
   titleRow.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
   ws.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
-
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
   const unitsRow = ws.addRow(['# Units:', units]); unitsRow.getCell(1).font = { bold: true };
   const yrRow = ws.addRow(['Year Built:', STATE.phase1.year_built || '']); yrRow.getCell(1).font = { bold: true };
   ws.addRow([]);
-
   const colHeaderRow = ws.addRow(['', '# Items', '$/Item', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
   colHeaderRow.font = { bold: true };
   colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
@@ -445,82 +360,85 @@ async function exportXlsx() {
   });
   ws.addRow([]);
 
-  let grandSubtotal = 0;
+  // Build full template with live Excel formulas (=B*C for each item, SUM ranges for subtotals).
+  const groupSubtotalAddrs = [];
 
   SCHEMA.phase3.forEach((group, gi) => {
-    let groupTotal = 0;
-    const sectionsWithItems = [];
-    group.sections.forEach((sec, si) => {
-      const itemsWithCost = [];
-      sec.items.forEach((it, ii) => {
-        const v = getP3(gi, si, ii);
-        const qty = Number(v.qty) || 0;
-        const cost = Number(v.unit_cost) || 0;
-        const total = qty * cost;
-        if (total > 0) { itemsWithCost.push({ it, v, qty, cost, total }); groupTotal += total; }
-      });
-      if (itemsWithCost.length) sectionsWithItems.push({ sec, items: itemsWithCost });
-    });
-    if (!sectionsWithItems.length) return;
-
+    if (!group.sections.length) return;
     const isInterior = group.name === 'Interior';
 
-    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', groupTotal, '', '']);
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '']);
     gh.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
     gh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
     gh.height = 20;
     gh.alignment = { vertical: 'middle' };
     styleCurrency(gh.getCell(7));
 
-    sectionsWithItems.forEach(({ sec, items }) => {
+    let firstItemRowInGroup = null;
+    let lastItemRowInGroup = null;
+
+    group.sections.forEach((sec) => {
+      if (!sec.items.length) return;
       const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '']);
       sr.font = { bold: true, italic: true };
       sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-
-      items.forEach(({ it, v, qty, cost, total }) => {
-        const pctOr = isInterior && v.pct_original !== undefined && v.pct_original !== '' ? Number(v.pct_original) : '';
-        const pctPa = isInterior && v.pct_partial !== undefined && v.pct_partial !== '' ? Number(v.pct_partial) : '';
-        const pctRe = isInterior && v.pct_reno !== undefined && v.pct_reno !== '' ? Number(v.pct_reno) : '';
+      const sectionFirstRow = sr.number + 1;
+      sec.items.forEach((it) => {
         const r = ws.addRow([
-          '      ' + it.name, qty, cost,
-          pctOr, pctPa, pctRe,
-          total, v.notes || '', it.gl_account || '',
+          '      ' + it.name, '', '', '', '', '',
+          '',
+          '', it.gl_account || '',
         ]);
+        r.getCell(7).value = { formula: `B${r.number}*C${r.number}`, result: 0 };
         styleCurrency(r.getCell(3));
         styleCurrency(r.getCell(7));
         stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
         r.getCell(7).font = { bold: true };
         r.eachCell({ includeEmpty: false }, (c) => { c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } }; });
+        if (firstItemRowInGroup === null) firstItemRowInGroup = r.number;
+        lastItemRowInGroup = r.number;
       });
+      const sectionLastRow = lastItemRowInGroup;
+      sr.getCell(7).value = { formula: `SUM(G${sectionFirstRow}:G${sectionLastRow})`, result: 0 };
+      styleCurrency(sr.getCell(7));
     });
 
-    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', groupTotal, '', '']);
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '']);
     subr.font = { bold: true };
     subr.eachCell({ includeEmpty: true }, (c) => { c.border = { top: { style: 'thin', color: { argb: NAVY } } }; });
+    if (firstItemRowInGroup !== null) {
+      subr.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
+      gh.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
+      groupSubtotalAddrs.push(`G${subr.number}`);
+    }
     styleCurrency(subr.getCell(7));
     ws.addRow([]);
-    grandSubtotal += groupTotal;
   });
 
-  const cont = grandSubtotal * contPct;
-  const fee = grandSubtotal * feePct;
-  const grand = grandSubtotal + cont + fee;
-  const perUnit = units > 0 ? grand / units : 0;
-
   ws.addRow([]);
-  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', grandSubtotal, '', '']);
+  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', '', '', '']);
   stRow.font = { bold: true }; styleCurrency(stRow.getCell(7));
-  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', cont, '', '']);
+  if (groupSubtotalAddrs.length) {
+    stRow.getCell(7).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
+  }
+  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', '', '', '']);
   styleCurrency(contRow.getCell(7));
-  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', fee, '', '']);
+  contRow.getCell(7).value = { formula: `G${stRow.number}*${contPct}`, result: 0 };
+  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', '', '', '']);
   styleCurrency(feeRow.getCell(7));
-  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', grand, '', '']);
+  feeRow.getCell(7).value = { formula: `G${stRow.number}*${feePct}`, result: 0 };
+  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', '', '', '']);
   grandRow.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
   grandRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   grandRow.height = 22;
   styleCurrency(grandRow.getCell(7));
-  const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', perUnit, '', '']);
-  puRow.font = { italic: true, bold: true }; styleCurrency(puRow.getCell(7));
+  grandRow.getCell(7).value = { formula: `G${stRow.number}+G${contRow.number}+G${feeRow.number}`, result: 0 };
+  if (units > 0) {
+    const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', '', '', '']);
+    puRow.font = { italic: true, bold: true };
+    styleCurrency(puRow.getCell(7));
+    puRow.getCell(7).value = { formula: `G${grandRow.number}/${units}`, result: 0 };
+  }
 
   if (STATE.phase4.notes) {
     ws.addRow([]);
@@ -545,7 +463,12 @@ async function exportXlsx() {
       sr.font = { bold: true };
       sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
       w.mergeCells(`A${sr.number}:B${sr.number}`);
-      sec.fields.forEach((f) => { if (f.type === 'info') return; w.addRow([f.label, state[f.key] ?? '']); });
+      sec.fields.forEach((f) => {
+        if (f.type === 'info') return;
+        const v = state[f.key];
+        const displayVal = Array.isArray(v) ? v.join(', ') : (v ?? '');
+        w.addRow([f.label, displayVal]);
+      });
       w.addRow([]);
     });
   });
@@ -567,7 +490,6 @@ function renderApp() {
   let view;
   if (CURRENT_PHASE === 1) view = renderPhase1();
   else if (CURRENT_PHASE === 2) view = renderPhase2();
-  else if (CURRENT_PHASE === 3) view = renderPhase3();
   else view = renderPhase4();
   main.appendChild(view);
   $$('.tab').forEach(t => t.classList.toggle('active', Number(t.dataset.phase) === CURRENT_PHASE));
