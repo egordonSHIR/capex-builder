@@ -1,39 +1,34 @@
 // Auto-generated schema. Re-run build_schema.py to regenerate.
 window.SCHEMA = {
   phase1: [
-  {
-    "section": "Identity",
-    "fields": [
-      {"key": "prop_name", "label": "Property Name", "type": "text", "required": true},
-      {"key": "mailing_address", "label": "Mailing Address", "type": "text"},
-      {"key": "city", "label": "City", "type": "text"},
-      {"key": "state", "label": "State", "type": "select", "options": ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]},
-      {"key": "zip", "label": "ZIP", "type": "text", "pattern": "[0-9]{5}"},
-      {"key": "property_type", "label": "Property Type", "type": "select", "options": ["MFVA","EXSTAY"]}
-    ]
-  },
-  {
-    "section": "Units & Area",
-    "fields": [
-      {"key": "mf_units", "label": "Number of MF Units", "type": "number", "min": 0},
-      {"key": "current_occupancy", "label": "Current Occupancy", "type": "number", "min": 0, "max": 1, "step": 0.01, "hint": "Decimal (0.75 = 75%)"},
-      {"key": "mf_rsf", "label": "Multifamily RSF", "type": "number", "min": 0},
-      {"key": "commercial_rsf", "label": "Commercial RSF", "type": "number", "min": 0},
-      {"key": "common_sf", "label": "Common (non-rentable) Sqft", "type": "number", "min": 0, "decimals": 0},
-      {"key": "overall_rsf", "label": "Overall RSF", "type": "number", "computed": "mf_rsf + commercial_rsf + common_sf", "decimals": 0},
-      {"key": "land_sf", "label": "Land Sqft", "type": "number", "min": 0, "decimals": 0, "partner": {"target": "land_acres", "expr": "land_sf / 43560"}},
-      {"key": "land_acres", "label": "Land Acreage", "type": "number", "min": 0, "decimals": 2, "partner": {"target": "land_sf", "expr": "land_acres * 43560"}}
-    ]
-  },
-  {
-    "section": "Building & Site",
-    "fields": [
-      {"key": "vertical_floors", "label": "# Vertical Floors", "type": "number", "min": 0},
-      {"key": "num_buildings", "label": "# Buildings", "type": "number", "min": 0},
-      {"key": "parking_spots_existing", "label": "Parking Spots Existing", "type": "number", "min": 0},
-      {"key": "private_yard_existing", "label": "Private Yards Existing", "type": "number", "min": 0}
-    ]
-  }
+  {"section": "Identity", "fields": [
+    {"key": "prop_name", "label": "Property Name", "type": "text", "required": true},
+    {"key": "mailing_address", "label": "Mailing Address", "type": "text"},
+    {"key": "city", "label": "City", "type": "text"},
+    {"key": "state", "label": "State", "type": "select", "options": ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"]},
+    {"key": "zip", "label": "ZIP", "type": "text", "pattern": "[0-9]{5}"},
+    {"key": "property_type", "label": "Property Type", "type": "select", "options": ["MFVA","EXSTAY"]}
+  ]},
+  {"section": "Units & Area", "fields": [
+    {"key": "mf_units", "label": "Number of MF Units", "type": "number", "min": 0},
+    {"key": "current_occupancy", "label": "Current Occupancy", "type": "number", "min": 0, "max": 1, "step": 0.01, "hint": "Decimal (0.75 = 75%)"},
+    {"key": "mf_rsf", "label": "Multifamily RSF", "type": "number", "min": 0},
+    {"key": "commercial_rsf", "label": "Commercial RSF", "type": "number", "min": 0},
+    {"key": "common_sf", "label": "Common (non-rentable) Sqft", "type": "number", "min": 0, "decimals": 0},
+    {"key": "overall_rsf", "label": "Overall RSF", "type": "number", "computed": "mf_rsf + commercial_rsf + common_sf", "decimals": 0},
+    {"key": "land_sf", "label": "Land Sqft", "type": "number", "min": 0, "decimals": 0, "partner": {"target": "land_acres", "expr": "land_sf / 43560"}},
+    {"key": "land_acres", "label": "Land Acreage", "type": "number", "min": 0, "decimals": 2, "partner": {"target": "land_sf", "expr": "land_acres * 43560"}}
+  ]},
+  {"section": "Building & Site", "fields": [
+    {"key": "num_buildings", "label": "# Buildings", "type": "number", "min": 0},
+    {"key": "vertical_floors", "label": "# Vertical Floors (Per Building)", "type": "number", "min": 0},
+    {"key": "elevators_yn", "label": "# Elevators", "type": "select", "options": ["Yes","No"]},
+    {"key": "elevator_year_install", "label": "Year Installed", "type": "number", "min": 1900, "max": 2100, "show_if": "elevators_yn === 'Yes'"},
+    {"key": "elevator_passenger", "label": "Passenger #", "type": "number", "min": 0, "show_if": "elevators_yn === 'Yes'"},
+    {"key": "elevator_freight", "label": "Freight #", "type": "number", "min": 0, "show_if": "elevators_yn === 'Yes'"},
+    {"key": "parking_spots_existing", "label": "# Parking Spots", "type": "number", "min": 0},
+    {"key": "private_yard_existing", "label": "# Private Yards", "type": "number", "min": 0}
+  ]}
 ],
   phase2: [
   {"section": "Basics", "fields": [
@@ -47,15 +42,16 @@ window.SCHEMA = {
   {"section": "Exteriors", "fields": [
     {"key": "landscape_level", "label": "Landscape Level", "type": "select", "options": ["None","Low","Medium","High"]},
     {"key": "new_railing_lf", "label": "New Railing", "type": "number", "min": 0, "hint": "Linear Ft"},
-    {"key": "new_railing_panels_sqft", "label": "New Railing Panels", "type": "number", "min": 0, "hint": "Sqft"},
+    {"key": "new_railing_panels_sqft", "label": "New Railing Panels", "type": "number", "computed": "new_railing_lf * 3", "decimals": 0, "hint": "Auto: Linear Ft × 36\" (Sqft)"},
     {"key": "private_yards_add", "label": "Private Yards to Add", "type": "number", "min": 0, "hint": "# Yards"},
     {"key": "yard_perimeter_lf", "label": "Yard Perimeter", "type": "number", "min": 0, "hint": "Linear Ft"}
   ]},
   {"section": "Common Interiors", "fields": [
-    {"key": "interior_hallways", "label": "Interior Hallways", "type": "select", "options": ["Yes","No"]},
+    {"key": "hallway_length", "label": "Interior Hallway Dimensions — Length", "type": "number", "min": 0, "hint": "Feet"},
+    {"key": "hallway_width", "label": "Interior Hallway Dimensions — Width", "type": "number", "min": 0, "hint": "Feet"},
+    {"key": "hallway_info", "type": "info", "expr": "`Area per hallway: ${Math.round((hallway_length||0)*(hallway_width||0)).toLocaleString()} Sqft · Total hallways: ${(p1_num_buildings||0)*(p1_vertical_floors||0)} (${p1_num_buildings||0} bldgs × ${p1_vertical_floors||0} floors)`"},
     {"key": "fencing_existing_lf", "label": "Existing Fencing", "type": "number", "min": 0, "hint": "Linear Ft"},
-    {"key": "fencing_needed_lf", "label": "Needed Fencing", "type": "number", "min": 0, "hint": "Linear Ft"},
-    {"key": "elevators", "label": "Elevators", "type": "number", "min": 0, "hint": "# if Yes"}
+    {"key": "fencing_needed_lf", "label": "Needed Fencing", "type": "number", "min": 0, "hint": "Linear Ft"}
   ]},
   {"section": "Mechanical (HVAC)", "fields": [
     {"key": "cooling", "label": "Cooling", "type": "select", "options": ["Ind. Condenser","Chiller FCUs"]},
