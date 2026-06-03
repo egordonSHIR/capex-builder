@@ -7,6 +7,8 @@ const STORE_KEY   = 'capex_builder_store_v2';   // current multi-property key
 const DRIVE_TOKEN_KEY = 'capex_builder_drive_token';
 const DRIVE_TOKEN_EXP_KEY = 'capex_builder_drive_token_exp';
 const OPTIONS_KEY = 'capex_options_overrides_v1';
+const ONBOARDING_DISMISSED_KEY = 'capex_onboarding_dismissed_v1';
+const DRIVE_EVER_CONNECTED_KEY = 'capex_drive_ever_connected_v1';
 
 // ---------- Dropdown option overrides (loaded from Excel via import) ----------
 function loadOptionOverrides() {
@@ -841,11 +843,74 @@ function renderShell() {
   }
 }
 
+function shouldShowOnboarding() {
+  if (localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1') return false;
+  if (localStorage.getItem(DRIVE_EVER_CONNECTED_KEY) === '1') return false;
+  return true;
+}
+function renderOnboardingCard() {
+  const card = el('div', { class: 'onboarding-card' });
+  const connected = !!getDriveToken();
+
+  card.appendChild(el('button', {
+    class: 'onb-close',
+    title: 'Dismiss',
+    onClick: () => {
+      localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+      renderHome();
+    },
+  }, '✕'));
+
+  card.appendChild(el('h2', {}, '👋 Welcome to Capex Builder'));
+  card.appendChild(el('p', {},
+    'Capture tour notes, sync to the deal’s Google Drive folder, and hand off to Excel ' +
+    'when you’re ready to finalize the budget.'
+  ));
+
+  const steps = el('ol', { class: 'onboarding-steps' });
+  steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
+  steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
+  steps.appendChild(el('li', {}, 'Move to Physical — the app will find the matching deal folder across your pipelines and link it automatically.'));
+  steps.appendChild(el('li', {}, 'Push to Drive any time. Your data lands in 25. Capex / Capex Builder Budget.'));
+  card.appendChild(steps);
+
+  if (connected) {
+    card.appendChild(el('button', { class: 'onb-connect-btn connected' }, '✓ Drive Connected'));
+  } else {
+    card.appendChild(el('button', {
+      class: 'onb-connect-btn',
+      onClick: async () => {
+        try {
+          await driveRequestToken({ silent: false });
+          localStorage.setItem(DRIVE_EVER_CONNECTED_KEY, '1');
+          updateDriveStatus();
+          toast('Drive connected', 'success');
+          renderHome();
+        } catch (e) {
+          toast('Connect failed: ' + e.message, 'error');
+        }
+      },
+    }, 'Connect Google Drive'));
+  }
+
+  card.appendChild(el('button', {
+    class: 'onb-dismiss',
+    onClick: () => {
+      localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
+      renderHome();
+    },
+  }, connected ? 'Got it, dismiss this' : 'Skip for now'));
+
+  return card;
+}
+
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
   const props = Object.values(STORE.properties)
     .sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
+
+  if (shouldShowOnboarding()) main.appendChild(renderOnboardingCard());
 
   main.appendChild(el('button', { class: 'home-new-btn', onClick: () => promptNewProperty() },
     '+ New Property'));
@@ -975,7 +1040,7 @@ function updateSyncBar() {
   if (!STATE) { bar.classList.add('hidden'); return; }
   if (!STATE.drive.folderId) {
     bar.className = 'sync-bar warn';
-    bar.textContent = 'No Drive folder linked — tap ☰ → Link Drive Folder to enable cloud sync.';
+    bar.textContent = 'No Drive folder linked — tap ☰ → Find or Link Drive Folder to enable cloud sync.';
     bar.classList.remove('hidden');
     return;
   }
@@ -1184,6 +1249,7 @@ function driveRequestToken({ silent = false } = {}) {
         if (resp.access_token) {
           localStorage.setItem(DRIVE_TOKEN_KEY, resp.access_token);
           localStorage.setItem(DRIVE_TOKEN_EXP_KEY, String(Date.now() + ((resp.expires_in || 3600) - 60) * 1000));
+          localStorage.setItem(DRIVE_EVER_CONNECTED_KEY, '1');
           updateDriveStatus();
           resolve(resp.access_token);
         } else {
