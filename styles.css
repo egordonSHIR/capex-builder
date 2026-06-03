@@ -545,3 +545,9 @@ main {
   .capex-row.detail-row { grid-template-columns: 1fr 1fr; }
   .capex-row.detail-row .total { grid-column: 1 / -1; text-align: left; }
 }
+
+/* Colored CAPEX group sections (Questionnaire + Details) */
+.group-section > .group-header { letter-spacing: 0.5px; }
+.group-section > .group-body { padding: 8px; background: #f8fafc; }
+.group-section > .group-body > .section { margin-bottom: 8px; }
+.group-section > .group-body > .section:last-child { margin-bottom: 0; }
