@@ -1,10 +1,14 @@
-// Capex Builder — single-property web app
-// State lives in window.STATE, persisted to localStorage on every change.
+// Capex Builder — multi-property web app
+// STORE = { version, properties: {[id]: Property}, currentPropertyId }
+// STATE = live reference to the current property (so existing render code keeps working).
 
-const STORAGE_KEY = 'capex_builder_state_v1';
+const STORAGE_KEY = 'capex_builder_state_v1';   // legacy single-property key (read for migration)
+const STORE_KEY   = 'capex_builder_store_v2';   // current multi-property key
 const DRIVE_TOKEN_KEY = 'capex_builder_drive_token';
+const DRIVE_TOKEN_EXP_KEY = 'capex_builder_drive_token_exp';
 const OPTIONS_KEY = 'capex_options_overrides_v1';
 
+// ---------- Dropdown option overrides (loaded from Excel via import) ----------
 function loadOptionOverrides() {
   try { return JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}'); }
   catch { return {}; }
@@ -17,27 +21,106 @@ function resetOptionOverrides() {
   localStorage.removeItem(OPTIONS_KEY);
 }
 
-const DEFAULT_STATE = () => ({
-  meta: { created: new Date().toISOString(), updated: new Date().toISOString(), version: 1 },
-  phase1: {}, phase2: {}, phase3: {},
+function newPropertyId() {
+  return 'p_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+}
+const DEFAULT_PROPERTY = () => ({
+  id: newPropertyId(),
+  name: '',
+  created: new Date().toISOString(),
+  updated: new Date().toISOString(),
+  drive: { folderId: '', fileId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
+  phase1: {},
+  phase2: {},
+  phase3: {}, // keyed by `${groupIdx}.${sectionIdx}.${itemIdx}` -> {qty, unit_cost, notes}
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
 });
+const DEFAULT_STORE = () => ({ version: 2, properties: {}, currentPropertyId: null });
 
-let STATE = loadState();
+let STORE = loadStore();
+let STATE = STORE.currentPropertyId ? STORE.properties[STORE.currentPropertyId] : null;
+let CURRENT_VIEW = STATE ? 'property' : 'home';
 let CURRENT_PHASE = 1;
 
-function loadState() {
+// ---------- Storage ----------
+function loadStore() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return Object.assign(DEFAULT_STATE(), JSON.parse(raw));
-  } catch (e) { console.warn('loadState failed', e); }
-  return DEFAULT_STATE();
+    const rawV2 = localStorage.getItem(STORE_KEY);
+    if (rawV2) {
+      const s = JSON.parse(rawV2);
+      if (s && s.properties) {
+        // Ensure currentPropertyId still references a live property
+        if (s.currentPropertyId && !s.properties[s.currentPropertyId]) s.currentPropertyId = null;
+        return s;
+      }
+    }
+    // One-time migration from v1 single-property state
+    const rawV1 = localStorage.getItem(STORAGE_KEY);
+    if (rawV1) {
+      const old = JSON.parse(rawV1);
+      const p = Object.assign(DEFAULT_PROPERTY(), {
+        name: (old.phase1 && old.phase1.prop_name) || 'Untitled Property',
+        phase1: old.phase1 || {},
+        phase2: old.phase2 || {},
+        phase3: old.phase3 || {},
+        phase4: old.phase4 || { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
+        created: (old.meta && old.meta.created) || new Date().toISOString(),
+        updated: (old.meta && old.meta.updated) || new Date().toISOString(),
+      });
+      const store = DEFAULT_STORE();
+      store.properties[p.id] = p;
+      localStorage.setItem(STORE_KEY, JSON.stringify(store));
+      return store;
+    }
+  } catch (e) { console.warn('loadStore failed', e); }
+  return DEFAULT_STORE();
 }
 function saveState() {
-  STATE.meta.updated = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
+  if (STATE) {
+    STATE.updated = new Date().toISOString();
+    // Keep displayed name in sync with phase1.prop_name when the user edits it on the form
+    if (STATE.phase1 && STATE.phase1.prop_name) STATE.name = STATE.phase1.prop_name;
+  }
+  localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
 }
 
+function createProperty(name) {
+  const p = DEFAULT_PROPERTY();
+  p.name = (name || '').trim() || 'Untitled Property';
+  p.phase1.prop_name = p.name;
+  STORE.properties[p.id] = p;
+  STORE.currentPropertyId = p.id;
+  STATE = p;
+  saveState();
+  return p;
+}
+function openProperty(id) {
+  if (!STORE.properties[id]) return;
+  STORE.currentPropertyId = id;
+  STATE = STORE.properties[id];
+  saveState();
+  CURRENT_PHASE = 1;
+  CURRENT_VIEW = 'property';
+  renderShell();
+}
+function closeProperty() {
+  STORE.currentPropertyId = null;
+  STATE = null;
+  saveState();
+  CURRENT_VIEW = 'home';
+  renderShell();
+}
+function deleteProperty(id) {
+  delete STORE.properties[id];
+  if (STORE.currentPropertyId === id) {
+    STORE.currentPropertyId = null;
+    STATE = null;
+    CURRENT_VIEW = 'home';
+  }
+  saveState();
+}
+
+// ---------- Helpers ----------
 function $(sel) { return document.querySelector(sel); }
 function $$(sel) { return Array.from(document.querySelectorAll(sel)); }
 function el(tag, attrs = {}, ...children) {
@@ -54,7 +137,10 @@ function el(tag, attrs = {}, ...children) {
   }
   return e;
 }
-function fmtMoney(n) { if (!isFinite(n)) return '$0'; return '$' + Math.round(n).toLocaleString(); }
+function fmtMoney(n) {
+  if (!isFinite(n)) return '$0';
+  return '$' + Math.round(n).toLocaleString();
+}
 function toast(msg, type = '') {
   const t = $('#toast');
   t.textContent = msg;
@@ -63,6 +149,7 @@ function toast(msg, type = '') {
 }
 function computeField(expr, bag) {
   try {
+    // For each value: keep strings as strings (for `show_if` comparisons), coerce empty to 0 for math.
     const args = Object.values(bag).map(v => {
       if (v === '' || v === null || v === undefined) return 0;
       if (typeof v === 'number') return v;
@@ -72,6 +159,7 @@ function computeField(expr, bag) {
     return Function(...Object.keys(bag), `return (${expr});`)(...args);
   } catch { return ''; }
 }
+// Build an eval bag that includes the section's own fields AND phase1 fields prefixed `p1_`.
 function getEvalBag(bag) {
   const out = { ...bag };
   if (typeof STATE !== 'undefined' && STATE && STATE.phase1) {
@@ -80,6 +168,7 @@ function getEvalBag(bag) {
   return out;
 }
 
+// ---------- Render: generic form ----------
 function formatNumber(v, decimals) {
   if (v === '' || v === null || v === undefined || !isFinite(v)) return '';
   if (decimals === 0) return String(Math.round(Number(v)));
@@ -88,12 +177,14 @@ function formatNumber(v, decimals) {
 }
 
 function renderField(field, value, onChange) {
+  // 'info' fields: italic gray summary text, no input.
   if (field.type === 'info') {
     const div = el('div', { class: 'field info-text' });
     div.setAttribute('data-key', field.key);
     div.textContent = '';
     return div;
   }
+  // 'multiselect' fields: checkbox group, value is an array of selected option strings.
   if (field.type === 'multiselect') {
     const wrap = el('div', { class: 'field' });
     wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
@@ -113,9 +204,11 @@ function renderField(field, value, onChange) {
     wrap.appendChild(container);
     return wrap;
   }
+
   const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') });
   wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
   if (field.hint) wrap.appendChild(el('div', { class: 'hint' }, field.hint));
+
   let input;
   if (field.type === 'select') {
     input = el('select');
@@ -134,10 +227,13 @@ function renderField(field, value, onChange) {
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
+    // Computed fields WITHOUT a partner are read-only (pure auto-calc).
+    // Computed fields WITH a partner (e.g. land_sf <-> land_acres) remain editable.
     if (field.computed && !field.partner) input.readOnly = true;
     const initial = field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
     input.value = initial;
   }
+
   input.addEventListener('input', () => onChange(input.value));
   input.addEventListener('change', () => onChange(input.value));
   if (field.type === 'number' && field.decimals !== undefined) {
@@ -150,6 +246,7 @@ function renderField(field, value, onChange) {
   return wrap;
 }
 
+// Refresh all derived UI in a section (info text, computed fields, show_if visibility)
 function refreshSection(sec, body, bag) {
   const eb = getEvalBag(bag);
   sec.fields.forEach(ff => {
@@ -162,6 +259,7 @@ function refreshSection(sec, body, bag) {
       const inp = body.querySelector(`[data-key="${ff.key}"]`);
       if (inp) inp.value = ff.decimals !== undefined ? formatNumber(cv, ff.decimals) : (isFinite(cv) ? cv : '');
     }
+    // Dynamic label: re-evaluate the field's label text from an expression.
     if (ff.dynamic_label) {
       const node = body.querySelector(`[data-key="${ff.key}"]`);
       const wrap = node && (node.closest ? node.closest('.field') : null);
@@ -173,6 +271,7 @@ function refreshSection(sec, body, bag) {
     if (ff.show_if) {
       const node = body.querySelector(`[data-key="${ff.key}"]`);
       const wrap = node && (node.closest ? node.closest('.field') : null);
+      // Fields inside an .expansion-group are governed by the group's visibility (handled below).
       const inGroup = wrap && wrap.closest && wrap.closest('.expansion-group');
       if (wrap && !inGroup) {
         const show = !!computeField(ff.show_if, eb);
@@ -180,6 +279,7 @@ function refreshSection(sec, body, bag) {
       }
     }
   });
+  // Expansion groups (consecutive same-show_if fields wrapped together)
   body.querySelectorAll('.expansion-group[data-show-if]').forEach(grp => {
     const show = !!computeField(grp.getAttribute('data-show-if'), eb);
     grp.style.display = show ? '' : 'none';
@@ -189,15 +289,19 @@ function refreshSection(sec, body, bag) {
 function renderSchemaForm(sections, bag, onUpdate) {
   const frag = document.createDocumentFragment();
   sections.forEach((sec, si) => {
+    // Default to collapsed; preserve user's explicit choice during the session.
     const collapsed = window['_collapsed_' + sec.section] !== false;
     const body = el('div', { class: 'section-body' });
+
     let activeExpGroup = null;
     let activeExpExpr = null;
+
     sec.fields.forEach(f => {
       let value;
       if (f.type === 'info') value = '';
       else if (f.computed) { value = computeField(f.computed, getEvalBag(bag)); bag[f.key] = value; }
       else value = bag[f.key];
+
       const fieldNode = renderField(f, value, (v) => {
         bag[f.key] = (f.type === 'multiselect') ? (Array.isArray(v) ? v : [])
                    : (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
@@ -216,7 +320,11 @@ function renderSchemaForm(sections, bag, onUpdate) {
       });
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
+
+      // Group consecutive same-show_if fields into an indented expansion-group container,
+      // but ONLY when 2+ fields share the same show_if (single-field conditionals don't need a toggle).
       if (f.show_if) {
+        // Look back + ahead: is this field part of a multi-field run with the same expression?
         const fi = sec.fields.indexOf(f);
         const prev = sec.fields[fi - 1];
         const next = sec.fields[fi + 1];
@@ -244,6 +352,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
           }
           activeExpGroup.appendChild(fieldNode);
         } else {
+          // Single conditional field: render inline; refreshSection toggles its display.
           activeExpGroup = null;
           activeExpExpr = null;
           body.appendChild(fieldNode);
@@ -254,7 +363,9 @@ function renderSchemaForm(sections, bag, onUpdate) {
         body.appendChild(fieldNode);
       }
     });
+
     setTimeout(() => refreshSection(sec, body, bag), 0);
+
     const section = el('section', { class: 'section' + (collapsed ? ' collapsed' : '') },
       el('header', { class: 'section-header',
         onClick: (e) => {
@@ -272,16 +383,177 @@ function renderSchemaForm(sections, bag, onUpdate) {
   return frag;
 }
 
-function renderPhase1() { const root = el('div'); root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1)); return root; }
-function renderPhase2() { const root = el('div'); root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2)); return root; }
+// ---------- Phase 1 & 2 ----------
+function renderPhase1() {
+  const root = el('div');
+  root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
+  return root;
+}
+function renderPhase2() {
+  const root = el('div');
+  root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
+  return root;
+}
+
+// ---------- Phase 3: Capex line items ----------
+function p3Key(gi, si, ii) { return `${gi}.${si}.${ii}`; }
+function getP3(gi, si, ii) {
+  return STATE.phase3[p3Key(gi, si, ii)] || { qty: '', unit_cost: '', notes: '' };
+}
+function setP3(gi, si, ii, patch) {
+  const k = p3Key(gi, si, ii);
+  STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
+  saveState();
+}
+
+function renderPhase3() {
+  const root = el('div');
+  // Group filter / nav summary
+  const totals = computeTotals();
+  const summary = el('div', { class: 'summary-totals' },
+    el('div', { class: 'summary-row' },
+      el('span', { class: 'label' }, 'Line items entered'),
+      el('span', { class: 'value' }, String(totals.itemCount))),
+    el('div', { class: 'summary-row grand' },
+      el('span', { class: 'label' }, 'Running Subtotal'),
+      el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
+  );
+  root.appendChild(summary);
+
+  SCHEMA.phase3.forEach((group, gi) => {
+    const groupBody = el('div');
+    group.sections.forEach((sec, si) => {
+      const secBody = el('div', { class: 'section-body' });
+      sec.items.forEach((item, ii) => {
+        const v = getP3(gi, si, ii);
+        const hasValue = (Number(v.qty) || 0) > 0 && (Number(v.unit_cost) || 0) > 0;
+        const itemWrap = el('div', { class: 'capex-item' + (hasValue ? ' has-value' : '') });
+
+        const header = el('div', { class: 'capex-item-header' },
+          el('div', {},
+            el('div', { class: 'capex-item-name' }, item.name),
+            item.notes ? el('div', { class: 'capex-item-notes' }, item.notes) : null,
+            item.gl_account ? el('div', { class: 'capex-item-gl' }, item.gl_account) : null,
+          ),
+        );
+        itemWrap.appendChild(header);
+
+        const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+        const row = el('div', { class: 'capex-row' });
+
+        const qtyField = el('div', { class: 'field' },
+          el('label', {}, '# Items'),
+          (() => {
+            const i = el('input', { type: 'number', min: 0, step: 'any' });
+            i.value = v.qty;
+            i.addEventListener('input', () => {
+              setP3(gi, si, ii, { qty: i.value === '' ? '' : Number(i.value) });
+              renderTotals(itemWrap, gi, si, ii);
+              updatePhase3Summary(summary);
+            });
+            return i;
+          })()
+        );
+        const costField = el('div', { class: 'field' },
+          el('label', {}, '$/Item'),
+          (() => {
+            const i = el('input', { type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '' });
+            i.value = v.unit_cost !== '' ? v.unit_cost : '';
+            i.addEventListener('input', () => {
+              setP3(gi, si, ii, { unit_cost: i.value === '' ? '' : Number(i.value) });
+              renderTotals(itemWrap, gi, si, ii);
+              updatePhase3Summary(summary);
+            });
+            return i;
+          })()
+        );
+        const totalEl = el('div', { class: 'total', 'data-total': true }, fmtMoney(total));
+        const notesField = el('div', { class: 'field' },
+          el('label', {}, 'Notes'),
+          (() => {
+            const i = el('input', { type: 'text' });
+            i.value = v.notes || '';
+            i.addEventListener('input', () => setP3(gi, si, ii, { notes: i.value }));
+            return i;
+          })()
+        );
+        row.appendChild(qtyField);
+        row.appendChild(costField);
+        row.appendChild(totalEl);
+        row.appendChild(notesField);
+        itemWrap.appendChild(row);
+
+        secBody.appendChild(itemWrap);
+      });
+      const secNode = el('section', { class: 'section collapsed' },
+        el('header', { class: 'section-header',
+          onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+          el('span', {}, sec.name),
+          el('span', { class: 'chev' }, '▼')
+        ),
+        secBody
+      );
+      groupBody.appendChild(secNode);
+    });
+
+    const groupNode = el('section', { class: 'section' },
+      el('header', { class: 'section-header',
+        onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+        el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
+        el('span', { class: 'chev' }, '▼')
+      ),
+      groupBody
+    );
+    root.appendChild(groupNode);
+  });
+  return root;
+}
+function renderTotals(itemWrap, gi, si, ii) {
+  const v = getP3(gi, si, ii);
+  const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  const t = itemWrap.querySelector('[data-total]');
+  if (t) t.textContent = fmtMoney(total);
+  itemWrap.classList.toggle('has-value', total > 0);
+}
+function updatePhase3Summary(node) {
+  const totals = computeTotals();
+  node.querySelectorAll('.value')[0].textContent = String(totals.itemCount);
+  node.querySelectorAll('.value')[1].textContent = fmtMoney(totals.subtotal);
+}
+
+// ---------- Phase 4: Review ----------
+function computeTotals() {
+  let subtotal = 0;
+  let itemCount = 0;
+  const byGroup = {};
+  SCHEMA.phase3.forEach((g, gi) => {
+    byGroup[g.name] = 0;
+    g.sections.forEach((s, si) => {
+      s.items.forEach((it, ii) => {
+        const v = getP3(gi, si, ii);
+        const t = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+        if (t > 0) { subtotal += t; itemCount += 1; byGroup[g.name] += t; }
+      });
+    });
+  });
+  const cont = subtotal * (Number(STATE.phase4.contingency_pct) || 0);
+  const fee = subtotal * (Number(STATE.phase4.mgmt_fee_pct) || 0);
+  const grand = subtotal + cont + fee;
+  const units = Number(STATE.phase1.mf_units) || 0;
+  const perUnit = units > 0 ? grand / units : 0;
+  return { subtotal, cont, fee, grand, perUnit, itemCount, byGroup };
+}
 
 function renderPhase4() {
   const root = el('div');
+
+  // Sanity-check warnings
   const warnings = [];
   if (!STATE.phase1.prop_name) warnings.push('Property name is missing (Phase 1).');
   if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Phase 1) — per-unit metric will be $0.');
   const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
   if (p2Filled === 0) warnings.push('Physical characteristics (Phase 2) appear empty.');
+
   if (warnings.length) {
     const wrap = el('div', { class: 'section' },
       el('header', { class: 'section-header', style: 'color:#dc2626' }, 'Sanity Check'),
@@ -291,6 +563,8 @@ function renderPhase4() {
     warnings.forEach(w => body.appendChild(el('div', { class: 'field' }, w)));
     root.appendChild(wrap);
   }
+
+  // Adjustments — these flow into the exported Excel as the contingency/mgmt-fee multipliers
   const adj = el('section', { class: 'section collapsed' },
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
       el('span', {}, 'Adjustments (used in Excel export)'), el('span', { class: 'chev' }, '▼')),
@@ -304,6 +578,8 @@ function renderPhase4() {
     )
   );
   root.appendChild(adj);
+
+  // Hint card
   const hint = el('div', { class: 'summary-totals', style: 'background:#f0f9ff;border-color:#bfdbfe' },
     el('div', { style: 'font-size:14px;color:#0f172a;line-height:1.5' },
       el('strong', {}, 'Capex line items are entered in the exported Excel.'),
@@ -314,10 +590,13 @@ function renderPhase4() {
     )
   );
   root.appendChild(hint);
+
+  // Big Export button
   root.appendChild(el('button', {
     style: 'width:100%;padding:18px;background:#1e3a8a;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
     onClick: exportXlsx
   }, '⬇  Export to Excel'));
+
   return root;
 }
 
@@ -335,22 +614,26 @@ async function exportXlsx() {
   const styleCurrency = (cell) => { cell.numFmt = '"$"#,##0'; };
   const stylePct = (cell) => { cell.numFmt = '0%'; };
 
+  // ===== Main "Capex Budget" sheet =====
   const ws = workbook.addWorksheet('Capex Budget', { views: [{ state: 'frozen', xSplit: 0, ySplit: 7 }] });
   ws.columns = [
     { width: 52 }, { width: 10 }, { width: 13 },
     { width: 11 }, { width: 11 }, { width: 11 },
     { width: 15 }, { width: 30 }, { width: 42 },
   ];
+
   const titleRow = ws.addRow(['CAPEX BUDGET']);
   titleRow.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
   ws.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
+
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
   const unitsRow = ws.addRow(['# Units:', units]); unitsRow.getCell(1).font = { bold: true };
   const yrRow = ws.addRow(['Year Built:', STATE.phase1.year_built || '']); yrRow.getCell(1).font = { bold: true };
   ws.addRow([]);
+
   const colHeaderRow = ws.addRow(['', '# Items', '$/Item', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
   colHeaderRow.font = { bold: true };
   colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
@@ -360,13 +643,16 @@ async function exportXlsx() {
   });
   ws.addRow([]);
 
-  // Build full template with live Excel formulas (=B*C for each item, SUM ranges for subtotals).
-  const groupSubtotalAddrs = [];
+  // Build full template: every group, subsection, line item.
+  // # Items and $/Item are blank for user to fill in Excel; Total is a live formula =B*C.
+  // Section subtotals and group subtotals use SUM ranges so totals update as user types.
+  const groupSubtotalAddrs = []; // Cell addresses like "G42" for the final grand-sum formula.
 
   SCHEMA.phase3.forEach((group, gi) => {
     if (!group.sections.length) return;
     const isInterior = group.name === 'Interior';
 
+    // Group header (total will be SUM of all items in the group)
     const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '']);
     gh.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
     gh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
@@ -382,32 +668,38 @@ async function exportXlsx() {
       const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '']);
       sr.font = { bold: true, italic: true };
       sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-      const sectionFirstRow = sr.number + 1;
+
+      const sectionFirstRow = sr.number + 1; // first item row is next
       sec.items.forEach((it) => {
         const r = ws.addRow([
           '      ' + it.name, '', '', '', '', '',
-          '',
+          '', // total filled by formula below
           '', it.gl_account || '',
         ]);
+        // Live total formula: =B{n}*C{n}
         r.getCell(7).value = { formula: `B${r.number}*C${r.number}`, result: 0 };
         styleCurrency(r.getCell(3));
         styleCurrency(r.getCell(7));
         stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
         r.getCell(7).font = { bold: true };
         r.eachCell({ includeEmpty: false }, (c) => { c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } }; });
+
         if (firstItemRowInGroup === null) firstItemRowInGroup = r.number;
         lastItemRowInGroup = r.number;
       });
       const sectionLastRow = lastItemRowInGroup;
+      // Update section header total cell to SUM its items
       sr.getCell(7).value = { formula: `SUM(G${sectionFirstRow}:G${sectionLastRow})`, result: 0 };
       styleCurrency(sr.getCell(7));
     });
 
+    // Group subtotal row spans all items in the group
     const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '']);
     subr.font = { bold: true };
     subr.eachCell({ includeEmpty: true }, (c) => { c.border = { top: { style: 'thin', color: { argb: NAVY } } }; });
     if (firstItemRowInGroup !== null) {
       subr.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
+      // Group header total = same range
       gh.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
       groupSubtotalAddrs.push(`G${subr.number}`);
     }
@@ -415,24 +707,30 @@ async function exportXlsx() {
     ws.addRow([]);
   });
 
+  // Final totals (live formulas)
   ws.addRow([]);
   const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', '', '', '']);
-  stRow.font = { bold: true }; styleCurrency(stRow.getCell(7));
+  stRow.font = { bold: true };
+  styleCurrency(stRow.getCell(7));
   if (groupSubtotalAddrs.length) {
     stRow.getCell(7).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
   }
+
   const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', '', '', '']);
   styleCurrency(contRow.getCell(7));
   contRow.getCell(7).value = { formula: `G${stRow.number}*${contPct}`, result: 0 };
+
   const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', '', '', '']);
   styleCurrency(feeRow.getCell(7));
   feeRow.getCell(7).value = { formula: `G${stRow.number}*${feePct}`, result: 0 };
+
   const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', '', '', '']);
   grandRow.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
   grandRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   grandRow.height = 22;
   styleCurrency(grandRow.getCell(7));
   grandRow.getCell(7).value = { formula: `G${stRow.number}+G${contRow.number}+G${feeRow.number}`, result: 0 };
+
   if (units > 0) {
     const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', '', '', '']);
     puRow.font = { italic: true, bold: true };
@@ -447,6 +745,7 @@ async function exportXlsx() {
     ws.addRow([STATE.phase4.notes]);
   }
 
+  // ===== Property Basics + Physical sheets =====
   [
     { name: 'Property Basics', phase: SCHEMA.phase1, state: STATE.phase1 },
     { name: 'Physical', phase: SCHEMA.phase2, state: STATE.phase2 },
@@ -476,65 +775,307 @@ async function exportXlsx() {
   const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const buf = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-  toast('Excel exported', 'success');
+
+  if (!STATE || !STATE.drive.folderId) {
+    // No linked folder — fall back to local download so the user isn't stuck.
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    toast('Downloaded (no Drive folder linked)', 'success');
+    return;
+  }
+
+  try {
+    toast('Uploading Excel to Drive…');
+    const res = await driveUploadBinary(
+      STATE.drive.folderId,
+      filename,
+      blob,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    toast('Excel uploaded to Drive', 'success');
+    if (res.webViewLink) window.open(res.webViewLink, '_blank');
+  } catch (e) {
+    toast('Upload failed: ' + e.message, 'error');
+  }
 }
 
+// ---------- App shell ----------
 function renderApp() {
+  // Renders the current phase inside #phase-content (only used in property view).
   const main = $('#phase-content');
   main.innerHTML = '';
   let view;
   if (CURRENT_PHASE === 1) view = renderPhase1();
   else if (CURRENT_PHASE === 2) view = renderPhase2();
+  else if (CURRENT_PHASE === 3) view = renderPhase3();
   else view = renderPhase4();
   main.appendChild(view);
   $$('.tab').forEach(t => t.classList.toggle('active', Number(t.dataset.phase) === CURRENT_PHASE));
 }
 
+function renderShell() {
+  // Top-level router between Home and Property views.
+  const inProp = CURRENT_VIEW === 'property' && STATE;
+  $('#home-content').classList.toggle('hidden', inProp);
+  $('#phase-content').classList.toggle('hidden', !inProp);
+  $('#phase-tabs').classList.toggle('hidden', !inProp);
+  $('#btn-back').classList.toggle('hidden', !inProp);
+  $('#btn-save').classList.toggle('hidden', !inProp);
+  $('#btn-pull').classList.toggle('hidden', !inProp || !STATE.drive.folderId);
+  $('#btn-push').classList.toggle('hidden', !inProp || !STATE.drive.folderId);
+  $('#drawer-property-section').classList.toggle('hidden', !inProp);
+  $('#header-title').textContent = inProp
+    ? (STATE.name || STATE.phase1.prop_name || 'Untitled Property')
+    : 'Capex Builder';
+  if (inProp) {
+    renderApp();
+    updateSyncBar();
+    updateFolderStatus();
+  } else {
+    $('#sync-bar').classList.add('hidden');
+    renderHome();
+  }
+}
+
+function renderHome() {
+  const main = $('#home-content');
+  main.innerHTML = '';
+  const props = Object.values(STORE.properties)
+    .sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
+
+  main.appendChild(el('button', { class: 'home-new-btn', onClick: () => promptNewProperty() },
+    '+ New Property'));
+
+  if (!props.length) {
+    main.appendChild(el('div', { class: 'home-empty' },
+      'No properties yet. Tap "+ New Property" to start.'));
+    return;
+  }
+
+  const list = el('div', { class: 'home-list' });
+  props.forEach(p => {
+    const subBits = [];
+    if (p.phase1 && p.phase1.city) subBits.push(p.phase1.city);
+    if (p.phase1 && p.phase1.mf_units) subBits.push(`${p.phase1.mf_units} units`);
+    if (p.updated) subBits.push('updated ' + relativeTime(p.updated));
+    const subtitle = subBits.join(' · ') || 'No details yet';
+
+    let syncCls = 'nolink', syncIcon = '⊘', syncTitle = 'No Drive folder linked';
+    if (p.drive.folderId) {
+      const inSync = p.drive.lastPushed && p.drive.lastPushed >= p.updated;
+      syncCls = inSync ? 'synced' : 'dirty';
+      syncIcon = inSync ? '●' : '○';
+      syncTitle = inSync ? 'In sync with Drive (last push: ' + relativeTime(p.drive.lastPushed) + ')'
+                         : 'Local changes since last push';
+    }
+
+    list.appendChild(el('div', { class: 'property-card', onClick: () => openProperty(p.id) },
+      el('div', { class: 'pc-main' },
+        el('div', { class: 'pc-name' }, p.name || '(unnamed)'),
+        el('div', { class: 'pc-sub' }, subtitle)
+      ),
+      el('div', { class: 'pc-actions' },
+        el('span', { class: 'pc-sync ' + syncCls, title: syncTitle }, syncIcon),
+        el('button', { class: 'btn-icon pc-menu',
+          onClick: (e) => { e.stopPropagation(); propertyMenu(p); } }, '⋮')
+      )
+    ));
+  });
+  main.appendChild(list);
+}
+
+function relativeTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso); const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 7 * 86400) return Math.floor(diff / 86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function promptNewProperty() {
+  const name = prompt('Property name?');
+  if (name === null) return;
+  const p = createProperty(name);
+  openProperty(p.id);
+}
+
+function propertyMenu(p) {
+  const choice = prompt(
+    `"${p.name || '(unnamed)'}"\n\n` +
+    `1. Open\n2. Rename\n3. Link Drive folder\n4. Delete\n\nEnter 1-4:`
+  );
+  if (choice === '1') openProperty(p.id);
+  else if (choice === '2') {
+    const n = prompt('New name?', p.name);
+    if (n !== null && n.trim()) {
+      p.name = n.trim();
+      if (p.phase1) p.phase1.prop_name = p.name;
+      saveState();
+      renderHome();
+    }
+  } else if (choice === '3') {
+    promptLinkFolder(p, () => renderHome());
+  } else if (choice === '4') {
+    if (confirm(`Delete "${p.name}"?\n\nThis only removes the local copy — the Drive folder and its files are NOT affected.`)) {
+      deleteProperty(p.id);
+      renderHome();
+    }
+  }
+}
+
+function extractFolderId(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  const m = s.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(s)) return s;
+  return '';
+}
+
+function promptLinkFolder(p, after) {
+  const current = p.drive.folderId || '';
+  const input = prompt(
+    'Paste the Drive folder URL or ID for this property:\n\n' +
+    'Either:\n' +
+    '  • https://drive.google.com/drive/folders/ABC123…\n' +
+    '  • or just the ID (ABC123…)\n\n' +
+    'Leave blank to unlink.',
+    current
+  );
+  if (input === null) return;
+  const trimmed = input.trim();
+  if (!trimmed) {
+    p.drive.folderId = '';
+    p.drive.fileId = '';
+    saveState();
+    if (after) after();
+    toast('Folder unlinked');
+    return;
+  }
+  const id = extractFolderId(trimmed);
+  if (!id) { toast('Could not parse folder ID', 'error'); return; }
+  p.drive.folderId = id;
+  p.drive.fileId = ''; // reset; will be discovered on next push/pull
+  saveState();
+  if (after) after();
+  toast('Drive folder linked', 'success');
+}
+
+function updateSyncBar() {
+  const bar = $('#sync-bar');
+  if (!STATE) { bar.classList.add('hidden'); return; }
+  if (!STATE.drive.folderId) {
+    bar.className = 'sync-bar warn';
+    bar.textContent = 'No Drive folder linked — tap ☰ → Link Drive Folder to enable cloud sync.';
+    bar.classList.remove('hidden');
+    return;
+  }
+  const lastPush = STATE.drive.lastPushed;
+  const lastPull = STATE.drive.lastPulled;
+  const dirty = !lastPush || lastPush < STATE.updated;
+  if (dirty) {
+    bar.className = 'sync-bar warn';
+    bar.textContent = 'Local changes — tap ⬆ to push to Drive.' +
+      (lastPush ? ' Last push: ' + relativeTime(lastPush) : '');
+  } else {
+    bar.className = 'sync-bar ok';
+    bar.textContent = 'In sync with Drive (last push ' + relativeTime(lastPush) + ').';
+  }
+  bar.classList.remove('hidden');
+}
+
+function updateFolderStatus() {
+  const el2 = $('#folder-status');
+  if (!el2 || !STATE) return;
+  el2.textContent = STATE.drive.folderId
+    ? 'Linked: ' + STATE.drive.folderId.slice(0, 14) + '…'
+    : 'Not linked';
+  const ss = $('#sync-status');
+  if (ss) {
+    const bits = [];
+    if (STATE.drive.lastPushed) bits.push('Pushed ' + relativeTime(STATE.drive.lastPushed));
+    if (STATE.drive.lastPulled) bits.push('Pulled ' + relativeTime(STATE.drive.lastPulled));
+    ss.textContent = bits.join(' · ') || 'Never synced';
+  }
+}
+
 function bindShell() {
-  $$('.tab').forEach(t => t.addEventListener('click', () => { CURRENT_PHASE = Number(t.dataset.phase); renderApp(); window.scrollTo(0, 0); }));
-  $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved', 'success'); });
+  $$('.tab').forEach(t => t.addEventListener('click', () => {
+    CURRENT_PHASE = Number(t.dataset.phase);
+    renderApp();
+    window.scrollTo(0, 0);
+  }));
+  $('#btn-back').addEventListener('click', () => closeProperty());
+  $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved', 'success'); updateSyncBar(); });
   $('#btn-menu').addEventListener('click', () => $('#menu-drawer').classList.remove('hidden'));
   $('.drawer-close').addEventListener('click', () => $('#menu-drawer').classList.add('hidden'));
-  $('#btn-new').addEventListener('click', () => {
-    if (confirm('Start a new property? Current data will be cleared (export first if needed).')) {
-      STATE = DEFAULT_STATE(); saveState(); CURRENT_PHASE = 1; renderApp();
-      $('#menu-drawer').classList.add('hidden');
-      toast('New property started');
-    }
+
+  const closeDrawer = () => $('#menu-drawer').classList.add('hidden');
+
+  $('#btn-link-folder').addEventListener('click', () => {
+    if (!STATE) return;
+    promptLinkFolder(STATE, () => { renderShell(); });
+    closeDrawer();
   });
+  $('#btn-rename').addEventListener('click', () => {
+    if (!STATE) return;
+    const n = prompt('New property name?', STATE.name);
+    if (n !== null && n.trim()) {
+      STATE.name = n.trim();
+      STATE.phase1.prop_name = STATE.name;
+      saveState();
+      renderShell();
+    }
+    closeDrawer();
+  });
+  $('#btn-delete').addEventListener('click', () => {
+    if (!STATE) return;
+    if (confirm(`Delete "${STATE.name}"?\n\nThis only removes the local copy — Drive files are NOT affected.`)) {
+      deleteProperty(STATE.id);
+      renderShell();
+    }
+    closeDrawer();
+  });
+
+  $('#btn-push').addEventListener('click', () => pushToDrive());
+  $('#btn-pull').addEventListener('click', () => pullFromDrive());
+  $('#btn-push-drawer').addEventListener('click', () => { pushToDrive(); closeDrawer(); });
+  $('#btn-pull-drawer').addEventListener('click', () => { pullFromDrive(); closeDrawer(); });
+
+  $('#btn-export-xlsx').addEventListener('click', () => { exportXlsx(); closeDrawer(); });
   $('#btn-export-json').addEventListener('click', () => {
+    if (!STATE) return;
     const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `capex_${(STATE.phase1.prop_name || 'property').replace(/[^a-z0-9]+/gi, '_')}.json`;
     a.click();
+    closeDrawer();
   });
-  $('#btn-import-json').addEventListener('click', () => $('#file-import').click());
-  $('#file-import').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try { STATE = Object.assign(DEFAULT_STATE(), JSON.parse(reader.result)); saveState(); renderApp(); toast('Imported', 'success'); }
-      catch (err) { toast('Import failed: ' + err.message, 'error'); }
-    };
-    reader.readAsText(file);
-  });
-  $('#btn-export-xlsx').addEventListener('click', exportXlsx);
+
   $('#btn-drive-connect').addEventListener('click', driveConnect);
   $('#btn-import-options').addEventListener('click', () => $('#file-import-options').click());
-  $('#file-import-options').addEventListener('change', (e) => { const file = e.target.files[0]; if (file) importOptionsXlsx(file); e.target.value = ''; });
+  $('#file-import-options').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) importOptionsXlsx(file);
+    e.target.value = '';
+  });
   $('#btn-reset-options').addEventListener('click', () => {
     if (confirm('Reset all dropdown options to defaults from the source spreadsheet?')) {
-      resetOptionOverrides(); updateOptionsStatus(); renderApp(); toast('Options reset', 'success');
+      resetOptionOverrides();
+      updateOptionsStatus();
+      if (CURRENT_VIEW === 'property') renderApp();
+      toast('Options reset', 'success');
     }
   });
-  updateDriveStatus(); updateOptionsStatus();
+  updateDriveStatus();
+  updateOptionsStatus();
 }
 
 function updateOptionsStatus() {
@@ -551,43 +1092,266 @@ function importOptionsXlsx(file) {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
       const ws = wb.Sheets['Dropdown Options'] || wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+      // Header row: Phase | Section | Field Key | Field Label | Option 1 | Option 2 | ...
       const overrides = {};
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i] || [];
         const fieldKey = row[2];
         if (!fieldKey) continue;
-        const opts = row.slice(4).map(v => v == null ? '' : String(v).trim()).filter(Boolean);
+        const opts = row.slice(4)
+          .map(v => v == null ? '' : String(v).trim())
+          .filter(Boolean);
         if (opts.length) overrides[String(fieldKey).trim()] = opts;
       }
-      if (!Object.keys(overrides).length) { toast('No options found in Excel (check column layout)', 'error'); return; }
+      if (!Object.keys(overrides).length) {
+        toast('No options found in Excel (check column layout)', 'error');
+        return;
+      }
       localStorage.setItem(OPTIONS_KEY, JSON.stringify(overrides));
-      updateOptionsStatus(); renderApp();
+      updateOptionsStatus();
+      renderApp();
       toast(`Imported options for ${Object.keys(overrides).length} fields`, 'success');
-    } catch (err) { toast('Import failed: ' + err.message, 'error'); }
+    } catch (err) {
+      toast('Import failed: ' + err.message, 'error');
+    }
   };
   reader.readAsArrayBuffer(file);
 }
 
-const GOOGLE_CLIENT_ID = '';
+// ---------- Google Drive ----------
+// To enable: create OAuth client at console.cloud.google.com (Web App type),
+// add https://egordonshir.github.io as an Authorized JavaScript origin,
+// then paste the Client ID below.
+const GOOGLE_CLIENT_ID = '434286194253-gjfctl5vkdgvfk5vve9r272o7mr2n82q.apps.googleusercontent.com';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+const STATE_FILENAME = 'capex_builder.json';
+
+function getDriveToken() {
+  const tok = localStorage.getItem(DRIVE_TOKEN_KEY);
+  const exp = Number(localStorage.getItem(DRIVE_TOKEN_EXP_KEY) || 0);
+  return tok && exp > Date.now() ? tok : null;
+}
+function clearDriveToken() {
+  localStorage.removeItem(DRIVE_TOKEN_KEY);
+  localStorage.removeItem(DRIVE_TOKEN_EXP_KEY);
+}
 function updateDriveStatus() {
   const status = $('#drive-status');
-  if (!GOOGLE_CLIENT_ID) { status.textContent = 'Add OAuth client ID to enable'; return; }
-  const token = localStorage.getItem(DRIVE_TOKEN_KEY);
-  status.textContent = token ? 'Connected' : 'Not connected';
-}
-function driveConnect() {
-  if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
-  const script = document.createElement('script');
-  script.src = 'https://accounts.google.com/gsi/client';
-  script.onload = () => {
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID,
-      scope: 'https://www.googleapis.com/auth/drive.file',
-      callback: (resp) => { if (resp.access_token) { localStorage.setItem(DRIVE_TOKEN_KEY, resp.access_token); updateDriveStatus(); toast('Drive connected', 'success'); } },
-    });
-    client.requestAccessToken();
-  };
-  document.head.appendChild(script);
+  if (!status) return;
+  if (!GOOGLE_CLIENT_ID) { status.textContent = 'Add OAuth client ID to app.js to enable'; return; }
+  status.textContent = getDriveToken() ? 'Connected' : 'Not connected';
 }
 
-document.addEventListener('DOMContentLoaded', () => { bindShell(); renderApp(); });
+function ensureGisLoaded() {
+  if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load Google Identity Services'));
+    document.head.appendChild(s);
+  });
+}
+
+function driveRequestToken({ silent = false } = {}) {
+  return new Promise(async (resolve, reject) => {
+    if (!GOOGLE_CLIENT_ID) { reject(new Error('Set GOOGLE_CLIENT_ID in app.js first')); return; }
+    try { await ensureGisLoaded(); } catch (e) { reject(e); return; }
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        if (resp.access_token) {
+          localStorage.setItem(DRIVE_TOKEN_KEY, resp.access_token);
+          localStorage.setItem(DRIVE_TOKEN_EXP_KEY, String(Date.now() + ((resp.expires_in || 3600) - 60) * 1000));
+          updateDriveStatus();
+          resolve(resp.access_token);
+        } else {
+          reject(new Error('OAuth failed'));
+        }
+      },
+      error_callback: (err) => reject(new Error('OAuth error: ' + (err && err.type || 'unknown'))),
+    });
+    client.requestAccessToken(silent ? { prompt: 'none' } : {});
+  });
+}
+
+async function driveAuthHeader() {
+  let tok = getDriveToken();
+  if (!tok) tok = await driveRequestToken({ silent: false });
+  return 'Bearer ' + tok;
+}
+
+async function driveFetch(url, opts = {}) {
+  const auth = await driveAuthHeader();
+  let r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: auth } });
+  if (r.status === 401) {
+    clearDriveToken();
+    const auth2 = await driveAuthHeader();
+    r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: auth2 } });
+  }
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`Drive ${r.status}: ${text.slice(0, 200)}`);
+  }
+  return r;
+}
+
+async function driveConnect() {
+  try {
+    await driveRequestToken({ silent: false });
+    updateDriveStatus();
+    toast('Drive connected', 'success');
+  } catch (e) {
+    toast('Connect failed: ' + e.message, 'error');
+  }
+}
+
+async function driveFindFile(folderId, filename) {
+  const q = `'${folderId}' in parents and name='${filename.replace(/'/g, "\\'")}' and trashed=false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,webViewLink)&pageSize=10`;
+  const r = await driveFetch(url);
+  const j = await r.json();
+  return (j.files || [])[0] || null;
+}
+
+function makeMultipartJsonBody(metadata, jsonPayload) {
+  const boundary = '-------capexbuilder' + Math.random().toString(36).slice(2);
+  const body =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    JSON.stringify(metadata) + `\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: application/json\r\n\r\n` +
+    JSON.stringify(jsonPayload) + `\r\n` +
+    `--${boundary}--`;
+  return { boundary, body };
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function driveUploadJson(folderId, filename, jsonData, existingFileId) {
+  const existing = existingFileId
+    ? { id: existingFileId }
+    : await driveFindFile(folderId, filename);
+  const metadata = existing
+    ? { name: filename, mimeType: 'application/json' }
+    : { name: filename, mimeType: 'application/json', parents: [folderId] };
+  const { boundary, body } = makeMultipartJsonBody(metadata, jsonData);
+  const url = existing
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=multipart&fields=id,modifiedTime,webViewLink`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime,webViewLink`;
+  const r = await driveFetch(url, {
+    method: existing ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  return r.json();
+}
+
+async function driveDownloadJson(folderId, filename) {
+  const file = await driveFindFile(folderId, filename);
+  if (!file) return null;
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
+  return { data: await r.json(), modifiedTime: file.modifiedTime, id: file.id };
+}
+
+async function driveUploadBinary(folderId, filename, blob, mimeType) {
+  const existing = await driveFindFile(folderId, filename);
+  const metadata = existing
+    ? { name: filename, mimeType }
+    : { name: filename, mimeType, parents: [folderId] };
+  const arrayBuffer = await blob.arrayBuffer();
+  const dataB64 = arrayBufferToBase64(arrayBuffer);
+  const boundary = '-------capexbuilder' + Math.random().toString(36).slice(2);
+  const body =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    JSON.stringify(metadata) + `\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: ${mimeType}\r\n` +
+    `Content-Transfer-Encoding: base64\r\n\r\n` +
+    dataB64 + `\r\n` +
+    `--${boundary}--`;
+  const url = existing
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=multipart&fields=id,modifiedTime,webViewLink`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime,webViewLink`;
+  const r = await driveFetch(url, {
+    method: existing ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  return r.json();
+}
+
+async function pushToDrive() {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) { toast('Link a Drive folder first', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
+  try {
+    // Warn if remote is newer than what we last pulled
+    const existing = await driveFindFile(STATE.drive.folderId, STATE_FILENAME);
+    if (existing && STATE.drive.remoteModifiedTime
+        && existing.modifiedTime > STATE.drive.remoteModifiedTime
+        && (!STATE.drive.lastPushed || existing.modifiedTime > STATE.drive.lastPushed)) {
+      if (!confirm('The Drive copy was modified more recently than your last sync. Overwrite it with your local data?')) {
+        return;
+      }
+    }
+    toast('Pushing to Drive…');
+    const res = await driveUploadJson(STATE.drive.folderId, STATE_FILENAME, STATE, existing && existing.id);
+    STATE.drive.fileId = res.id;
+    STATE.drive.lastPushed = new Date().toISOString();
+    STATE.drive.remoteModifiedTime = res.modifiedTime;
+    saveState();
+    updateSyncBar();
+    updateFolderStatus();
+    toast('Pushed to Drive', 'success');
+  } catch (e) {
+    toast('Push failed: ' + e.message, 'error');
+  }
+}
+
+async function pullFromDrive() {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) { toast('Link a Drive folder first', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
+  try {
+    toast('Pulling from Drive…');
+    const remote = await driveDownloadJson(STATE.drive.folderId, STATE_FILENAME);
+    if (!remote) { toast('No ' + STATE_FILENAME + ' found in that folder', 'error'); return; }
+    const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
+    if (dirty && !confirm('You have unpushed local changes. Replace them with the Drive copy?')) return;
+    // Preserve local identity + drive metadata; overwrite content fields.
+    const keep = { id: STATE.id, drive: { ...STATE.drive } };
+    Object.keys(STATE).forEach(k => delete STATE[k]);
+    Object.assign(STATE, remote.data);
+    STATE.id = keep.id;
+    STATE.drive = { ...keep.drive, fileId: remote.id, lastPulled: new Date().toISOString(), remoteModifiedTime: remote.modifiedTime, lastPushed: new Date().toISOString() };
+    // After pulling, local matches remote — mark pushed time so it's not flagged dirty.
+    STATE.updated = remote.modifiedTime || STATE.updated;
+    saveState();
+    renderShell();
+    toast('Pulled from Drive', 'success');
+  } catch (e) {
+    toast('Pull failed: ' + e.message, 'error');
+  }
+}
+
+// ---------- Init ----------
+document.addEventListener('DOMContentLoaded', () => {
+  bindShell();
+  renderShell();
+  // Try to silently refresh the Drive token on load so push/pull just works.
+  if (GOOGLE_CLIENT_ID && !getDriveToken()) {
+    driveRequestToken({ silent: true }).then(updateDriveStatus).catch(() => {});
+  }
+});
