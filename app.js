@@ -878,6 +878,13 @@ function renderOnboardingCard() {
   const sync = el('div', { class: 'onb-sync' });
   sync.appendChild(el('div', { class: 'onb-sync-title' }, 'Saving & retrieving your work'));
   sync.appendChild(el('div', { class: 'onb-sync-row' },
+    el('span', { class: 'onb-sync-icon' }, '💾'),
+    el('span', {},
+      el('strong', {}, 'Save'),
+      ' stores your work on this device only (your browser). It does NOT upload to Google Drive — it’s just a quick local save so you don’t lose progress between sessions on this device.'
+    )
+  ));
+  sync.appendChild(el('div', { class: 'onb-sync-row' },
     el('span', { class: 'onb-sync-icon' }, '⬆'),
     el('span', {},
       el('strong', {}, 'Push to Drive'),
@@ -1110,7 +1117,7 @@ function bindShell() {
     }
   }));
   $('#btn-back').addEventListener('click', () => closeProperty());
-  $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved', 'success'); updateSyncBar(); });
+  $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved on this device (use ⬆ Push to save to Drive)', 'success'); updateSyncBar(); });
   $('#btn-menu').addEventListener('click', () => $('#menu-drawer').classList.remove('hidden'));
   $('.drawer-close').addEventListener('click', () => $('#menu-drawer').classList.add('hidden'));
 
