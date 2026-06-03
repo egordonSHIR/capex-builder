@@ -411,6 +411,37 @@ function countChecked() {
   return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
 }
 
+// CAPEX group header colors, matched to the source Excel "CAPEX" tab.
+const GROUP_COLORS = {
+  'Soft Costs': '#417B85',
+  'Base Work': '#78697B',
+  'Building Work': '#B2BCCB',
+  'Interior': '#A64D79',
+  'Exterior': '#3477B2',
+  'Amenities/Common Areas': '#242852',
+  'Commercial Tenant Costs': '#FFCC66',
+};
+// Pick readable text color (dark on light fills, white on dark fills).
+function textOn(hex) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? '#0f172a' : '#ffffff';
+}
+// Build a colored group <header> for the CAPEX group sections.
+function groupHeader(groupName) {
+  const color = GROUP_COLORS[groupName];
+  const txt = color ? textOn(color) : null;
+  const headerAttrs = {
+    class: 'section-header group-header',
+    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed'),
+  };
+  if (color) headerAttrs.style = `background:${color};color:${txt};border-bottom-color:rgba(0,0,0,0.12)`;
+  return el('header', headerAttrs,
+    el('span', { style: 'font-size:15px;font-weight:700' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
+    el('span', { class: 'chev', style: txt ? `color:${txt}` : '' }, '▼')
+  );
+}
+
 // ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
 function renderPhase2() {
   const root = el('div');
@@ -430,7 +461,8 @@ function renderPhase2() {
 
   SCHEMA.phase3.forEach((group, gi) => {
     if (!group.sections.length) return;
-    const groupBody = el('div');
+    // groupBody carries .section-body so collapsing the group hides everything inside.
+    const groupBody = el('div', { class: 'section-body group-body' });
     group.sections.forEach((sec, si) => {
       if (!sec.items.length) return;
       const secBody = el('div', { class: 'section-body' });
@@ -450,14 +482,7 @@ function renderPhase2() {
       );
       groupBody.appendChild(secNode);
     });
-    const groupNode = el('section', { class: 'section' },
-      el('header', { class: 'section-header',
-        onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-        el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
-        el('span', { class: 'chev' }, '▼')
-      ),
-      groupBody
-    );
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name), groupBody);
     root.appendChild(groupNode);
   });
   return root;
@@ -496,7 +521,7 @@ function renderPhase3() {
 
   SCHEMA.phase3.forEach((group, gi) => {
     if (!group.sections.length) return;
-    const groupBody = el('div');
+    const groupBody = el('div', { class: 'section-body group-body' });
     let groupHasChecked = false;
     group.sections.forEach((sec, si) => {
       const checkedItems = sec.items
@@ -519,14 +544,7 @@ function renderPhase3() {
       groupBody.appendChild(secNode);
     });
     if (!groupHasChecked) return;
-    const groupNode = el('section', { class: 'section' },
-      el('header', { class: 'section-header',
-        onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-        el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
-        el('span', { class: 'chev' }, '▼')
-      ),
-      groupBody
-    );
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name), groupBody);
     root.appendChild(groupNode);
   });
   return root;
