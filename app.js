@@ -1010,9 +1010,20 @@ function updateFolderStatus() {
 
 function bindShell() {
   $$('.tab').forEach(t => t.addEventListener('click', () => {
+    const wasPhase = CURRENT_PHASE;
     CURRENT_PHASE = Number(t.dataset.phase);
     renderApp();
     window.scrollTo(0, 0);
+    // Leaving Phase 1 with a populated property name but no Drive folder linked yet?
+    // Auto-search across the 7 pipelines (once per property — manual button can re-run).
+    if (wasPhase === 1 && CURRENT_PHASE !== 1
+        && STATE && !STATE.drive.folderId && !STATE.drive.autoSearchAttempted
+        && STATE.phase1 && STATE.phase1.prop_name
+        && GOOGLE_CLIENT_ID) {
+      STATE.drive.autoSearchAttempted = true;
+      saveState();
+      autoLinkDealFolder({ silent: true });
+    }
   }));
   $('#btn-back').addEventListener('click', () => closeProperty());
   $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved', 'success'); updateSyncBar(); });
@@ -1021,6 +1032,12 @@ function bindShell() {
 
   const closeDrawer = () => $('#menu-drawer').classList.add('hidden');
 
+  $('#btn-find-folder').addEventListener('click', () => {
+    if (!STATE) return;
+    closeDrawer();
+    STATE.drive.autoSearchAttempted = false; // manual button always re-runs
+    autoLinkDealFolder({ silent: false });
+  });
   $('#btn-link-folder').addEventListener('click', () => {
     if (!STATE) return;
     promptLinkFolder(STATE, () => { renderShell(); });
@@ -1250,6 +1267,136 @@ async function resolveCapexFolder() {
   STATE.drive.capexFolderId = budgetFolder;
   saveState();
   return budgetFolder;
+}
+
+// ---------- Deal folder auto-discovery ----------
+// Pipeline parent folders that contain individual deal folders, in priority order.
+const DEAL_PIPELINE_FOLDERS = [
+  { name: 'Under Contract',                id: '1IrPlaRICRzdqN7SmG_ShDkSnCP0g7tHL' },
+  { name: 'Negotiating',                   id: '104S0wT09iDs3EWnZoWQrf7IWaw6zqsbd' },
+  { name: 'Inv Comm. Offer',               id: '1QcDvJE3JbtlzDTtkrJuFsA6qJrowlvJB' },
+  { name: 'Initial Offer',                 id: '1pCHdxhVXPx_PZ163Wj1YxK27FN5BeAWL' },
+  { name: 'Brokered Pipeline',             id: '1_t3k60rmSWJY3aXYAMIgn6SjFRE1tg-R' },
+  { name: 'ExStay Conv (Brokered) Pipeline', id: '1_IiLYMEtGMptdzS50hFXRFz9nK5JB7f9' },
+  { name: 'OFF Market Deals',              id: '1xCcCTPP2qLhUapPiQT1h2TQxnLL3nAdH' },
+];
+
+function normalizeName(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// List all subfolders under parentId (paginated, returns [{id,name}]).
+async function listSubfolders(parentId) {
+  const all = [];
+  let pageToken = null;
+  do {
+    const q = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name),nextPageToken&pageSize=200`;
+    if (pageToken) url += '&pageToken=' + encodeURIComponent(pageToken);
+    const r = await driveFetch(url);
+    const j = await r.json();
+    all.push(...(j.files || []));
+    pageToken = j.nextPageToken;
+  } while (pageToken);
+  return all;
+}
+
+// Search all 7 pipelines in parallel. Returns ranked candidates with score + pipeline name.
+async function searchDealFolder(propName, city, state) {
+  const nProp = normalizeName(propName);
+  if (!nProp) return [];
+  const nCity = normalizeName(city);
+  const nState = normalizeName(state);
+  const propTokens = nProp.split(/\s+/).filter(t => t.length >= 3);
+
+  const buckets = await Promise.all(
+    DEAL_PIPELINE_FOLDERS.map(p =>
+      listSubfolders(p.id).then(files => ({ pipeline: p.name, files })).catch(() => ({ pipeline: p.name, files: [] }))
+    )
+  );
+
+  const candidates = [];
+  for (const bucket of buckets) {
+    for (const f of bucket.files) {
+      const nf = normalizeName(f.name);
+      let score = 0;
+      // Full property name appears contiguously — strongest signal
+      if (nProp.length >= 4 && nf.includes(nProp)) score += 50;
+      // Each property token present
+      for (const t of propTokens) if (nf.includes(t)) score += 10;
+      // City / state boost
+      if (nCity && nCity.length >= 3 && nf.includes(nCity)) score += 8;
+      if (nState && nState.length >= 2) {
+        const stateRe = new RegExp('(^|\\s)' + nState + '($|\\s)');
+        if (stateRe.test(nf)) score += 4;
+      }
+      if (score > 0) candidates.push({ id: f.id, name: f.name, pipeline: bucket.pipeline, score });
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates;
+}
+
+// Look up the deal folder for the current property by name/city/state and link it.
+// `silent` = called automatically (no toast on zero-match); otherwise show feedback.
+async function autoLinkDealFolder({ silent = false } = {}) {
+  if (!STATE) return false;
+  if (STATE.drive.folderId) {
+    if (!silent) toast('Folder already linked — unlink first to relink', 'error');
+    return false;
+  }
+  const propName = STATE.phase1 && STATE.phase1.prop_name;
+  if (!propName) {
+    if (!silent) toast('Enter Property Name on the Basics tab first', 'error');
+    return false;
+  }
+  if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID first', 'error'); return false; }
+
+  try {
+    if (!silent) toast('Searching Drive pipelines…');
+    const candidates = await searchDealFolder(propName, STATE.phase1.city, STATE.phase1.state);
+    if (!candidates.length) {
+      if (!silent) toast('No matching deal folder found', 'error');
+      return false;
+    }
+
+    let chosen;
+    const top = candidates[0];
+    const second = candidates[1];
+    // High-confidence single match: top score is meaningfully ahead of runner-up (or no runner-up).
+    if (!second || top.score >= second.score + 20) {
+      const ok = confirm(
+        `Found deal folder:\n\n` +
+        `📁 ${top.name}\n   in "${top.pipeline}"\n\n` +
+        `Link it to this property and create 25. Capex/Capex Builder Budget?`
+      );
+      if (!ok) return false;
+      chosen = top;
+    } else {
+      const top5 = candidates.slice(0, 5);
+      const msg =
+        `Multiple possible deal folders. Pick one:\n\n` +
+        top5.map((c, i) => `${i + 1}. ${c.name}\n   (${c.pipeline})`).join('\n\n') +
+        `\n\nEnter 1-${top5.length}, or blank to cancel:`;
+      const pick = prompt(msg, '1');
+      const idx = parseInt(pick, 10);
+      if (!idx || idx < 1 || idx > top5.length) return false;
+      chosen = top5[idx - 1];
+    }
+
+    STATE.drive.folderId = chosen.id;
+    STATE.drive.fileId = '';
+    STATE.drive.capexFolderId = '';
+    saveState();
+    // Eagerly create the nested target folder.
+    try { await resolveCapexFolder(); } catch (e) { console.warn('resolveCapexFolder after auto-link failed', e); }
+    renderShell();
+    toast(`Linked: ${chosen.name}`, 'success');
+    return true;
+  } catch (e) {
+    if (!silent) toast('Search failed: ' + e.message, 'error');
+    return false;
+  }
 }
 
 function makeMultipartJsonBody(metadata, jsonPayload) {
