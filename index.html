@@ -10,43 +10,59 @@
 <body>
 <header class="app-header">
   <div class="brand">
+    <button id="btn-back" class="btn-icon hidden" title="Properties">←</button>
     <span class="logo">SHIR</span>
-    <span class="title">Capex Builder</span>
+    <span class="title" id="header-title">Capex Builder</span>
   </div>
   <div class="header-actions">
-    <button id="btn-save" class="btn-icon" title="Save">💾</button>
+    <button id="btn-pull" class="btn-icon hidden" title="Pull from Drive">⬇</button>
+    <button id="btn-push" class="btn-icon hidden" title="Push to Drive">⬆</button>
+    <button id="btn-save" class="btn-icon hidden" title="Save">💾</button>
     <button id="btn-menu" class="btn-icon" title="Menu">☰</button>
   </div>
 </header>
 
-<nav class="phase-tabs">
+<div id="sync-bar" class="sync-bar hidden"></div>
+
+<nav class="phase-tabs" id="phase-tabs">
   <button class="tab active" data-phase="1">1. Basics</button>
   <button class="tab" data-phase="2">2. Physical</button>
   <button class="tab" data-phase="4">3. Review &amp; Export</button>
 </nav>
 
 <main id="phase-content"></main>
+<main id="home-content" class="hidden"></main>
 
 <div id="menu-drawer" class="drawer hidden">
   <button class="drawer-close">✕</button>
-  <h3>Property</h3>
-  <button id="btn-new">New Property</button>
-  <button id="btn-export-json">Export JSON</button>
-  <button id="btn-import-json">Import JSON</button>
-  <input type="file" id="file-import" accept="application/json" hidden />
-  <button id="btn-export-xlsx">Export Excel</button>
-  <hr/>
+
+  <div id="drawer-property-section">
+    <h3>Property</h3>
+    <button id="btn-link-folder">Link Drive Folder…</button>
+    <div id="folder-status" class="muted small"></div>
+    <button id="btn-rename">Rename</button>
+    <button id="btn-delete">Delete Property</button>
+    <hr/>
+    <h3>Sync</h3>
+    <button id="btn-push-drawer">Push to Drive</button>
+    <button id="btn-pull-drawer">Pull from Drive</button>
+    <div id="sync-status" class="muted small"></div>
+    <button id="btn-export-xlsx">Export Excel → Drive</button>
+    <button id="btn-export-json">Export JSON (download)</button>
+    <hr/>
+  </div>
+
   <h3>Dropdown Options</h3>
   <button id="btn-import-options">Import Options (XLSX)</button>
   <input type="file" id="file-import-options" accept=".xlsx,.xls" hidden />
   <button id="btn-reset-options">Reset to Defaults</button>
   <div id="options-status" class="muted small"></div>
   <hr/>
-  <h3>Sync</h3>
+  <h3>Google Drive</h3>
   <button id="btn-drive-connect">Connect Google Drive</button>
-  <div id="drive-status" class="muted">Not connected</div>
+  <div id="drive-status" class="muted small">Not connected</div>
   <hr/>
-  <div class="muted small">Auto-saved to this device. v0.8</div>
+  <div class="muted small">v0.9 · multi-property</div>
 </div>
 
 <div id="toast" class="toast hidden"></div>
