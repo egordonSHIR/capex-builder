@@ -29,7 +29,7 @@ const DEFAULT_PROPERTY = () => ({
   name: '',
   created: new Date().toISOString(),
   updated: new Date().toISOString(),
-  drive: { folderId: '', fileId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
+  drive: { folderId: '', fileId: '', capexFolderId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
   phase1: {},
   phase2: {},
   phase3: {}, // keyed by `${groupIdx}.${sectionIdx}.${itemIdx}` -> {qty, unit_cost, notes}
@@ -789,13 +789,14 @@ async function exportXlsx() {
 
   try {
     toast('Uploading Excel to Drive…');
+    const targetFolder = await resolveCapexFolder();
     const res = await driveUploadBinary(
-      STATE.drive.folderId,
+      targetFolder,
       filename,
       blob,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
-    toast('Excel uploaded to Drive', 'success');
+    toast('Excel uploaded to 25. Capex/Capex Builder Budget', 'success');
     if (res.webViewLink) window.open(res.webViewLink, '_blank');
   } catch (e) {
     toast('Upload failed: ' + e.message, 'error');
@@ -953,6 +954,7 @@ function promptLinkFolder(p, after) {
   if (!trimmed) {
     p.drive.folderId = '';
     p.drive.fileId = '';
+    p.drive.capexFolderId = '';
     saveState();
     if (after) after();
     toast('Folder unlinked');
@@ -961,7 +963,8 @@ function promptLinkFolder(p, after) {
   const id = extractFolderId(trimmed);
   if (!id) { toast('Could not parse folder ID', 'error'); return; }
   p.drive.folderId = id;
-  p.drive.fileId = ''; // reset; will be discovered on next push/pull
+  p.drive.fileId = '';        // reset; will be discovered on next push/pull
+  p.drive.capexFolderId = ''; // reset cached nested folder id
   saveState();
   if (after) after();
   toast('Drive folder linked', 'success');
@@ -1215,6 +1218,40 @@ async function driveFindFile(folderId, filename) {
   return (j.files || [])[0] || null;
 }
 
+// Find or create a subfolder with the given name under parentId. Returns the subfolder id.
+async function driveEnsureSubfolder(parentId, name) {
+  const safeName = name.replace(/'/g, "\\'");
+  const q = `'${parentId}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=10`;
+  const listR = await driveFetch(listUrl);
+  const listJ = await listR.json();
+  if ((listJ.files || []).length) return listJ.files[0].id;
+  // Create it.
+  const createR = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+    }),
+  });
+  const createJ = await createR.json();
+  return createJ.id;
+}
+
+// Resolve (and cache) the nested target folder where all capex artifacts live:
+//   <linked deal folder>/25. Capex/Capex Builder Budget/
+async function resolveCapexFolder() {
+  if (!STATE || !STATE.drive.folderId) throw new Error('No Drive folder linked');
+  if (STATE.drive.capexFolderId) return STATE.drive.capexFolderId;
+  const capexParent = await driveEnsureSubfolder(STATE.drive.folderId, '25. Capex');
+  const budgetFolder = await driveEnsureSubfolder(capexParent, 'Capex Builder Budget');
+  STATE.drive.capexFolderId = budgetFolder;
+  saveState();
+  return budgetFolder;
+}
+
 function makeMultipartJsonBody(metadata, jsonPayload) {
   const boundary = '-------capexbuilder' + Math.random().toString(36).slice(2);
   const body =
@@ -1297,8 +1334,10 @@ async function pushToDrive() {
   if (!STATE.drive.folderId) { toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
+    toast('Pushing to Drive…');
+    const targetFolder = await resolveCapexFolder();
     // Warn if remote is newer than what we last pulled
-    const existing = await driveFindFile(STATE.drive.folderId, STATE_FILENAME);
+    const existing = await driveFindFile(targetFolder, STATE_FILENAME);
     if (existing && STATE.drive.remoteModifiedTime
         && existing.modifiedTime > STATE.drive.remoteModifiedTime
         && (!STATE.drive.lastPushed || existing.modifiedTime > STATE.drive.lastPushed)) {
@@ -1306,8 +1345,7 @@ async function pushToDrive() {
         return;
       }
     }
-    toast('Pushing to Drive…');
-    const res = await driveUploadJson(STATE.drive.folderId, STATE_FILENAME, STATE, existing && existing.id);
+    const res = await driveUploadJson(targetFolder, STATE_FILENAME, STATE, existing && existing.id);
     STATE.drive.fileId = res.id;
     STATE.drive.lastPushed = new Date().toISOString();
     STATE.drive.remoteModifiedTime = res.modifiedTime;
@@ -1326,8 +1364,9 @@ async function pullFromDrive() {
   if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
     toast('Pulling from Drive…');
-    const remote = await driveDownloadJson(STATE.drive.folderId, STATE_FILENAME);
-    if (!remote) { toast('No ' + STATE_FILENAME + ' found in that folder', 'error'); return; }
+    const targetFolder = await resolveCapexFolder();
+    const remote = await driveDownloadJson(targetFolder, STATE_FILENAME);
+    if (!remote) { toast('No ' + STATE_FILENAME + ' found in 25. Capex/Capex Builder Budget', 'error'); return; }
     const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
     if (dirty && !confirm('You have unpushed local changes. Replace them with the Drive copy?')) return;
     // Preserve local identity + drive metadata; overwrite content fields.
