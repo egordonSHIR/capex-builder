@@ -34,6 +34,7 @@ const DEFAULT_PROPERTY = () => ({
   drive: { folderId: '', fileId: '', capexFolderId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
   phase1: {},
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
+  unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
   checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
   phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes}
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
@@ -65,6 +66,7 @@ function loadStore() {
         name: (old.phase1 && old.phase1.prop_name) || 'Untitled Property',
         phase1: old.phase1 || {},
         phase2: old.phase2 || {},
+        unitMix: old.unitMix || [],
         phase3: old.phase3 || {},
         phase4: old.phase4 || { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
         created: (old.meta && old.meta.created) || new Date().toISOString(),
@@ -392,8 +394,181 @@ function renderPhase1() {
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
+  root.appendChild(renderUnitMix());
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   return root;
+}
+
+// ---------- Unit Mix (part of Physical; repeatable rows) ----------
+const UNIT_STATUS = ['Original', 'Partial', 'Reno'];
+
+function getUnitMix() {
+  if (!Array.isArray(STATE.unitMix)) STATE.unitMix = [];
+  return STATE.unitMix;
+}
+function addUnitRow(row) {
+  getUnitMix().push(row || { type: '', count: '', beds: '', baths: '', sqft: '', status: '' });
+  saveState();
+}
+function updateUnitRow(i, patch) {
+  const m = getUnitMix();
+  if (m[i]) { Object.assign(m[i], patch); saveState(); }
+}
+function removeUnitRow(i) {
+  getUnitMix().splice(i, 1);
+  saveState();
+}
+
+function renderUnitMix() {
+  const section = el('section', { class: 'section' });
+  section.appendChild(el('header', { class: 'section-header',
+    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+    el('span', {}, 'Unit Mix'),
+    el('span', { class: 'chev' }, '▼')
+  ));
+  const body = el('div', { class: 'section-body' });
+  section.appendChild(body);
+
+  function rebuild() {
+    body.innerHTML = '';
+    const rows = getUnitMix();
+
+    const totalUnits = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+    body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px' },
+      rows.length
+        ? `${rows.length} unit type${rows.length === 1 ? '' : 's'}` + (totalUnits ? ` · ${totalUnits} total units` : '')
+        : 'No unit types yet — add one below or import from the proforma.'));
+
+    rows.forEach((r, i) => body.appendChild(renderUnitRow(r, i, rebuild)));
+
+    const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (f) importProformaUnitMix(f, rebuild);
+      e.target.value = '';
+    });
+    const actions = el('div', { style: 'padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap' },
+      el('button', { class: 'um-btn', onClick: () => { addUnitRow(); rebuild(); } }, '+ Add Unit Type'),
+      el('button', { class: 'um-btn secondary', onClick: () => fileInput.click() }, '⬆ Import from Proforma'),
+      fileInput
+    );
+    body.appendChild(actions);
+
+    // Placeholder guidance for proforma extraction (tune importProformaUnitMix to your layout).
+    body.appendChild(el('div', { class: 'um-note' },
+      el('strong', {}, 'Importing from the proforma: '),
+      'Upload the deal proforma (.xlsx). The importer scans for a “Unit Mix” sheet (or the first sheet) and a header row with ' +
+      'columns for Unit Type, # Units, Beds, Baths, SqFt, and Status — matched loosely (e.g. “BR”, “Bedrooms”, “SF”, “Condition”). ' +
+      'It overwrites the rows above. ',
+      el('em', {}, 'TODO: tune the column mapping in importProformaUnitMix() to your standard proforma template.')
+    ));
+    return body;
+  }
+  rebuild();
+  return section;
+}
+
+function renderUnitRow(r, i, rebuild) {
+  const wrap = el('div', { class: 'unit-row' });
+
+  const typeInput = el('input', { type: 'text', placeholder: 'Unit type (e.g. 1BR / 1BA – Plan A)' });
+  typeInput.value = r.type || '';
+  typeInput.addEventListener('input', () => updateUnitRow(i, { type: typeInput.value }));
+  wrap.appendChild(el('div', { class: 'unit-row-top' },
+    typeInput,
+    el('button', { class: 'unit-remove', title: 'Remove unit type',
+      onClick: () => { removeUnitRow(i); rebuild(); } }, '✕')
+  ));
+
+  const numField = (label, key) => el('div', { class: 'field' },
+    el('label', {}, label),
+    (() => {
+      const inp = el('input', { type: 'number', min: 0, step: 'any' });
+      inp.value = r[key] ?? '';
+      inp.addEventListener('input', () => updateUnitRow(i, { [key]: inp.value === '' ? '' : Number(inp.value) }));
+      return inp;
+    })()
+  );
+
+  const statusField = el('div', { class: 'field' },
+    el('label', {}, 'Status'),
+    (() => {
+      const s = el('select');
+      s.appendChild(el('option', { value: '' }, '—'));
+      UNIT_STATUS.forEach(o => {
+        const op = el('option', { value: o }, o);
+        if (r.status === o) op.selected = true;
+        s.appendChild(op);
+      });
+      s.addEventListener('change', () => updateUnitRow(i, { status: s.value }));
+      return s;
+    })()
+  );
+
+  wrap.appendChild(el('div', { class: 'unit-grid' },
+    numField('# Units', 'count'),
+    numField('Beds', 'beds'),
+    numField('Baths', 'baths'),
+    numField('SqFt', 'sqft'),
+    statusField
+  ));
+  return wrap;
+}
+
+// Best-effort proforma parser. PLACEHOLDER: column matching is loose — tune to your template.
+function importProformaUnitMix(file, rebuild) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+      const sheetName = wb.SheetNames.find(n => /unit\s*mix/i.test(n)) || wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
+
+      // ---- PLACEHOLDER COLUMN MAPPING ----
+      // Scan the first ~30 rows for a header row, then map columns by loose name match.
+      // TODO: replace with the exact column positions/names from your standard proforma.
+      const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+      let headerIdx = -1, cols = {};
+      for (let i = 0; i < Math.min(rows.length, 30); i++) {
+        const cells = (rows[i] || []).map(norm);
+        const has = (...keys) => cells.findIndex(c => keys.some(k => c.includes(k)));
+        const type = has('unittype', 'type', 'plan', 'floorplan', 'unitname');
+        const beds = cells.findIndex(c => c === 'bd' || c === 'br' || c.includes('bed'));
+        const baths = cells.findIndex(c => c === 'ba' || c.includes('bath'));
+        const sqft = cells.findIndex(c => c.includes('sqft') || c.includes('squarefe') || c === 'sf' || c.includes('rsf'));
+        if (type >= 0 && (beds >= 0 || baths >= 0 || sqft >= 0)) {
+          headerIdx = i;
+          cols = { type, beds, baths, sqft, count: has('ofunits', 'units', 'qty', 'count', 'quantity'), status: has('status', 'condition', 'reno') };
+          break;
+        }
+      }
+      if (headerIdx < 0) {
+        toast('Could not find a unit-mix table in that file (see the note for the expected format).', 'error');
+        return;
+      }
+
+      const num = (v) => { if (v === '' || v == null) return ''; const n = Number(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : ''; };
+      const out = [];
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const get = (idx) => (idx >= 0 ? row[idx] : '');
+        const typeVal = String(get(cols.type) || '').trim();
+        if (!typeVal) continue;
+        const sl = String(get(cols.status) || '').trim().toLowerCase();
+        const status = sl.startsWith('orig') ? 'Original' : sl.startsWith('part') ? 'Partial' : sl.startsWith('reno') ? 'Reno' : '';
+        out.push({ type: typeVal, count: num(get(cols.count)), beds: num(get(cols.beds)), baths: num(get(cols.baths)), sqft: num(get(cols.sqft)), status });
+      }
+      if (!out.length) { toast('No unit rows found below the header row.', 'error'); return; }
+      if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} imported from the proforma?`)) return;
+      STATE.unitMix = out;
+      saveState();
+      rebuild();
+      toast(`Imported ${out.length} unit type(s) from proforma`, 'success');
+    } catch (err) {
+      toast('Import failed: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 // ---------- Shared key + checklist helpers ----------
@@ -852,6 +1027,22 @@ async function exportXlsx() {
     const notesHead = ws.addRow(['Notes:']);
     notesHead.font = { bold: true };
     ws.addRow([STATE.phase4.notes]);
+  }
+
+  // ===== Unit Mix sheet =====
+  if (Array.isArray(STATE.unitMix) && STATE.unitMix.length) {
+    const um = workbook.addWorksheet('Unit Mix');
+    um.columns = [{ width: 32 }, { width: 12 }, { width: 10 }, { width: 10 }, { width: 12 }, { width: 14 }];
+    const ut = um.addRow(['UNIT MIX']);
+    ut.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+    ut.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    um.mergeCells(`A${ut.number}:F${ut.number}`);
+    const uh = um.addRow(['Unit Type', '# Units', 'Beds', 'Baths', 'SqFt', 'Status']);
+    uh.font = { bold: true };
+    uh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+    STATE.unitMix.forEach((r) => {
+      um.addRow([r.type || '', Number(r.count) || '', Number(r.beds) || '', Number(r.baths) || '', Number(r.sqft) || '', r.status || '']);
+    });
   }
 
   // ===== Property Basics + Physical sheets =====
