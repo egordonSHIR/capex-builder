@@ -33,8 +33,9 @@ const DEFAULT_PROPERTY = () => ({
   updated: new Date().toISOString(),
   drive: { folderId: '', fileId: '', capexFolderId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
   phase1: {},
-  phase2: {},
-  phase3: {}, // keyed by `${groupIdx}.${sectionIdx}.${itemIdx}` -> {qty, unit_cost, notes}
+  phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
+  checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
+  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes}
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
 });
 const DEFAULT_STORE = () => ({ version: 2, properties: {}, currentPropertyId: null });
@@ -385,107 +386,59 @@ function renderSchemaForm(sections, bag, onUpdate) {
   return frag;
 }
 
-// ---------- Phase 1 & 2 ----------
+// ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
 function renderPhase1() {
   const root = el('div');
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
-  return root;
-}
-function renderPhase2() {
-  const root = el('div');
+  // Physical characteristics questionnaire lives here too (collapsible sections).
+  root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   return root;
 }
 
-// ---------- Phase 3: Capex line items ----------
-function p3Key(gi, si, ii) { return `${gi}.${si}.${ii}`; }
-function getP3(gi, si, ii) {
-  return STATE.phase3[p3Key(gi, si, ii)] || { qty: '', unit_cost: '', notes: '' };
+// ---------- Shared key + checklist helpers ----------
+function ckKey(gi, si, ii) { return `${gi}.${si}.${ii}`; }
+function isChecked(gi, si, ii) {
+  return !!(STATE.checklist && STATE.checklist[ckKey(gi, si, ii)]);
 }
-function setP3(gi, si, ii, patch) {
-  const k = p3Key(gi, si, ii);
-  STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
+function setChecked(gi, si, ii, val) {
+  if (!STATE.checklist) STATE.checklist = {};
+  const k = ckKey(gi, si, ii);
+  if (val) STATE.checklist[k] = true; else delete STATE.checklist[k];
   saveState();
 }
+function countChecked() {
+  return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
+}
 
-function renderPhase3() {
+// ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
+function renderPhase2() {
   const root = el('div');
-  // Group filter / nav summary
-  const totals = computeTotals();
   const summary = el('div', { class: 'summary-totals' },
-    el('div', { class: 'summary-row' },
-      el('span', { class: 'label' }, 'Line items entered'),
-      el('span', { class: 'value' }, String(totals.itemCount))),
     el('div', { class: 'summary-row grand' },
-      el('span', { class: 'label' }, 'Running Subtotal'),
-      el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
+      el('span', { class: 'label' }, 'Items selected'),
+      el('span', { class: 'value', 'data-checked-count': true }, String(countChecked())))
   );
   root.appendChild(summary);
+  root.appendChild(el('div', { class: 'muted small', style: 'margin:-8px 2px 14px' },
+    'Check every capex item this property needs. Selected items appear in the Details tab for pricing.'));
+
+  const refreshCount = () => {
+    const n = root.querySelector('[data-checked-count]');
+    if (n) n.textContent = String(countChecked());
+  };
 
   SCHEMA.phase3.forEach((group, gi) => {
+    if (!group.sections.length) return;
     const groupBody = el('div');
     group.sections.forEach((sec, si) => {
+      if (!sec.items.length) return;
       const secBody = el('div', { class: 'section-body' });
       sec.items.forEach((item, ii) => {
-        const v = getP3(gi, si, ii);
-        const hasValue = (Number(v.qty) || 0) > 0 && (Number(v.unit_cost) || 0) > 0;
-        const itemWrap = el('div', { class: 'capex-item' + (hasValue ? ' has-value' : '') });
-
-        const header = el('div', { class: 'capex-item-header' },
-          el('div', {},
-            el('div', { class: 'capex-item-name' }, item.name),
-            item.notes ? el('div', { class: 'capex-item-notes' }, item.notes) : null,
-            item.gl_account ? el('div', { class: 'capex-item-gl' }, item.gl_account) : null,
-          ),
-        );
-        itemWrap.appendChild(header);
-
-        const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-        const row = el('div', { class: 'capex-row' });
-
-        const qtyField = el('div', { class: 'field' },
-          el('label', {}, '# Items'),
-          (() => {
-            const i = el('input', { type: 'number', min: 0, step: 'any' });
-            i.value = v.qty;
-            i.addEventListener('input', () => {
-              setP3(gi, si, ii, { qty: i.value === '' ? '' : Number(i.value) });
-              renderTotals(itemWrap, gi, si, ii);
-              updatePhase3Summary(summary);
-            });
-            return i;
-          })()
-        );
-        const costField = el('div', { class: 'field' },
-          el('label', {}, '$/Item'),
-          (() => {
-            const i = el('input', { type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '' });
-            i.value = v.unit_cost !== '' ? v.unit_cost : '';
-            i.addEventListener('input', () => {
-              setP3(gi, si, ii, { unit_cost: i.value === '' ? '' : Number(i.value) });
-              renderTotals(itemWrap, gi, si, ii);
-              updatePhase3Summary(summary);
-            });
-            return i;
-          })()
-        );
-        const totalEl = el('div', { class: 'total', 'data-total': true }, fmtMoney(total));
-        const notesField = el('div', { class: 'field' },
-          el('label', {}, 'Notes'),
-          (() => {
-            const i = el('input', { type: 'text' });
-            i.value = v.notes || '';
-            i.addEventListener('input', () => setP3(gi, si, ii, { notes: i.value }));
-            return i;
-          })()
-        );
-        row.appendChild(qtyField);
-        row.appendChild(costField);
-        row.appendChild(totalEl);
-        row.appendChild(notesField);
-        itemWrap.appendChild(row);
-
-        secBody.appendChild(itemWrap);
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = isChecked(gi, si, ii);
+        cb.addEventListener('change', () => { setChecked(gi, si, ii, cb.checked); refreshCount(); });
+        secBody.appendChild(el('label', { class: 'check-item' }, cb, el('span', {}, item.name)));
       });
       const secNode = el('section', { class: 'section collapsed' },
         el('header', { class: 'section-header',
@@ -497,7 +450,6 @@ function renderPhase3() {
       );
       groupBody.appendChild(secNode);
     });
-
     const groupNode = el('section', { class: 'section' },
       el('header', { class: 'section-header',
         onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
@@ -510,17 +462,152 @@ function renderPhase3() {
   });
   return root;
 }
-function renderTotals(itemWrap, gi, si, ii) {
+
+// ---------- Phase 3: Details (checked items only — # units, unit type, $/unit) ----------
+const UNIT_TYPES = ['Each', 'SF', 'LF', 'SY', 'CY', 'LS', 'Unit', 'Allowance', 'Hour', 'Day'];
+
+function getP3(gi, si, ii) {
+  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '' };
+}
+function setP3(gi, si, ii, patch) {
+  const k = ckKey(gi, si, ii);
+  STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
+  saveState();
+}
+
+function renderPhase3() {
+  const root = el('div');
+  const totals = computeTotals();
+  const summary = el('div', { class: 'summary-totals' },
+    el('div', { class: 'summary-row' },
+      el('span', { class: 'label' }, 'Items priced'),
+      el('span', { class: 'value' }, String(totals.itemCount))),
+    el('div', { class: 'summary-row grand' },
+      el('span', { class: 'label' }, 'Running Subtotal'),
+      el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
+  );
+  root.appendChild(summary);
+
+  if (countChecked() === 0) {
+    root.appendChild(el('div', { class: 'home-empty' },
+      'No items selected yet. Check items on the Questionnaire tab and they’ll appear here for pricing.'));
+    return root;
+  }
+
+  SCHEMA.phase3.forEach((group, gi) => {
+    if (!group.sections.length) return;
+    const groupBody = el('div');
+    let groupHasChecked = false;
+    group.sections.forEach((sec, si) => {
+      const checkedItems = sec.items
+        .map((item, ii) => ({ item, ii }))
+        .filter(o => isChecked(gi, si, o.ii));
+      if (!checkedItems.length) return;
+      groupHasChecked = true;
+      const secBody = el('div', { class: 'section-body' });
+      checkedItems.forEach(({ item, ii }) => {
+        secBody.appendChild(renderDetailItem(gi, si, ii, item, summary));
+      });
+      const secNode = el('section', { class: 'section' },
+        el('header', { class: 'section-header',
+          onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+          el('span', {}, sec.name),
+          el('span', { class: 'chev' }, '▼')
+        ),
+        secBody
+      );
+      groupBody.appendChild(secNode);
+    });
+    if (!groupHasChecked) return;
+    const groupNode = el('section', { class: 'section' },
+      el('header', { class: 'section-header',
+        onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+        el('span', { style: 'font-size:15px' }, group.name.toUpperCase()),
+        el('span', { class: 'chev' }, '▼')
+      ),
+      groupBody
+    );
+    root.appendChild(groupNode);
+  });
+  return root;
+}
+
+function renderDetailItem(gi, si, ii, item, summaryNode) {
+  const v = getP3(gi, si, ii);
+  const hasValue = (Number(v.qty) || 0) > 0 && (Number(v.unit_cost) || 0) > 0;
+  const itemWrap = el('div', { class: 'capex-item' + (hasValue ? ' has-value' : '') });
+  itemWrap.appendChild(el('div', { class: 'capex-item-header' },
+    el('div', {},
+      el('div', { class: 'capex-item-name' }, item.name),
+      item.gl_account ? el('div', { class: 'capex-item-gl' }, item.gl_account) : null
+    )
+  ));
+
+  const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  const row = el('div', { class: 'capex-row detail-row' });
+
+  const qtyField = el('div', { class: 'field' },
+    el('label', {}, '# Units'),
+    (() => {
+      const i = el('input', { type: 'number', min: 0, step: 'any' });
+      i.value = v.qty;
+      i.addEventListener('input', () => {
+        setP3(gi, si, ii, { qty: i.value === '' ? '' : Number(i.value) });
+        renderDetailTotals(itemWrap, gi, si, ii);
+        updateDetailSummary(summaryNode);
+      });
+      return i;
+    })()
+  );
+  const utField = el('div', { class: 'field' },
+    el('label', {}, 'Unit Type'),
+    (() => {
+      const s = el('select');
+      s.appendChild(el('option', { value: '' }, '—'));
+      UNIT_TYPES.forEach(u => {
+        const o = el('option', { value: u }, u);
+        if (v.unit_type === u) o.selected = true;
+        s.appendChild(o);
+      });
+      s.addEventListener('change', () => setP3(gi, si, ii, { unit_type: s.value }));
+      return s;
+    })()
+  );
+  const costField = el('div', { class: 'field' },
+    el('label', {}, '$/Unit'),
+    (() => {
+      const i = el('input', { type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '' });
+      i.value = v.unit_cost !== '' ? v.unit_cost : '';
+      i.addEventListener('input', () => {
+        setP3(gi, si, ii, { unit_cost: i.value === '' ? '' : Number(i.value) });
+        renderDetailTotals(itemWrap, gi, si, ii);
+        updateDetailSummary(summaryNode);
+      });
+      return i;
+    })()
+  );
+  const totalEl = el('div', { class: 'total', 'data-total': true }, fmtMoney(total));
+
+  row.appendChild(qtyField);
+  row.appendChild(utField);
+  row.appendChild(costField);
+  row.appendChild(totalEl);
+  itemWrap.appendChild(row);
+  return itemWrap;
+}
+function renderDetailTotals(itemWrap, gi, si, ii) {
   const v = getP3(gi, si, ii);
   const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
   const t = itemWrap.querySelector('[data-total]');
   if (t) t.textContent = fmtMoney(total);
   itemWrap.classList.toggle('has-value', total > 0);
 }
-function updatePhase3Summary(node) {
+function updateDetailSummary(node) {
+  if (!node) return;
   const totals = computeTotals();
-  node.querySelectorAll('.value')[0].textContent = String(totals.itemCount);
-  node.querySelectorAll('.value')[1].textContent = fmtMoney(totals.subtotal);
+  const vals = node.querySelectorAll('.value');
+  if (vals[0]) vals[0].textContent = String(totals.itemCount);
+  if (vals[1]) vals[1].textContent = fmtMoney(totals.subtotal);
 }
 
 // ---------- Phase 4: Review ----------
@@ -532,6 +619,7 @@ function computeTotals() {
     byGroup[g.name] = 0;
     g.sections.forEach((s, si) => {
       s.items.forEach((it, ii) => {
+        if (!isChecked(gi, si, ii)) return; // only priced items that are selected
         const v = getP3(gi, si, ii);
         const t = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
         if (t > 0) { subtotal += t; itemCount += 1; byGroup[g.name] += t; }
@@ -552,9 +640,10 @@ function renderPhase4() {
   // Sanity-check warnings
   const warnings = [];
   if (!STATE.phase1.prop_name) warnings.push('Property name is missing (Phase 1).');
-  if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Phase 1) — per-unit metric will be $0.');
+  if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Basics) — per-unit metric will be $0.');
   const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
-  if (p2Filled === 0) warnings.push('Physical characteristics (Phase 2) appear empty.');
+  if (p2Filled === 0) warnings.push('Physical characteristics (Basics tab) appear empty.');
+  if (countChecked() === 0) warnings.push('No capex items selected on the Questionnaire tab.');
 
   if (warnings.length) {
     const wrap = el('div', { class: 'section' },
@@ -870,8 +959,8 @@ function renderOnboardingCard() {
   const steps = el('ol', { class: 'onboarding-steps' });
   steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
   steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
-  steps.appendChild(el('li', {}, 'Move to Physical — the app will find the matching deal folder across your pipelines and link it automatically.'));
-  steps.appendChild(el('li', {}, 'Capture your notes, then sync to Drive (see below).'));
+  steps.appendChild(el('li', {}, 'Leave Basics for the Questionnaire tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
+  steps.appendChild(el('li', {}, 'Check items on the Questionnaire, price them on Details, then sync to Drive (see below).'));
   card.appendChild(steps);
 
   // Push / Pull explainer — the core save-and-retrieve workflow.
