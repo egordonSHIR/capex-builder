@@ -871,8 +871,27 @@ function renderOnboardingCard() {
   steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
   steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
   steps.appendChild(el('li', {}, 'Move to Physical — the app will find the matching deal folder across your pipelines and link it automatically.'));
-  steps.appendChild(el('li', {}, 'Push to Drive any time. Your data lands in 25. Capex / Capex Builder Budget.'));
+  steps.appendChild(el('li', {}, 'Capture your notes, then sync to Drive (see below).'));
   card.appendChild(steps);
+
+  // Push / Pull explainer — the core save-and-retrieve workflow.
+  const sync = el('div', { class: 'onb-sync' });
+  sync.appendChild(el('div', { class: 'onb-sync-title' }, 'Saving & retrieving your work'));
+  sync.appendChild(el('div', { class: 'onb-sync-row' },
+    el('span', { class: 'onb-sync-icon' }, '⬆'),
+    el('span', {},
+      el('strong', {}, 'Push to Drive'),
+      ' saves your data to the deal’s Google Drive folder (25. Capex / Capex Builder Budget) for long-term, team-shared storage. Do this whenever you finish a round of edits.'
+    )
+  ));
+  sync.appendChild(el('div', { class: 'onb-sync-row' },
+    el('span', { class: 'onb-sync-icon' }, '⬇'),
+    el('span', {},
+      el('strong', {}, 'Pull from Drive'),
+      ' loads the latest saved copy back into the app so you — or a teammate on another device — can review and keep editing. Pull before you start, push when you’re done.'
+    )
+  ));
+  card.appendChild(sync);
 
   if (connected) {
     card.appendChild(el('button', { class: 'onb-connect-btn connected' }, '✓ Drive Connected'));
