@@ -551,3 +551,42 @@ main {
 .group-section > .group-body { padding: 8px; background: #f8fafc; }
 .group-section > .group-body > .section { margin-bottom: 8px; }
 .group-section > .group-body > .section:last-child { margin-bottom: 0; }
+
+/* ---------- Unit Mix (Physical section) ---------- */
+.unit-row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 16px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.unit-row-top { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.unit-row-top input {
+  flex: 1; min-width: 0;
+  font-size: 15px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font-weight: 500;
+}
+.unit-remove {
+  background: transparent; border: none; color: var(--danger);
+  font-size: 15px; cursor: pointer; width: 32px; height: 32px;
+  border-radius: 6px; flex: 0 0 auto;
+}
+.unit-remove:hover { background: #fef2f2; }
+.unit-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.unit-grid .field { padding: 0; border: none; }
+.unit-grid .field label { font-size: 11px; }
+.unit-grid .field input, .unit-grid .field select { font-size: 14px; padding: 6px 8px; }
+@media (max-width: 560px) {
+  .unit-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.um-btn {
+  padding: 10px 14px; border: 1px solid var(--primary);
+  background: var(--primary); color: #fff; border-radius: 6px;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.um-btn.secondary { background: var(--surface); color: var(--primary); }
+.um-note {
+  margin: 4px 16px 8px; font-size: 12px; color: var(--muted); line-height: 1.5;
+  background: #f8fafc; border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
+}
