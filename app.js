@@ -1430,6 +1430,40 @@ function promptNewProperty() {
   if (name === null) return;
   const p = createProperty(name);
   openProperty(p.id);
+  // Right after creation, ask how to link the Drive deal folder.
+  promptLinkDriveDuringSetup(p);
+}
+
+async function promptLinkDriveDuringSetup(p) {
+  const choice = prompt(
+    `Link a Google Drive deal folder for "${p.name}"?\n\n` +
+    `1. Search pipelines by name (recommended)\n` +
+    `2. Paste folder URL or ID\n` +
+    `3. Skip for now (you can link later from ☰)\n\n` +
+    `Enter 1-3:`,
+    '1'
+  );
+  if (choice === null) return;
+  const c = String(choice).trim();
+  if (c === '2') {
+    promptLinkFolder(p, () => renderShell());
+    return;
+  }
+  if (c === '1') {
+    // autoLinkDealFolder reads STATE.phase1.prop_name; createProperty already set this.
+    STATE.drive.autoSearchAttempted = true; // suppress the on-leave-Basics auto-run
+    try {
+      const ok = await autoLinkDealFolder({ silent: false });
+      if (!ok) {
+        if (confirm('Want to paste the folder URL or ID manually instead?')) {
+          promptLinkFolder(p, () => renderShell());
+        }
+      }
+    } catch (e) {
+      toast('Search failed: ' + e.message, 'error');
+    }
+  }
+  // c === '3' or anything else → skip
 }
 
 function propertyMenu(p) {
