@@ -536,11 +536,13 @@ function umStatus(s) {
 // (rows under the "Unit Type Name" header) by unit type + status.
 // Layout: Unit Type Name | Reno/Unreno | Unit # | # BRs | # Ba | Sq. Ft. | ...
 function parseProformaRR(wb) {
+  console.log('[parseProformaRR] sheets:', wb.SheetNames);
   // Scan RR / rent-roll sheets first.
   const sheets = wb.SheetNames.slice().sort((a, b) =>
     (/^rr$|rent\s*roll/i.test(b) ? 1 : 0) - (/^rr$|rent\s*roll/i.test(a) ? 1 : 0));
   for (const sn of sheets) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false });
+    console.log(`[parseProformaRR] scanning sheet "${sn}" (${rows.length} rows)`);
     let h = -1, col = null;
     for (let i = 0; i < rows.length; i++) {
       const cells = (rows[i] || []).map(umNorm);
@@ -550,12 +552,23 @@ function parseProformaRR(wb) {
       const beds = cells.findIndex(c => c === 'brs' || c === 'br' || c.includes('bed') || c.includes('brs'));
       const baths = cells.findIndex(c => c === 'ba' || c === 'bas' || c.includes('bath'));
       const sqft = cells.findIndex(c => c === 'sqft' || c === 'sf' || c.includes('sqft') || c.includes('squarefe'));
+      // Log promising rows (any column matched) to help diagnose layout drift.
+      if (type >= 0 || unitNo >= 0 || status >= 0 || beds >= 0 || sqft >= 0) {
+        console.log(`[parseProformaRR]   row ${i} matches:`, { type, unitNo, status, beds, baths, sqft },
+                    'raw:', (rows[i] || []).slice(0, 12));
+      }
       // The raw rent roll uniquely has BOTH a Unit Type Name and a per-unit "Unit #" column.
       if (type >= 0 && unitNo >= 0 && status >= 0 && (beds >= 0 || sqft >= 0)) {
-        h = i; col = { type, status, beds, baths, sqft }; break;
+        h = i; col = { type, status, beds, baths, sqft };
+        console.log(`[parseProformaRR]   ✓ header found at row ${i}`);
+        break;
       }
     }
-    if (h < 0) continue;
+    if (h < 0) {
+      console.log(`[parseProformaRR]   no header row matched on "${sn}" — first 5 rows:`,
+                  rows.slice(0, 5).map(r => (r || []).slice(0, 12)));
+      continue;
+    }
 
     const agg = new Map(); // key: type||status
     for (let i = h + 1; i < rows.length; i++) {
