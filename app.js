@@ -454,13 +454,14 @@ function renderUnitMix() {
     );
     body.appendChild(actions);
 
-    // Placeholder guidance for proforma extraction (tune importProformaUnitMix to your layout).
+    // Guidance for proforma extraction.
     body.appendChild(el('div', { class: 'um-note' },
       el('strong', {}, 'Importing from the proforma: '),
-      'Upload the deal proforma (.xlsx). The importer scans for a “Unit Mix” sheet (or the first sheet) and a header row with ' +
-      'columns for Unit Type, # Units, Beds, Baths, SqFt, and Status — matched loosely (e.g. “BR”, “Bedrooms”, “SF”, “Condition”). ' +
-      'It overwrites the rows above. ',
-      el('em', {}, 'TODO: tune the column mapping in importProformaUnitMix() to your standard proforma template.')
+      'Upload the deal proforma (.xlsx). The importer reads the ',
+      el('strong', {}, 'RR (rent roll) tab'),
+      ' — the per-unit rows beneath the “Unit Type Name” header — and rolls them up by unit type + status ' +
+      '(Original / Partial / Reno), filling in beds, baths, average SqFt, and the unit count for each. ',
+      el('em', {}, 'It overwrites the rows above.')
     ));
     return body;
   }
@@ -515,55 +516,112 @@ function renderUnitRow(r, i, rebuild) {
   return wrap;
 }
 
-// Best-effort proforma parser. PLACEHOLDER: column matching is loose — tune to your template.
+// Shared helpers for proforma parsing.
+function umNorm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function umNum(v) { if (v === '' || v == null) return ''; const n = Number(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : ''; }
+function umStatus(s) {
+  const v = String(s || '').toLowerCase();
+  if (v.includes('unreno')) return 'Original';   // check before 'reno'
+  if (v.startsWith('orig')) return 'Original';
+  if (v.startsWith('part')) return 'Partial';
+  if (v.includes('reno')) return 'Reno';
+  return '';
+}
+
+// Primary parser: SHIR proforma "RR" tab — aggregate the raw per-unit rent roll
+// (rows under the "Unit Type Name" header) by unit type + status.
+// Layout: Unit Type Name | Reno/Unreno | Unit # | # BRs | # Ba | Sq. Ft. | ...
+function parseProformaRR(wb) {
+  // Scan RR / rent-roll sheets first.
+  const sheets = wb.SheetNames.slice().sort((a, b) =>
+    (/^rr$|rent\s*roll/i.test(b) ? 1 : 0) - (/^rr$|rent\s*roll/i.test(a) ? 1 : 0));
+  for (const sn of sheets) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false });
+    let h = -1, col = null;
+    for (let i = 0; i < rows.length; i++) {
+      const cells = (rows[i] || []).map(umNorm);
+      const type = cells.findIndex(c => c.includes('unittype'));                 // "Unit Type Name"
+      const unitNo = cells.findIndex(c => c === 'unit' || c === 'unitno' || c === 'unitnumber'); // "Unit #"
+      const status = cells.findIndex(c => c.includes('reno') || c.includes('status') || c.includes('condition'));
+      const beds = cells.findIndex(c => c === 'brs' || c === 'br' || c.includes('bed') || c.includes('brs'));
+      const baths = cells.findIndex(c => c === 'ba' || c === 'bas' || c.includes('bath'));
+      const sqft = cells.findIndex(c => c === 'sqft' || c === 'sf' || c.includes('sqft') || c.includes('squarefe'));
+      // The raw rent roll uniquely has BOTH a Unit Type Name and a per-unit "Unit #" column.
+      if (type >= 0 && unitNo >= 0 && status >= 0 && (beds >= 0 || sqft >= 0)) {
+        h = i; col = { type, status, beds, baths, sqft }; break;
+      }
+    }
+    if (h < 0) continue;
+
+    const agg = new Map(); // key: type||status
+    for (let i = h + 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const type = String(row[col.type] == null ? '' : row[col.type]).trim();
+      if (!type) continue;
+      const status = umStatus(row[col.status]);
+      const key = type + '||' + status;
+      let a = agg.get(key);
+      if (!a) { a = { type, status, count: 0, beds: '', baths: '', sqftSum: 0, sqftN: 0 }; agg.set(key, a); }
+      a.count += 1;
+      const b = umNum(col.beds >= 0 ? row[col.beds] : '');  if (b !== '') a.beds = b;
+      const ba = umNum(col.baths >= 0 ? row[col.baths] : ''); if (ba !== '') a.baths = ba;
+      const sf = umNum(col.sqft >= 0 ? row[col.sqft] : '');  if (sf !== '') { a.sqftSum += sf; a.sqftN += 1; }
+    }
+    const out = [...agg.values()]
+      .map(a => ({ type: a.type, count: a.count, beds: a.beds, baths: a.baths, sqft: a.sqftN ? Math.round(a.sqftSum / a.sqftN) : '', status: a.status }))
+      .sort((x, y) => (x.type + '/' + x.status).localeCompare(y.type + '/' + y.status));
+    if (out.length) return out;
+  }
+  return null;
+}
+
+// Fallback parser: a simple unit-mix summary table (one row per unit type) on any sheet.
+function parseGenericUnitMix(wb) {
+  const sheetName = wb.SheetNames.find(n => /unit\s*mix/i.test(n)) || wb.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
+  let headerIdx = -1, cols = {};
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const cells = (rows[i] || []).map(umNorm);
+    const has = (...keys) => cells.findIndex(c => keys.some(k => c.includes(k)));
+    const type = has('unittype', 'type', 'plan', 'floorplan', 'unitname');
+    const beds = cells.findIndex(c => c === 'bd' || c === 'br' || c.includes('bed') || c === 'brs');
+    const baths = cells.findIndex(c => c === 'ba' || c.includes('bath'));
+    const sqft = cells.findIndex(c => c.includes('sqft') || c.includes('squarefe') || c === 'sf' || c.includes('rsf'));
+    if (type >= 0 && (beds >= 0 || baths >= 0 || sqft >= 0)) {
+      headerIdx = i;
+      cols = { type, beds, baths, sqft, count: has('ofunits', 'units', 'qty', 'count', 'quantity'), status: has('status', 'condition', 'reno') };
+      break;
+    }
+  }
+  if (headerIdx < 0) return null;
+  const out = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const get = (idx) => (idx >= 0 ? row[idx] : '');
+    const typeVal = String(get(cols.type) || '').trim();
+    if (!typeVal) continue;
+    out.push({ type: typeVal, count: umNum(get(cols.count)), beds: umNum(get(cols.beds)), baths: umNum(get(cols.baths)), sqft: umNum(get(cols.sqft)), status: umStatus(get(cols.status)) });
+  }
+  return out.length ? out : null;
+}
+
+// Import unit mix from the deal proforma. Reads the SHIR "RR" rent roll first,
+// falling back to a generic unit-mix summary table.
 function importProformaUnitMix(file, rebuild) {
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-      const sheetName = wb.SheetNames.find(n => /unit\s*mix/i.test(n)) || wb.SheetNames[0];
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
-
-      // ---- PLACEHOLDER COLUMN MAPPING ----
-      // Scan the first ~30 rows for a header row, then map columns by loose name match.
-      // TODO: replace with the exact column positions/names from your standard proforma.
-      const norm = (s) => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
-      let headerIdx = -1, cols = {};
-      for (let i = 0; i < Math.min(rows.length, 30); i++) {
-        const cells = (rows[i] || []).map(norm);
-        const has = (...keys) => cells.findIndex(c => keys.some(k => c.includes(k)));
-        const type = has('unittype', 'type', 'plan', 'floorplan', 'unitname');
-        const beds = cells.findIndex(c => c === 'bd' || c === 'br' || c.includes('bed'));
-        const baths = cells.findIndex(c => c === 'ba' || c.includes('bath'));
-        const sqft = cells.findIndex(c => c.includes('sqft') || c.includes('squarefe') || c === 'sf' || c.includes('rsf'));
-        if (type >= 0 && (beds >= 0 || baths >= 0 || sqft >= 0)) {
-          headerIdx = i;
-          cols = { type, beds, baths, sqft, count: has('ofunits', 'units', 'qty', 'count', 'quantity'), status: has('status', 'condition', 'reno') };
-          break;
-        }
-      }
-      if (headerIdx < 0) {
-        toast('Could not find a unit-mix table in that file (see the note for the expected format).', 'error');
+      const out = parseProformaRR(wb) || parseGenericUnitMix(wb);
+      if (!out || !out.length) {
+        toast('Could not find unit-mix data (looked for the RR rent roll — see the note).', 'error');
         return;
       }
-
-      const num = (v) => { if (v === '' || v == null) return ''; const n = Number(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : ''; };
-      const out = [];
-      for (let i = headerIdx + 1; i < rows.length; i++) {
-        const row = rows[i] || [];
-        const get = (idx) => (idx >= 0 ? row[idx] : '');
-        const typeVal = String(get(cols.type) || '').trim();
-        if (!typeVal) continue;
-        const sl = String(get(cols.status) || '').trim().toLowerCase();
-        const status = sl.startsWith('orig') ? 'Original' : sl.startsWith('part') ? 'Partial' : sl.startsWith('reno') ? 'Reno' : '';
-        out.push({ type: typeVal, count: num(get(cols.count)), beds: num(get(cols.beds)), baths: num(get(cols.baths)), sqft: num(get(cols.sqft)), status });
-      }
-      if (!out.length) { toast('No unit rows found below the header row.', 'error'); return; }
-      if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} imported from the proforma?`)) return;
+      if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from the proforma?`)) return;
       STATE.unitMix = out;
       saveState();
       rebuild();
-      toast(`Imported ${out.length} unit type(s) from proforma`, 'success');
+      toast(`Imported ${out.length} unit type/status row(s) from the proforma`, 'success');
     } catch (err) {
       toast('Import failed: ' + err.message, 'error');
     }
