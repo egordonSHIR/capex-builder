@@ -489,8 +489,12 @@ function renderUnitRow(r, i, rebuild) {
   const chev = el('span', { style: 'color:#64748b;font-size:11px;width:12px' }, '▶');
   const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
     r.type || '(unnamed)');
-  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' },
-    `${r.count || 0} units${r.sqft ? ' · ' + r.sqft + ' sf' : ''}`);
+  const metaText = (rr) => {
+    const bb = (rr.beds !== '' && rr.beds != null && rr.baths !== '' && rr.baths != null)
+      ? `${rr.beds}×${rr.baths} · ` : '';
+    return `${bb}${rr.count || 0} units${rr.sqft ? ' · ' + rr.sqft + ' sf' : ''}`;
+  };
+  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' }, metaText(r));
   summaryBar.appendChild(chev);
   summaryBar.appendChild(nameSpan);
   summaryBar.appendChild(metaSpan);
@@ -512,9 +516,7 @@ function renderUnitRow(r, i, rebuild) {
       onClick: (e) => { e.stopPropagation(); removeUnitRow(i); rebuild(); } }, '✕')
   ));
 
-  const updateMeta = () => {
-    metaSpan.textContent = `${r.count || 0} units${r.sqft ? ' · ' + r.sqft + ' sf' : ''}`;
-  };
+  const updateMeta = () => { metaSpan.textContent = metaText(r); };
 
   const numField = (label, key) => el('div', { class: 'field' },
     el('label', {}, label),
@@ -525,7 +527,7 @@ function renderUnitRow(r, i, rebuild) {
         const v = inp.value === '' ? '' : Number(inp.value);
         updateUnitRow(i, { [key]: v });
         r[key] = v;
-        if (key === 'count' || key === 'sqft') updateMeta();
+        updateMeta();
       });
       return inp;
     })()
@@ -580,7 +582,7 @@ function umStatus(s) {
 const SHIR_RR_SKIP_ROWS = (() => {
   const skip = new Set();
   const ranges = [
-    [47, 50], [97, 100], [147, 150], [247, 250], [297, 300], [347, 350],
+    [47, 50], [97, 100], [147, 150], [197, 200], [247, 250], [297, 300], [347, 350],
     [352, 365],
     [447, 450], [497, 500], [547, 550], [597, 600], [647, 650], [697, 700],
     [747, 800],
@@ -588,6 +590,10 @@ const SHIR_RR_SKIP_ROWS = (() => {
   for (const [a, b] of ranges) for (let n = a; n <= b; n++) skip.add(n);
   return skip;
 })();
+// Hard cap for RR scanning: anything past this row is junk (separators, extra notes, etc.).
+const SHIR_RR_MAX_EXCEL_ROW = 800;
+// Sanity ceiling: no single floor plan ever has this many units in one row.
+const SHIR_RR_MAX_PER_ROW_COUNT = 1000;
 
 function parseSHIRSummaryRR(wb) {
   const sheet = wb.Sheets['RR'];
@@ -613,17 +619,25 @@ function parseSHIRSummaryRR(wb) {
   let curPlan = '';
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const excelRow = i + 1;
+    if (excelRow > SHIR_RR_MAX_EXCEL_ROW) break;
     if (SHIR_RR_SKIP_ROWS.has(excelRow)) continue;
     const row = rows[i] || [];
     const newGroup = String(row[1] == null ? '' : row[1]).trim();
     const newPlan = String(row[2] == null ? '' : row[2]).trim();
     if (newGroup) curGroup = newGroup;
     if (newPlan) curPlan = newPlan;
+    // Rows where col 2 is empty are group-only declarative rows (the spreadsheet
+    // pre-allocates 50 rows per BR/BA block, most of which are empty placeholders).
+    // Without this guard, curPlan would cascade in from a prior section and create
+    // phantom rows like "4x2(.5) 2BR-1075".
+    if (!newPlan) continue;
     const statusVal = umStatus(row[3]);
     const countNum = Number(row[4]);
     if (!isFinite(countNum) || countNum <= 0) continue;
-    if (!curPlan && !curGroup) continue;
-    const type = curPlan ? (curGroup ? `${curGroup} ${curPlan}` : curPlan) : curGroup;
+    if (countNum > SHIR_RR_MAX_PER_ROW_COUNT) continue;
+    // Type is just the plan code (e.g. "S505"). BR/BA is displayed dynamically
+    // from the beds/baths columns at render time, not baked into the name.
+    const type = curPlan;
     const key = `${type}||${statusVal}`;
     const existing = agg.get(key);
     if (existing) {
