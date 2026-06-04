@@ -449,15 +449,19 @@ function renderUnitMix() {
     });
     const actions = el('div', { style: 'padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap' },
       el('button', { class: 'um-btn', onClick: () => { addUnitRow(); rebuild(); } }, '+ Add Unit Type'),
-      el('button', { class: 'um-btn secondary', onClick: () => fileInput.click() }, '⬆ Import from Proforma'),
+      el('button', { class: 'um-btn secondary', onClick: () => pullProformaFromDrive(rebuild) }, '☁ Pull Proforma from Drive'),
+      el('button', { class: 'um-btn secondary', onClick: () => fileInput.click() }, '⬆ Upload Proforma'),
       fileInput
     );
     body.appendChild(actions);
 
     // Guidance for proforma extraction.
     body.appendChild(el('div', { class: 'um-note' },
-      el('strong', {}, 'Importing from the proforma: '),
-      'Upload the deal proforma (.xlsx). The importer reads the ',
+      el('strong', {}, 'Importing the unit mix: '),
+      el('strong', {}, '☁ Pull from Drive'),
+      ' finds the latest “Full AI UW” file in this deal’s 2. UW-Analysis folder (you confirm it first), or use ',
+      el('strong', {}, '⬆ Upload'),
+      ' to pick a file manually. Either way it reads the ',
       el('strong', {}, 'RR (rent roll) tab'),
       ' — the per-unit rows beneath the “Unit Type Name” header — and rolls them up by unit type + status ' +
       '(Original / Partial / Reno), filling in beds, baths, average SqFt, and the unit count for each. ',
@@ -627,6 +631,81 @@ function importProformaUnitMix(file, rebuild) {
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// List all (non-folder) files in a Drive folder, with created/modified timestamps.
+async function driveListFilesInFolder(folderId) {
+  const all = [];
+  let pageToken = null;
+  do {
+    const q = `'${folderId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`;
+    let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,createdTime,modifiedTime),nextPageToken&pageSize=200&orderBy=modifiedTime desc`;
+    if (pageToken) url += '&pageToken=' + encodeURIComponent(pageToken);
+    const r = await driveFetch(url);
+    const j = await r.json();
+    all.push(...(j.files || []));
+    pageToken = j.nextPageToken;
+  } while (pageToken);
+  return all;
+}
+
+// Pull the proforma straight from the linked deal folder: find 2. UW-Analysis →
+// the latest "Full AI UW" workbook, confirm it (with created/modified dates), then import.
+async function pullProformaFromDrive(rebuild) {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { toast('Connect Google Drive first', 'error'); return; }
+  try {
+    toast('Finding the proforma in Drive…');
+    // 1) Locate the "2. UW-Analysis" subfolder of the deal folder.
+    const subs = await listSubfolders(STATE.drive.folderId);
+    const uw = subs.find(f => /uw[\s\-_.]*analysis/i.test(f.name))
+            || subs.find(f => /uw/i.test(f.name) && /analy/i.test(f.name));
+    if (!uw) { toast('No “2. UW-Analysis” folder found in the deal folder.', 'error'); return; }
+
+    // 2) Files with "Full AI UW" in the name (xlsx or Google Sheet).
+    const files = await driveListFilesInFolder(uw.id);
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const needle = norm('Full AI UW');
+    const matches = files.filter(f =>
+      norm(f.name).includes(needle) &&
+      (/\.xlsx?$/i.test(f.name) ||
+       f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
+       f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    );
+    if (!matches.length) { toast('No “Full AI UW” spreadsheet found in 2. UW-Analysis.', 'error'); return; }
+
+    // 3) Suggest the most-recently-modified; confirm with dates.
+    matches.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
+    const f = matches[0];
+    const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+    const more = matches.length > 1 ? `\n\n(${matches.length} matches — using the most recently modified.)` : '';
+    if (!confirm(
+      `Import unit mix from this proforma?\n\n` +
+      `📄 ${f.name}\n` +
+      `Created:  ${fmtD(f.createdTime)}\n` +
+      `Modified: ${fmtD(f.modifiedTime)}${more}`
+    )) return;
+
+    // 4) Download (export if it's a native Google Sheet) and parse.
+    toast('Downloading proforma…');
+    const isGSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
+    const url = isGSheet
+      ? `https://www.googleapis.com/drive/v3/files/${f.id}/export?mimeType=${encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}`
+      : `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`;
+    const r = await driveFetch(url);
+    const buf = await r.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    const out = parseProformaRR(wb) || parseGenericUnitMix(wb);
+    if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
+    if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
+    STATE.unitMix = out;
+    saveState();
+    rebuild();
+    toast(`Imported ${out.length} unit row(s) from ${f.name}`, 'success');
+  } catch (e) {
+    toast('Proforma pull failed: ' + e.message, 'error');
+  }
 }
 
 // ---------- Shared key + checklist helpers ----------
