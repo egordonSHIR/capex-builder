@@ -434,9 +434,12 @@ function renderUnitMix() {
     const rows = getUnitMix();
 
     const totalUnits = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+    const totalSF = rows.reduce((s, r) => s + (Number(r.count) || 0) * (Number(r.sqft) || 0), 0);
     body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px' },
       rows.length
-        ? `${rows.length} unit type${rows.length === 1 ? '' : 's'}` + (totalUnits ? ` · ${totalUnits} total units` : '')
+        ? `${rows.length} unit type${rows.length === 1 ? '' : 's'}`
+            + (totalUnits ? ` · ${totalUnits.toLocaleString()} total units` : '')
+            + (totalSF ? ` · ${totalSF.toLocaleString()} total sf` : '')
         : 'No unit types yet — add one below or import from the proforma.'));
 
     rows.forEach((r, i) => body.appendChild(renderUnitRow(r, i, rebuild)));
@@ -451,6 +454,7 @@ function renderUnitMix() {
       el('button', { class: 'um-btn', onClick: () => { addUnitRow(); rebuild(); } }, '+ Add Unit Type'),
       el('button', { class: 'um-btn secondary', onClick: () => pullProformaFromDrive(rebuild) }, '☁ Pull Proforma from Drive'),
       el('button', { class: 'um-btn secondary', onClick: () => fileInput.click() }, '⬆ Upload Proforma'),
+      el('button', { class: 'um-btn secondary', onClick: () => exportUnitMixXlsx() }, '⬇ Export Unit Mix'),
       fileInput
     );
     body.appendChild(actions);
@@ -759,6 +763,74 @@ function importProformaUnitMix(file, rebuild) {
   reader.readAsArrayBuffer(file);
 }
 
+// Standalone Unit Mix Excel export — SHIR-branded, just the unit-mix table.
+// Downloads locally (no Drive upload), independent of the full Capex export.
+async function exportUnitMixXlsx() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  const rows = getUnitMix();
+  if (!rows.length) { toast('No unit mix to export — add or import rows first.', 'error'); return; }
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9';
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Capex Builder';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('Unit Mix');
+  ws.columns = [
+    { width: 32 }, { width: 10 }, { width: 8 }, { width: 8 },
+    { width: 12 }, { width: 14 }, { width: 14 },
+  ];
+
+  const propName = (STATE && STATE.phase1 && STATE.phase1.prop_name) || '';
+  const title = ws.addRow([propName ? `UNIT MIX — ${propName.toUpperCase()}` : 'UNIT MIX']);
+  title.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+  title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  title.height = 26;
+  title.alignment = { vertical: 'middle' };
+  ws.mergeCells(`A${title.number}:G${title.number}`);
+  ws.addRow([]);
+
+  const header = ws.addRow(['Unit Type', '# Units', 'Beds', 'Baths', 'SqFt / Unit', 'Status', 'Total SF']);
+  header.font = { bold: true };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+  header.eachCell((c) => {
+    c.border = { bottom: { style: 'medium', color: { argb: NAVY } } };
+    c.alignment = { horizontal: 'center' };
+  });
+
+  rows.forEach((r) => {
+    const count = Number(r.count) || 0;
+    const sqft = Number(r.sqft) || 0;
+    const row = ws.addRow([
+      r.type || '',
+      count || '',
+      r.beds === '' || r.beds == null ? '' : Number(r.beds),
+      r.baths === '' || r.baths == null ? '' : (isNaN(Number(r.baths)) ? r.baths : Number(r.baths)),
+      sqft || '',
+      r.status || '',
+      count && sqft ? count * sqft : '',
+    ]);
+    row.getCell(7).numFmt = '#,##0';
+  });
+
+  // Totals row
+  const totalCount = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+  const totalSF = rows.reduce((s, r) => s + (Number(r.count) || 0) * (Number(r.sqft) || 0), 0);
+  ws.addRow([]);
+  const totals = ws.addRow(['TOTAL', totalCount || '', '', '', '', '', totalSF || '']);
+  totals.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  totals.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  totals.getCell(7).numFmt = '#,##0';
+
+  const filename = `UnitMix_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  toast(`Downloaded ${filename}`, 'success');
+}
+
 // List all (non-folder) files in a Drive folder, with created/modified timestamps.
 async function driveListFilesInFolder(folderId) {
   const all = [];
@@ -801,17 +873,44 @@ async function pullProformaFromDrive(rebuild) {
     );
     if (!matches.length) { toast('No “Full AI UW” spreadsheet found in 2. UW-Analysis.', 'error'); return; }
 
-    // 3) Suggest the most-recently-modified; confirm with dates.
-    matches.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
-    const f = matches[0];
+    // 3) Sort by version number desc (v3.5 > v3 > v2.5 > v2 > v1), with
+    //    modifiedTime as a tiebreaker for files without a version tag.
+    const extractVersion = (name) => {
+      const m = String(name || '').match(/[vV](\d+(?:\.\d+)?)/);
+      return m ? parseFloat(m[1]) : -1;
+    };
+    matches.sort((a, b) => {
+      const vDiff = extractVersion(b.name) - extractVersion(a.name);
+      if (vDiff !== 0) return vDiff;
+      return (b.modifiedTime || '').localeCompare(a.modifiedTime || '');
+    });
     const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
-    const more = matches.length > 1 ? `\n\n(${matches.length} matches — using the most recently modified.)` : '';
-    if (!confirm(
-      `Import unit mix from this proforma?\n\n` +
-      `📄 ${f.name}\n` +
-      `Created:  ${fmtD(f.createdTime)}\n` +
-      `Modified: ${fmtD(f.modifiedTime)}${more}`
-    )) return;
+    const labelFor = (mf) => {
+      const v = extractVersion(mf.name);
+      return v >= 0 ? `v${v}` : `(no version tag)`;
+    };
+    // Pick a file: top of the sorted list. If user rejects, offer the next
+    // best until they accept or we run out.
+    let f = null;
+    for (let idx = 0; idx < matches.length; idx++) {
+      const candidate = matches[idx];
+      const remaining = matches.length - idx - 1;
+      const nextHint = remaining > 0
+        ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
+        : `\n\n[OK = use this · Cancel = abort (no more candidates)]`;
+      const ok = confirm(
+        `Import unit mix from this proforma?\n\n` +
+        `📄 ${candidate.name}\n` +
+        `Version:  ${labelFor(candidate)}\n` +
+        `Created:  ${fmtD(candidate.createdTime)}\n` +
+        `Modified: ${fmtD(candidate.modifiedTime)}` +
+        nextHint
+      );
+      if (ok) { f = candidate; break; }
+      // Cancelled: if no more candidates, abort entirely.
+      if (remaining === 0) return;
+    }
+    if (!f) return;
 
     // 4) Download (export if it's a native Google Sheet) and parse.
     toast('Downloading proforma…');
