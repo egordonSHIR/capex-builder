@@ -532,46 +532,75 @@ function umStatus(s) {
   return '';
 }
 
-// Primary parser: SHIR proforma "RR" tab — aggregate the raw per-unit rent roll
-// (rows under the "Unit Type Name" header) by unit type + status.
-// Layout: Unit Type Name | Reno/Unreno | Unit # | # BRs | # Ba | Sq. Ft. | ...
+// Primary parser: SHIR proforma "RR" tab — handles the aggregated unit-mix
+// summary layout where each row is one (BR/BA group, plan, status) combo.
+// Header row example: [_, _, Status, Type, # Units, # BRs, # BAs, Total SF, SF/Unit, ...]
+// Data rows are nested: col 1 holds a BR/BA group label ("0x1") that
+// applies to all following rows until the next group; col 2 holds a plan
+// name ("S505") that cascades the same way; col 3 is Original/Partial/Reno;
+// col 4 is the count for that combo. Empty/zero counts are skipped.
+function parseSHIRSummaryRR(wb) {
+  const sheet = wb.Sheets['RR'];
+  if (!sheet) return null;
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+  // Find the header row by content: has both "# Units" and "# BRs" (or similar).
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const cells = (rows[i] || []).map(c => String(c == null ? '' : c).toLowerCase().replace(/\s+/g, ''));
+    const hasUnits = cells.some(c => /^#?units?$/.test(c));
+    const hasBRs = cells.some(c => /^#?brs?$/.test(c) || c === 'bedrooms');
+    if (hasUnits && hasBRs) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+
+  const out = [];
+  let curGroup = '';
+  let curPlan = '';
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const newGroup = String(row[1] == null ? '' : row[1]).trim();
+    const newPlan = String(row[2] == null ? '' : row[2]).trim();
+    if (newGroup) curGroup = newGroup;
+    if (newPlan) curPlan = newPlan;
+    const statusVal = umStatus(row[3]);
+    const countNum = Number(row[4]);
+    if (!isFinite(countNum) || countNum <= 0) continue;
+    if (!curPlan && !curGroup) continue;
+    const type = curPlan ? (curGroup ? `${curGroup} ${curPlan}` : curPlan) : curGroup;
+    out.push({
+      type, count: countNum,
+      beds: umNum(row[5]),
+      baths: umNum(row[6]),
+      sqft: umNum(row[8]) || umNum(row[7]),  // prefer SF/Unit, fall back to Total SF
+      status: statusVal,
+    });
+  }
+  return out.length ? out : null;
+}
+
+// Secondary parser: raw per-unit rent roll — aggregate one row per unit by
+// (Unit Type Name + Reno/Unreno status). Header must have both a "Unit Type Name"
+// column and a per-unit "Unit #" column to be recognized.
 function parseProformaRR(wb) {
-  console.log('[parseProformaRR] sheets:', wb.SheetNames);
   // Scan RR / rent-roll sheets first.
   const sheets = wb.SheetNames.slice().sort((a, b) =>
     (/^rr$|rent\s*roll/i.test(b) ? 1 : 0) - (/^rr$|rent\s*roll/i.test(a) ? 1 : 0));
   for (const sn of sheets) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false });
-    console.log(`[parseProformaRR] scanning sheet "${sn}" (${rows.length} rows)`);
-    // Unconditional dump of the first 10 rows so we can see what column headers actually look like.
-    console.log(`[parseProformaRR]   first 10 raw rows of "${sn}":`,
-                rows.slice(0, 10).map((r, idx) => ({ idx, cells: (r || []).slice(0, 15) })));
     let h = -1, col = null;
     for (let i = 0; i < rows.length; i++) {
       const cells = (rows[i] || []).map(umNorm);
-      const type = cells.findIndex(c => c.includes('unittype'));                 // "Unit Type Name"
-      const unitNo = cells.findIndex(c => c === 'unit' || c === 'unitno' || c === 'unitnumber'); // "Unit #"
+      const type = cells.findIndex(c => c.includes('unittype'));
+      const unitNo = cells.findIndex(c => c === 'unit' || c === 'unitno' || c === 'unitnumber');
       const status = cells.findIndex(c => c.includes('reno') || c.includes('status') || c.includes('condition'));
-      const beds = cells.findIndex(c => c === 'brs' || c === 'br' || c.includes('bed') || c.includes('brs'));
+      const beds = cells.findIndex(c => c === 'brs' || c === 'br' || c.includes('bed'));
       const baths = cells.findIndex(c => c === 'ba' || c === 'bas' || c.includes('bath'));
       const sqft = cells.findIndex(c => c === 'sqft' || c === 'sf' || c.includes('sqft') || c.includes('squarefe'));
-      // Log promising rows (any column matched) to help diagnose layout drift.
-      if (type >= 0 || unitNo >= 0 || status >= 0 || beds >= 0 || sqft >= 0) {
-        console.log(`[parseProformaRR]   row ${i} matches:`, { type, unitNo, status, beds, baths, sqft },
-                    'raw:', (rows[i] || []).slice(0, 12));
-      }
-      // The raw rent roll uniquely has BOTH a Unit Type Name and a per-unit "Unit #" column.
       if (type >= 0 && unitNo >= 0 && status >= 0 && (beds >= 0 || sqft >= 0)) {
-        h = i; col = { type, status, beds, baths, sqft };
-        console.log(`[parseProformaRR]   ✓ header found at row ${i}`);
-        break;
+        h = i; col = { type, status, beds, baths, sqft }; break;
       }
     }
-    if (h < 0) {
-      console.log(`[parseProformaRR]   no header row matched on "${sn}" — first 5 rows:`,
-                  rows.slice(0, 5).map(r => (r || []).slice(0, 12)));
-      continue;
-    }
+    if (h < 0) continue;
 
     const agg = new Map(); // key: type||status
     for (let i = h + 1; i < rows.length; i++) {
@@ -632,7 +661,7 @@ function importProformaUnitMix(file, rebuild) {
   reader.onload = (e) => {
     try {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-      const out = parseProformaRR(wb) || parseGenericUnitMix(wb);
+      const out = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
       if (!out || !out.length) {
         toast('Could not find unit-mix data (looked for the RR rent roll — see the note).', 'error');
         return;
@@ -712,7 +741,7 @@ async function pullProformaFromDrive(rebuild) {
     const r = await driveFetch(url);
     const buf = await r.arrayBuffer();
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
-    const out = parseProformaRR(wb) || parseGenericUnitMix(wb);
+    const out = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
     STATE.unitMix = out;
