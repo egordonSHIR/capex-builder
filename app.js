@@ -38,6 +38,19 @@ const DEFAULT_PROPERTY = () => ({
   checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
   phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes}
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
+  // Survey-derived site specs (from survey-breakdown-specs skill).
+  // Flat values land in phase1 (parking_spots_hc, site_perimeter_lf, etc.);
+  // per-building, per-tract, and meta data live here.
+  survey: {
+    processed_at: null,
+    source_pdf: '',
+    scale_paper: '',
+    ft_per_pixel: null,
+    buildings: [],   // [{label, footprint_sf, stories, height_ft, roof_pitch, roof_sf, facade_sf}]
+    tracts: [],      // [{name, is_easement, land_sf, land_ac}]
+    google_maps_notes: '',
+    discrepancies: [],
+  },
 });
 const DEFAULT_STORE = () => ({ version: 2, properties: {}, currentPropertyId: null });
 
@@ -392,6 +405,9 @@ function renderSchemaForm(sections, bag, onUpdate) {
 function renderPhase1() {
   const root = el('div');
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
+  // Survey block (per-building breakdown + Import/Process buttons) follows the
+  // flat "Survey-Derived Site Specs" schema section.
+  root.appendChild(renderSurveyBlock());
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
   root.appendChild(renderUnitMix());
@@ -567,6 +583,469 @@ function renderUnitRow(r, i, rebuild) {
     statusField
   ));
   return wrap;
+}
+
+// ---------- Survey-derived site specs (Per-building breakdown + Import / Process) ----------
+// The flat survey fields (perimeter, parking lot SF, roof/facade totals, fencing notes,
+// landscaping_sf, etc.) are part of phase1[Survey-Derived Site Specs] and render as a
+// regular schema section above this block. This section adds:
+//   - the repeatable per-building list (label/footprint/stories/height/pitch/roof_sf/facade_sf)
+//   - the 📥 Import Survey and 🛰 Process Survey buttons
+//   - a small status line showing when the survey was last processed
+// All non-flat data (per-building, per-tract, meta) is stored on STATE.survey.
+function ensureSurveyState() {
+  if (!STATE.survey) {
+    STATE.survey = {
+      processed_at: null, source_pdf: '', scale_paper: '', ft_per_pixel: null,
+      buildings: [], tracts: [], google_maps_notes: '', discrepancies: [],
+    };
+  }
+  if (!Array.isArray(STATE.survey.buildings)) STATE.survey.buildings = [];
+  if (!Array.isArray(STATE.survey.tracts)) STATE.survey.tracts = [];
+  if (!Array.isArray(STATE.survey.discrepancies)) STATE.survey.discrepancies = [];
+  return STATE.survey;
+}
+function addSurveyBuilding(row) {
+  ensureSurveyState().buildings.push(row || {
+    label: '', footprint_sf: '', stories: '', height_ft: '', roof_pitch: '',
+    roof_sf: '', facade_sf: '',
+  });
+  saveState();
+}
+function updateSurveyBuilding(i, patch) {
+  const arr = ensureSurveyState().buildings;
+  if (arr[i]) { Object.assign(arr[i], patch); saveState(); }
+}
+function removeSurveyBuilding(i) {
+  ensureSurveyState().buildings.splice(i, 1);
+  saveState();
+}
+
+function renderSurveyBlock() {
+  ensureSurveyState();
+  const section = el('section', { class: 'section' });
+  section.appendChild(el('header', { class: 'section-header',
+    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+    el('span', {}, 'Per-Building Survey Breakdown'),
+    el('span', { class: 'chev' }, '▼')
+  ));
+  const body = el('div', { class: 'section-body' });
+  section.appendChild(body);
+
+  function rebuild() {
+    body.innerHTML = '';
+    const s = ensureSurveyState();
+    const blds = s.buildings;
+
+    // Summary / meta line
+    const totalFp = blds.reduce((a, b) => a + (Number(b.footprint_sf) || 0), 0);
+    const totalRoof = blds.reduce((a, b) => a + (Number(b.roof_sf) || 0), 0);
+    const totalFac = blds.reduce((a, b) => a + (Number(b.facade_sf) || 0), 0);
+    const summaryBits = [];
+    if (blds.length) {
+      summaryBits.push(`${blds.length} building${blds.length === 1 ? '' : 's'}`);
+      if (totalFp) summaryBits.push(`${totalFp.toLocaleString()} sf footprint`);
+      if (totalRoof) summaryBits.push(`${totalRoof.toLocaleString()} sf roof`);
+      if (totalFac) summaryBits.push(`${totalFac.toLocaleString()} sf facade`);
+    }
+    const metaLine = s.processed_at
+      ? `Last processed: ${new Date(s.processed_at).toLocaleString()}` +
+        (s.source_pdf ? ` · from ${s.source_pdf.split(/[\\/]/).pop()}` : '')
+      : 'No survey processed yet.';
+    body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 4px' },
+      summaryBits.length ? summaryBits.join(' · ') : 'No buildings logged.'));
+    body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px;font-style:italic' }, metaLine));
+
+    // Action buttons row — same nowrap-scroll pattern as Unit Mix.
+    const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (f) importSurveyFromFile(f, rebuild);
+      e.target.value = '';
+    });
+    const actions = el('div', { style: 'padding:8px 16px;display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto' },
+      el('button', { class: 'um-btn', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => { addSurveyBuilding(); rebuild(); } }, '+ Building'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => importSurveyFromDrive(rebuild) }, '📥 Import Survey'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => fileInput.click() }, '⬆ Upload XLSX'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => toast('Coming in Push 2 — for now, run the survey-breakdown-specs skill in Claude, then click Import Survey.', 'success') }, '🛰 Process Survey'),
+      fileInput
+    );
+    body.appendChild(actions);
+
+    blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
+
+    body.appendChild(el('div', { class: 'um-note' },
+      el('strong', {}, 'Populating these fields: '),
+      'click ', el('strong', {}, '📥 Import Survey'), ' to load the latest ',
+      el('em', {}, '*_SurveyBreakdownSpecs_*.xlsx'),
+      ' from this deal’s ', el('em', {}, '7. Title_Survey/Reports/'),
+      ' folder, or ', el('strong', {}, '⬆ Upload XLSX'),
+      ' to pick a file manually. Each import overwrites the flat fields above ',
+      '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
+      'and replaces the buildings list with the Site-Total values from the workbook.'
+    ));
+    return body;
+  }
+  rebuild();
+  return section;
+}
+
+function renderSurveyBuildingRow(b, i, rebuild) {
+  const wrap = el('div', { class: 'unit-row' });
+  wrap.style.cssText = 'border:1px solid #e5e7eb;border-radius:8px;margin:6px 16px;background:#fff;overflow:hidden';
+
+  const summaryBar = el('div', {
+    style: 'display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;background:#f8fafc',
+    onClick: () => {
+      const isOpen = wrap.classList.toggle('expanded');
+      details.style.display = isOpen ? 'block' : 'none';
+      chev.textContent = isOpen ? '▼' : '▶';
+    },
+  });
+  const chev = el('span', { style: 'color:#64748b;font-size:11px;width:12px' }, '▶');
+  const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+    b.label || `(Building ${i + 1})`);
+  const metaText = (bb) => {
+    const bits = [];
+    if (bb.footprint_sf) bits.push(`${Number(bb.footprint_sf).toLocaleString()} sf fp`);
+    if (bb.stories) bits.push(`${bb.stories} story`);
+    if (bb.roof_pitch) bits.push(`${bb.roof_pitch} pitch`);
+    return bits.join(' · ');
+  };
+  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' }, metaText(b));
+  summaryBar.appendChild(chev); summaryBar.appendChild(nameSpan); summaryBar.appendChild(metaSpan);
+  wrap.appendChild(summaryBar);
+
+  const details = el('div', { style: 'display:none;padding:10px 12px;border-top:1px solid #e5e7eb' });
+  wrap.appendChild(details);
+
+  const labelInput = el('input', { type: 'text', placeholder: 'Building label (e.g. "Hotel — North wing")' });
+  labelInput.value = b.label || '';
+  labelInput.addEventListener('input', () => {
+    updateSurveyBuilding(i, { label: labelInput.value });
+    nameSpan.textContent = labelInput.value || `(Building ${i + 1})`;
+  });
+  details.appendChild(el('div', { class: 'unit-row-top' },
+    labelInput,
+    el('button', { class: 'unit-remove', title: 'Remove building',
+      onClick: (e) => { e.stopPropagation(); removeSurveyBuilding(i); rebuild(); } }, '✕')
+  ));
+
+  const updateMeta = () => { metaSpan.textContent = metaText(b); };
+  const numField = (label, key, step) => el('div', { class: 'field' },
+    el('label', {}, label),
+    (() => {
+      const inp = el('input', { type: 'number', min: 0, step: step || 'any' });
+      inp.value = b[key] ?? '';
+      inp.addEventListener('input', () => {
+        const v = inp.value === '' ? '' : Number(inp.value);
+        updateSurveyBuilding(i, { [key]: v });
+        b[key] = v;
+        updateMeta();
+      });
+      return inp;
+    })()
+  );
+  const textField = (label, key, placeholder) => el('div', { class: 'field' },
+    el('label', {}, label),
+    (() => {
+      const inp = el('input', { type: 'text', placeholder: placeholder || '' });
+      inp.value = b[key] ?? '';
+      inp.addEventListener('input', () => {
+        updateSurveyBuilding(i, { [key]: inp.value });
+        b[key] = inp.value;
+        updateMeta();
+      });
+      return inp;
+    })()
+  );
+
+  details.appendChild(el('div', { class: 'unit-grid' },
+    numField('Footprint SF', 'footprint_sf'),
+    numField('Stories', 'stories'),
+    numField('Height (ft)', 'height_ft'),
+    textField('Roof Pitch', 'roof_pitch', 'e.g. 4:12'),
+    numField('Roof SF (pitch-adj)', 'roof_sf'),
+    numField('Facade SF', 'facade_sf')
+  ));
+  return wrap;
+}
+
+// ---------- Survey: Excel parser ----------
+// Parses a SHIR survey-breakdown-specs export workbook (the one written by
+// survey-breakdown-specs_export-v1.py). Returns {flat, buildings, meta, notes,
+// discrepancies}. Strategy: title rows 1-2 carry meta; row 4 is the header row;
+// row 5+ are data. Site Total is always the LAST column. Per-building rows
+// follow items 7/8/9 and are indented with 4 leading spaces.
+function _surveyNum(v) {
+  if (v === '' || v == null) return '';
+  const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+  return isFinite(n) ? n : '';
+}
+function _surveyStr(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).trim();
+}
+function parseSurveyXlsx(wb) {
+  // Find the right sheet — the export names it "Survey Breakdown Specs".
+  let sheetName = wb.SheetNames.find(n => /survey/i.test(n)) || wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  if (!ws) throw new Error('No worksheet found');
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: true });
+  if (!rows.length) throw new Error('Empty worksheet');
+
+  // ---- Meta (title + subtitle) -----
+  const titleStr = _surveyStr(rows[0] && rows[0][0]);
+  // "<Property>  —  Survey Breakdown Specs  —  YYYY-MM-DD"
+  const titleMatch = titleStr.match(/^(.*?)\s+[—-]+\s+Survey\s+(Breakdown|Layout)\s+Specs\s+[—-]+\s+(\d{4}-\d{2}-\d{2})/i);
+  const meta = {
+    property_name: titleMatch ? titleMatch[1].trim() : '',
+    survey_date: titleMatch ? titleMatch[3] : '',
+    address: '', scale_paper: '', ft_per_pixel: null,
+  };
+  const subStr = _surveyStr(rows[1] && rows[1][0]);
+  // "<address>    |    Paper scale: X    |    ft/pixel: Y"
+  if (subStr) {
+    const parts = subStr.split(/\s*\|\s*/);
+    meta.address = parts[0] || '';
+    const scaleP = parts.find(p => /paper scale/i.test(p));
+    if (scaleP) meta.scale_paper = scaleP.replace(/.*paper scale\s*:\s*/i, '').trim();
+    const fpp = parts.find(p => /ft\s*\/\s*pixel/i.test(p));
+    if (fpp) meta.ft_per_pixel = parseFloat(fpp.replace(/.*ft\s*\/\s*pixel\s*:\s*/i, '')) || null;
+  }
+
+  // ---- Locate header row (row labeled "Item" in col A) ----
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 12); i++) {
+    if (_surveyStr(rows[i] && rows[i][0]).toLowerCase() === 'item') { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) throw new Error('Could not find header row');
+  const headers = rows[headerIdx];
+  // The last column that contains "Site Total" — fall back to the last non-null column.
+  let siteTotalCol = headers.length - 1;
+  for (let c = headers.length - 1; c >= 2; c--) {
+    if (/site\s*total/i.test(_surveyStr(headers[c]))) { siteTotalCol = c; break; }
+  }
+  // Tract columns are C..(siteTotalCol-1). First tract col is C (index 2).
+  const tractCols = [];
+  for (let c = 2; c < siteTotalCol; c++) {
+    const h = _surveyStr(headers[c]);
+    if (h) tractCols.push({ col: c, label: h.replace(/\n.*$/s, '').trim(), is_easement: /easement/i.test(h) });
+  }
+
+  const flat = {};
+  const buildings = [];
+  let currentSection = null;   // '7' | '8' | '9' — which item we're inside
+  let bldIdx = 0;
+  const notes = [];
+  const discrepancies = [];
+  let inNotes = false, inDiscrepancies = false;
+
+  const ensureBldAtIdx = (i) => {
+    while (buildings.length <= i) buildings.push({
+      label: '', footprint_sf: '', stories: '', height_ft: '',
+      roof_pitch: '', roof_sf: '', facade_sf: '',
+    });
+    return buildings[i];
+  };
+  // Extract "(N Story, Ht X.X')" → {stories, height_ft}; strip from label.
+  const extractStoryHeight = (label) => {
+    const m = label.match(/\((\d+)\s*Story(?:[, ]+Ht\s*([\d.]+)\s*['′]?)?\)/i);
+    if (!m) return { stories: '', height_ft: '', cleanLabel: label };
+    return {
+      stories: Number(m[1]),
+      height_ft: m[2] ? Number(m[2]) : '',
+      cleanLabel: label.replace(m[0], '').trim(),
+    };
+  };
+
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const labelRaw = _surveyStr(row[0]);
+    if (!labelRaw && !row.some(c => c != null && c !== '')) continue; // skip blank
+    const siteVal = row[siteTotalCol];
+    const isIndented = /^\s{2,}/.test(String(row[0] || ''));
+
+    // ---- Footer detection ----
+    if (/^google maps cross-reference notes$/i.test(labelRaw)) { inNotes = true; inDiscrepancies = false; continue; }
+    if (/^discrepancies/i.test(labelRaw)) { inNotes = false; inDiscrepancies = true; continue; }
+    if (inNotes) { if (labelRaw && labelRaw !== '—') notes.push(labelRaw); continue; }
+    if (inDiscrepancies) {
+      if (labelRaw && labelRaw !== '—') discrepancies.push(labelRaw.replace(/^•\s*/, ''));
+      continue;
+    }
+
+    // ---- Section heading rows (set currentSection) ----
+    if (/^1\.\s*Parking\s*[—-]+\s*Regular/i.test(labelRaw)) { flat.parking_regular = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^1\.\s*Parking\s*[—-]+\s*Handicapped/i.test(labelRaw)) { flat.parking_spots_hc = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^1\.\s*Parking\s*[—-]+\s*Total/i.test(labelRaw)) { flat.parking_spots_existing = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^2\.\s*Land\s*area\s*\(SF\)/i.test(labelRaw)) { flat.land_sf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^2\.\s*Land\s*area\s*\(acres\)/i.test(labelRaw)) { flat.land_acres = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^3\.\s*Perimeter\s*[—-]+\s*TOTAL/i.test(labelRaw)) { flat.site_perimeter_lf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^4\.\s*Fencing/i.test(labelRaw)) {
+      // Fencing/gates have free-text per-tract; take the first non-"n/a" cell.
+      const txts = tractCols.map(t => _surveyStr(row[t.col])).filter(s => s && s.toLowerCase() !== 'n/a');
+      flat.fencing_notes = txts.length ? txts.join(' / ') : 'n/a';
+      currentSection = null; continue;
+    }
+    if (/^4\.\s*Gates/i.test(labelRaw)) {
+      const txts = tractCols.map(t => _surveyStr(row[t.col])).filter(s => s && s.toLowerCase() !== 'n/a');
+      flat.gates_notes = txts.length ? txts.join(' / ') : 'n/a';
+      currentSection = null; continue;
+    }
+    if (/^5\.\s*Parking\s*lot\s*SF/i.test(labelRaw)) { flat.parking_lot_sf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^6\.\s*Building\s*count/i.test(labelRaw)) { flat.num_buildings = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^7\.\s*Building\s*footprint/i.test(labelRaw)) { flat.total_footprint_sf = _surveyNum(siteVal); currentSection = '7'; bldIdx = 0; continue; }
+    if (/^8\.\s*Roof\s*SF/i.test(labelRaw)) { flat.total_roof_sf = _surveyNum(siteVal); currentSection = '8'; bldIdx = 0; continue; }
+    if (/^9\.\s*Facade\s*SF/i.test(labelRaw)) { flat.total_facade_sf = _surveyNum(siteVal); currentSection = '9'; bldIdx = 0; continue; }
+    if (/^10\.\s*Landscaping/i.test(labelRaw)) { flat.landscaping_sf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^\s*as\s*%\s*of\s*tract/i.test(labelRaw)) { currentSection = null; continue; }
+    if (/^3\.\s*Perimeter\s*[—-]+\s*per side/i.test(labelRaw)) { currentSection = null; continue; }
+
+    // ---- Indented sub-rows under sections 7/8/9 ----
+    if (isIndented && currentSection) {
+      const trimmed = labelRaw.trim();
+      if (currentSection === '7') {
+        const info = extractStoryHeight(trimmed);
+        const b = ensureBldAtIdx(bldIdx);
+        b.label = info.cleanLabel || trimmed;
+        if (info.stories !== '') b.stories = info.stories;
+        if (info.height_ft !== '') b.height_ft = info.height_ft;
+        b.footprint_sf = _surveyNum(siteVal);
+        bldIdx++;
+      } else if (currentSection === '8') {
+        // "Roof — <name>  (pitch X:Y (...))"
+        const pitchM = trimmed.match(/\(\s*pitch\s+([^)]+?)(?:\s*\(.*\))?\s*\)/i);
+        const b = ensureBldAtIdx(bldIdx);
+        if (pitchM) b.roof_pitch = pitchM[1].trim().replace(/\s*\(assumed\).*$/i, '').trim();
+        b.roof_sf = _surveyNum(siteVal);
+        bldIdx++;
+      } else if (currentSection === '9') {
+        const b = ensureBldAtIdx(bldIdx);
+        b.facade_sf = _surveyNum(siteVal);
+        bldIdx++;
+      }
+    }
+  }
+
+  return { flat, buildings, meta, notes: notes.join('\n'), discrepancies };
+}
+
+// Apply parsed survey data to STATE.phase1 (flat fields) and STATE.survey
+// (per-building + meta). Overwrites existing values. Returns a summary string.
+function applySurveyParsedData(parsed, sourcePdf) {
+  ensureSurveyState();
+  const flatKeys = [
+    'parking_spots_hc', 'parking_spots_existing', 'land_sf', 'land_acres',
+    'site_perimeter_lf', 'parking_lot_sf', 'num_buildings', 'total_footprint_sf',
+    'total_roof_sf', 'total_facade_sf', 'landscaping_sf',
+    'fencing_notes', 'gates_notes',
+  ];
+  let filled = 0;
+  for (const k of flatKeys) {
+    const v = parsed.flat[k];
+    if (v !== undefined && v !== '' && v !== null) {
+      STATE.phase1[k] = v;
+      filled++;
+    }
+  }
+  STATE.survey.buildings = parsed.buildings || [];
+  STATE.survey.processed_at = new Date().toISOString();
+  STATE.survey.source_pdf = sourcePdf || (parsed.meta && parsed.meta.address) || '';
+  STATE.survey.scale_paper = parsed.meta && parsed.meta.scale_paper || '';
+  STATE.survey.ft_per_pixel = parsed.meta && parsed.meta.ft_per_pixel || null;
+  STATE.survey.google_maps_notes = parsed.notes || '';
+  STATE.survey.discrepancies = parsed.discrepancies || [];
+  saveState();
+  return `${filled} field${filled === 1 ? '' : 's'} + ${(parsed.buildings || []).length} building${(parsed.buildings || []).length === 1 ? '' : 's'}`;
+}
+
+// Import a survey workbook from a local file (Upload XLSX button).
+async function importSurveyFromFile(file, rebuild) {
+  try {
+    toast('Reading survey workbook…');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    const parsed = parseSurveyXlsx(wb);
+    const summary = applySurveyParsedData(parsed, file.name);
+    if (rebuild) rebuild();
+    renderShell();   // refresh the whole form so flat fields show new values
+    toast(`Survey imported — ${summary}`, 'success');
+  } catch (e) {
+    toast('Survey import failed: ' + e.message, 'error');
+  }
+}
+
+// Find and import the latest *_SurveyBreakdownSpecs_*.xlsx from this deal's
+// 7. Title_Survey/Reports/ folder (with legacy SurveyLayoutSpecs fallback).
+async function importSurveyFromDrive(rebuild) {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { toast('Connect Google Drive first', 'error'); return; }
+  try {
+    toast('Searching for survey report in Drive…');
+    // 1) Locate 7. Title_Survey subfolder.
+    const subs = await listSubfolders(STATE.drive.folderId);
+    const ts = subs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
+            || subs.find(f => /title[\s_\-]*survey/i.test(f.name));
+    if (!ts) { toast('No “7. Title_Survey” folder under this deal.', 'error'); return; }
+    // 2) Locate Reports subfolder (created by the skill).
+    const tsSubs = await listSubfolders(ts.id);
+    const reports = tsSubs.find(f => /^reports?$/i.test(f.name));
+    if (!reports) { toast('No “Reports” subfolder inside 7. Title_Survey — run the skill first.', 'error'); return; }
+    // 3) List xlsx candidates matching *SurveyBreakdownSpecs* or *SurveyLayoutSpecs* (legacy).
+    const files = await driveListFilesInFolder(reports.id);
+    const matches = files.filter(f =>
+      /\.xlsx?$/i.test(f.name) &&
+      /survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))
+    );
+    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/Reports/.', 'error'); return; }
+    // 4) Sort by date in filename (YYYY-MM-DD) desc, then by modifiedTime.
+    const dateOf = (name) => {
+      const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
+      return m ? m[1] : '';
+    };
+    matches.sort((a, b) => {
+      const dd = dateOf(b.name).localeCompare(dateOf(a.name));
+      if (dd !== 0) return dd;
+      return (b.modifiedTime || '').localeCompare(a.modifiedTime || '');
+    });
+    // 5) Confirm pick (with next-best walk, same UX as proforma import).
+    const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+    let chosen = null;
+    for (let idx = 0; idx < matches.length; idx++) {
+      const cand = matches[idx];
+      const remaining = matches.length - idx - 1;
+      const tail = remaining > 0
+        ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
+        : `\n\n[OK = use this · Cancel = abort]`;
+      const ok = confirm(
+        `Import survey breakdown from this workbook?\n\n` +
+        `📄 ${cand.name}\n` +
+        `Survey date: ${dateOf(cand.name) || '(none in filename)'}\n` +
+        `Modified: ${fmtD(cand.modifiedTime)}` + tail
+      );
+      if (ok) { chosen = cand; break; }
+      if (remaining === 0) return;
+    }
+    if (!chosen) return;
+    // 6) Download + parse + apply.
+    toast('Downloading…');
+    const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${chosen.id}?alt=media`);
+    const buf = await r.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    const parsed = parseSurveyXlsx(wb);
+    const summary = applySurveyParsedData(parsed, chosen.name);
+    if (rebuild) rebuild();
+    renderShell();
+    toast(`Survey imported from ${chosen.name} — ${summary}`, 'success');
+  } catch (e) {
+    toast('Survey import failed: ' + e.message, 'error');
+  }
 }
 
 // Shared helpers for proforma parsing.
