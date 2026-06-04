@@ -1495,7 +1495,9 @@ function renderPhase2() {
         cb.addEventListener('change', () => { setChecked(gi, si, ii, cb.checked); refreshCount(); });
         secBody.appendChild(el('label', { class: 'check-item' }, cb, el('span', {}, item.name)));
       });
-      const secNode = el('section', { class: 'section collapsed' },
+      // Questionnaire sub-sections start expanded so users can see all available
+      // line items at a glance — collapse is still available via the chevron.
+      const secNode = el('section', { class: 'section' },
         el('header', { class: 'section-header',
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           el('span', {}, sec.name),
