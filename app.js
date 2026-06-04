@@ -543,6 +543,9 @@ function parseProformaRR(wb) {
   for (const sn of sheets) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false });
     console.log(`[parseProformaRR] scanning sheet "${sn}" (${rows.length} rows)`);
+    // Unconditional dump of the first 10 rows so we can see what column headers actually look like.
+    console.log(`[parseProformaRR]   first 10 raw rows of "${sn}":`,
+                rows.slice(0, 10).map((r, idx) => ({ idx, cells: (r || []).slice(0, 15) })));
     let h = -1, col = null;
     for (let i = 0; i < rows.length; i++) {
       const cells = (rows[i] || []).map(umNorm);
