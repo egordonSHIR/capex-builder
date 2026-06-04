@@ -475,22 +475,58 @@ function renderUnitMix() {
 
 function renderUnitRow(r, i, rebuild) {
   const wrap = el('div', { class: 'unit-row' });
+  wrap.style.cssText = 'border:1px solid #e5e7eb;border-radius:8px;margin:6px 16px;background:#fff;overflow:hidden';
+
+  // Collapsed summary bar — shows type · count · sqft only. Click to expand.
+  const summaryBar = el('div', {
+    style: 'display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;background:#f8fafc',
+    onClick: () => {
+      const isOpen = wrap.classList.toggle('expanded');
+      details.style.display = isOpen ? 'block' : 'none';
+      chev.textContent = isOpen ? '▼' : '▶';
+    },
+  });
+  const chev = el('span', { style: 'color:#64748b;font-size:11px;width:12px' }, '▶');
+  const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+    r.type || '(unnamed)');
+  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' },
+    `${r.count || 0} units${r.sqft ? ' · ' + r.sqft + ' sf' : ''}`);
+  summaryBar.appendChild(chev);
+  summaryBar.appendChild(nameSpan);
+  summaryBar.appendChild(metaSpan);
+  wrap.appendChild(summaryBar);
+
+  // Expanded form — hidden by default.
+  const details = el('div', { style: 'display:none;padding:10px 12px;border-top:1px solid #e5e7eb' });
+  wrap.appendChild(details);
 
   const typeInput = el('input', { type: 'text', placeholder: 'Unit type (e.g. 1BR / 1BA – Plan A)' });
   typeInput.value = r.type || '';
-  typeInput.addEventListener('input', () => updateUnitRow(i, { type: typeInput.value }));
-  wrap.appendChild(el('div', { class: 'unit-row-top' },
+  typeInput.addEventListener('input', () => {
+    updateUnitRow(i, { type: typeInput.value });
+    nameSpan.textContent = typeInput.value || '(unnamed)';
+  });
+  details.appendChild(el('div', { class: 'unit-row-top' },
     typeInput,
     el('button', { class: 'unit-remove', title: 'Remove unit type',
-      onClick: () => { removeUnitRow(i); rebuild(); } }, '✕')
+      onClick: (e) => { e.stopPropagation(); removeUnitRow(i); rebuild(); } }, '✕')
   ));
+
+  const updateMeta = () => {
+    metaSpan.textContent = `${r.count || 0} units${r.sqft ? ' · ' + r.sqft + ' sf' : ''}`;
+  };
 
   const numField = (label, key) => el('div', { class: 'field' },
     el('label', {}, label),
     (() => {
       const inp = el('input', { type: 'number', min: 0, step: 'any' });
       inp.value = r[key] ?? '';
-      inp.addEventListener('input', () => updateUnitRow(i, { [key]: inp.value === '' ? '' : Number(inp.value) }));
+      inp.addEventListener('input', () => {
+        const v = inp.value === '' ? '' : Number(inp.value);
+        updateUnitRow(i, { [key]: v });
+        r[key] = v;
+        if (key === 'count' || key === 'sqft') updateMeta();
+      });
       return inp;
     })()
   );
@@ -510,7 +546,7 @@ function renderUnitRow(r, i, rebuild) {
     })()
   );
 
-  wrap.appendChild(el('div', { class: 'unit-grid' },
+  details.appendChild(el('div', { class: 'unit-grid' },
     numField('# Units', 'count'),
     numField('Beds', 'beds'),
     numField('Baths', 'baths'),
@@ -539,10 +575,26 @@ function umStatus(s) {
 // applies to all following rows until the next group; col 2 holds a plan
 // name ("S505") that cascades the same way; col 3 is Original/Partial/Reno;
 // col 4 is the count for that combo. Empty/zero counts are skipped.
+// Excel rows (1-based) on the SHIR proforma RR tab that are subtotals/totals
+// and must NOT be counted. Identified empirically from the live workbook.
+const SHIR_RR_SKIP_ROWS = (() => {
+  const skip = new Set();
+  const ranges = [
+    [47, 50], [97, 100], [147, 150], [247, 250], [297, 300], [347, 350],
+    [352, 365],
+    [447, 450], [497, 500], [547, 550], [597, 600], [647, 650], [697, 700],
+    [747, 800],
+  ];
+  for (const [a, b] of ranges) for (let n = a; n <= b; n++) skip.add(n);
+  return skip;
+})();
+
 function parseSHIRSummaryRR(wb) {
   const sheet = wb.Sheets['RR'];
   if (!sheet) return null;
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+  // blankrows:true so rows[i] corresponds to Excel row (i+1) — the skip-list
+  // is expressed in Excel row numbers and we need the alignment to be exact.
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: true, defval: null });
   // Find the header row by content: has both "# Units" and "# BRs" (or similar).
   let headerIdx = -1;
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
@@ -553,10 +605,15 @@ function parseSHIRSummaryRR(wb) {
   }
   if (headerIdx < 0) return null;
 
-  const out = [];
+  // Aggregate by (group||plan||status) so the same unit type appearing in
+  // both the occupied (rows ~1-400) and vacant (rows ~401-746) sections
+  // combines into one row with the total count.
+  const agg = new Map();
   let curGroup = '';
   let curPlan = '';
   for (let i = headerIdx + 1; i < rows.length; i++) {
+    const excelRow = i + 1;
+    if (SHIR_RR_SKIP_ROWS.has(excelRow)) continue;
     const row = rows[i] || [];
     const newGroup = String(row[1] == null ? '' : row[1]).trim();
     const newPlan = String(row[2] == null ? '' : row[2]).trim();
@@ -567,14 +624,24 @@ function parseSHIRSummaryRR(wb) {
     if (!isFinite(countNum) || countNum <= 0) continue;
     if (!curPlan && !curGroup) continue;
     const type = curPlan ? (curGroup ? `${curGroup} ${curPlan}` : curPlan) : curGroup;
-    out.push({
-      type, count: countNum,
-      beds: umNum(row[5]),
-      baths: umNum(row[6]),
-      sqft: umNum(row[8]) || umNum(row[7]),  // prefer SF/Unit, fall back to Total SF
-      status: statusVal,
-    });
+    const key = `${type}||${statusVal}`;
+    const existing = agg.get(key);
+    if (existing) {
+      existing.count += countNum;
+      // Fill in beds/baths/sqft from later rows if the first row was missing them.
+      if (existing.beds === '' || existing.beds == null) existing.beds = umNum(row[5]);
+      if (existing.baths === '' || existing.baths == null) existing.baths = umNum(row[6]);
+      if (existing.sqft === '' || existing.sqft == null) existing.sqft = umNum(row[8]) || umNum(row[7]);
+    } else {
+      agg.set(key, {
+        type, status: statusVal, count: countNum,
+        beds: umNum(row[5]),
+        baths: umNum(row[6]),
+        sqft: umNum(row[8]) || umNum(row[7]),
+      });
+    }
   }
+  const out = [...agg.values()];
   return out.length ? out : null;
 }
 
