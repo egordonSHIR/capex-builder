@@ -442,22 +442,29 @@ function renderUnitMix() {
             + (totalSF ? ` · ${totalSF.toLocaleString()} total sf` : '')
         : 'No unit types yet — add one below or import from the proforma.'));
 
-    rows.forEach((r, i) => body.appendChild(renderUnitRow(r, i, rebuild)));
-
     const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
     fileInput.addEventListener('change', (e) => {
       const f = e.target.files[0];
       if (f) importProformaUnitMix(f, rebuild);
       e.target.value = '';
     });
-    const actions = el('div', { style: 'padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap' },
-      el('button', { class: 'um-btn', onClick: () => { addUnitRow(); rebuild(); } }, '+ Add Unit Type'),
-      el('button', { class: 'um-btn secondary', onClick: () => pullProformaFromDrive(rebuild) }, '☁ Pull Proforma from Drive'),
-      el('button', { class: 'um-btn secondary', onClick: () => fileInput.click() }, '⬆ Upload Proforma'),
-      el('button', { class: 'um-btn secondary', onClick: () => exportUnitMixXlsx() }, '⬇ Export Unit Mix'),
+    // All four buttons on a single line above the unit list.
+    // `nowrap` keeps them in a row even on narrow screens; small font + tight padding
+    // lets them all fit on a phone.
+    const actions = el('div', { style: 'padding:8px 16px;display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto' },
+      el('button', { class: 'um-btn', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => { addUnitRow(); rebuild(); } }, '+ Type'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => pullProformaFromDrive(rebuild) }, '☁ Import > GDrive'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => fileInput.click() }, '⬆ Upload XLS'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => exportUnitMixXlsx() }, '⬇ Export XLS'),
       fileInput
     );
     body.appendChild(actions);
+
+    rows.forEach((r, i) => body.appendChild(renderUnitRow(r, i, rebuild)));
 
     // Guidance for proforma extraction.
     body.appendChild(el('div', { class: 'um-note' },
