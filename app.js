@@ -405,12 +405,25 @@ function renderSchemaForm(sections, bag, onUpdate) {
 function renderPhase1() {
   const root = el('div');
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
+
+  // Inject the Unit Mix block into the "Units & Area" schema section so the
+  // unit-by-unit breakdown lives next to the totals it feeds. Sums (mf_units,
+  // mf_rsf) auto-populate the Units & Area inputs via syncUnitMixSumsToPhase1.
+  const sections = root.querySelectorAll('section.section');
+  for (const sec of sections) {
+    const hdr = sec.querySelector('.section-header span');
+    if (hdr && hdr.textContent.trim() === 'Units & Area') {
+      const body = sec.querySelector('.section-body');
+      if (body) body.appendChild(renderUnitMix());
+      break;
+    }
+  }
+
   // Survey block (per-building breakdown + Import/Process buttons) follows the
   // flat "Survey-Derived Site Specs" schema section.
   root.appendChild(renderSurveyBlock());
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
-  root.appendChild(renderUnitMix());
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   return root;
 }
@@ -428,11 +441,43 @@ function addUnitRow(row) {
 }
 function updateUnitRow(i, patch) {
   const m = getUnitMix();
-  if (m[i]) { Object.assign(m[i], patch); saveState(); }
+  if (m[i]) {
+    Object.assign(m[i], patch);
+    syncUnitMixSumsToPhase1();   // refresh mf_units / mf_rsf / overall_rsf as user types
+    saveState();
+  }
 }
 function removeUnitRow(i) {
   getUnitMix().splice(i, 1);
+  syncUnitMixSumsToPhase1();
   saveState();
+}
+
+// Sums from the unit mix populate the mf_units and mf_rsf fields in the
+// "Units & Area" schema section, plus the computed overall_rsf. Triggered
+// on every unit mix change (add/remove/edit/import). Empty rows are
+// ignored so they don't clobber a user's manual entries.
+function syncUnitMixSumsToPhase1() {
+  if (!STATE || !STATE.phase1) return;
+  const rows = getUnitMix();
+  const totalUnits = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+  const totalRSF = rows.reduce((s, r) => s + (Number(r.count) || 0) * (Number(r.sqft) || 0), 0);
+  if (totalUnits > 0) STATE.phase1.mf_units = totalUnits;
+  if (totalRSF > 0)   STATE.phase1.mf_rsf   = totalRSF;
+  // Reflect the new values in the visible inputs (no-op if Phase 1 isn't on screen).
+  const setVal = (key, val) => {
+    const inp = document.querySelector(`[data-key="${key}"]`);
+    if (inp) inp.value = val ? val : '';
+  };
+  if (totalUnits > 0) setVal('mf_units', totalUnits);
+  if (totalRSF > 0)   setVal('mf_rsf', totalRSF);
+  // overall_rsf is computed (mf_rsf + commercial_rsf + common_sf); recompute its display.
+  const commRsf  = Number(STATE.phase1.commercial_rsf) || 0;
+  const commonSf = Number(STATE.phase1.common_sf) || 0;
+  const mfRsf    = Number(STATE.phase1.mf_rsf) || 0;
+  const overall  = Math.round(mfRsf + commRsf + commonSf);
+  const overallInp = document.querySelector('[data-key="overall_rsf"]');
+  if (overallInp) overallInp.value = overall || '';
 }
 
 function renderUnitMix() {
@@ -448,6 +493,7 @@ function renderUnitMix() {
   function rebuild() {
     body.innerHTML = '';
     const rows = getUnitMix();
+    syncUnitMixSumsToPhase1();   // keep Units & Area totals current on every rebuild
 
     const totalUnits = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
     const totalSF = rows.reduce((s, r) => s + (Number(r.count) || 0) * (Number(r.sqft) || 0), 0);
