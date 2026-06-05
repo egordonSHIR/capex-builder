@@ -1375,28 +1375,51 @@ async function pullProformaFromDrive(rebuild) {
       const v = extractVersion(mf.name);
       return v >= 0 ? `v${v}` : `(no version tag)`;
     };
-    // Pick a file: top of the sorted list. If user rejects, offer the next
-    // best until they accept or we run out.
+
+    // Detect a tie at the top: multiple files share the highest version number.
+    // When that happens, the version-only sort isn't decisive (modifiedTime
+    // tiebreaker is arbitrary), so let the user pick from a numbered list.
+    const topVersion = extractVersion(matches[0].name);
+    const tiedAtTop = matches.filter(m => extractVersion(m.name) === topVersion);
+
     let f = null;
-    for (let idx = 0; idx < matches.length; idx++) {
-      const candidate = matches[idx];
-      const remaining = matches.length - idx - 1;
-      const nextHint = remaining > 0
-        ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
-        : `\n\n[OK = use this · Cancel = abort (no more candidates)]`;
-      const ok = confirm(
-        `Import unit mix from this proforma?\n\n` +
-        `📄 ${candidate.name}\n` +
-        `Version:  ${labelFor(candidate)}\n` +
-        `Created:  ${fmtD(candidate.createdTime)}\n` +
-        `Modified: ${fmtD(candidate.modifiedTime)}` +
-        nextHint
-      );
-      if (ok) { f = candidate; break; }
-      // Cancelled: if no more candidates, abort entirely.
-      if (remaining === 0) return;
+    if (tiedAtTop.length > 1) {
+      const versionLabel = topVersion >= 0 ? `v${topVersion}` : '(no version tag)';
+      const msg =
+        `Multiple proforma files share the highest version (${versionLabel}).\n` +
+        `Pick one:\n\n` +
+        tiedAtTop.map((c, i) =>
+          `${i + 1}. ${c.name}\n` +
+          `   Modified: ${fmtD(c.modifiedTime)}`
+        ).join('\n\n') +
+        `\n\nEnter 1-${tiedAtTop.length} (or blank to cancel):`;
+      const pick = prompt(msg, '1');
+      const idx = parseInt(pick, 10);
+      if (!idx || idx < 1 || idx > tiedAtTop.length) return;
+      f = tiedAtTop[idx - 1];
+    } else {
+      // Unique highest version — confirm it, with OK/Cancel walk through the
+      // rest of the sorted list as a fallback if the user rejects.
+      for (let idx = 0; idx < matches.length; idx++) {
+        const candidate = matches[idx];
+        const remaining = matches.length - idx - 1;
+        const nextHint = remaining > 0
+          ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
+          : `\n\n[OK = use this · Cancel = abort (no more candidates)]`;
+        const ok = confirm(
+          `Import unit mix from this proforma?\n\n` +
+          `📄 ${candidate.name}\n` +
+          `Version:  ${labelFor(candidate)}\n` +
+          `Created:  ${fmtD(candidate.createdTime)}\n` +
+          `Modified: ${fmtD(candidate.modifiedTime)}` +
+          nextHint
+        );
+        if (ok) { f = candidate; break; }
+        // Cancelled: if no more candidates, abort entirely.
+        if (remaining === 0) return;
+      }
+      if (!f) return;
     }
-    if (!f) return;
 
     // 4) Download (export if it's a native Google Sheet) and parse.
     toast('Downloading proforma…');
@@ -2413,8 +2436,10 @@ function importOptionsXlsx(file) {
 
 // ---------- Google Drive ----------
 // To enable: create OAuth client at console.cloud.google.com (Web App type),
-// add https://egordonshir.github.io as an Authorized JavaScript origin,
-// then paste the Client ID below.
+// add the production origin (currently https://capex-builder.pages.dev) as an
+// Authorized JavaScript origin, then paste the Client ID below. The current
+// client also has the legacy https://egordonshir.github.io and
+// https://capex-builder.netlify.app origins registered.
 const GOOGLE_CLIENT_ID = '434286194253-gjfctl5vkdgvfk5vve9r272o7mr2n82q.apps.googleusercontent.com';
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
 const STATE_FILENAME = 'capex_builder.json';
