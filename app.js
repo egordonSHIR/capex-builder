@@ -1594,10 +1594,20 @@ function setP3(gi, si, ii, patch) {
   saveState();
 }
 
+// Shared 6-col grid for the Details page: item name | =MF checkbox | # Qty |
+// Qty Type | $/Qty | $ Amt. Used by both the sticky column header and each
+// line-item row so columns line up cleanly.
+const DETAIL_GRID_COLS = 'minmax(0,1fr) 44px 64px 78px 72px 84px';
+const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
+
 function renderPhase3() {
   const root = el('div');
   const totals = computeTotals();
-  const summary = el('div', { class: 'summary-totals' },
+
+  // Sticky top panel: summary (items priced + running subtotal) + column header.
+  // position:sticky pins it to the viewport top while the user scrolls the list.
+  const sticky = el('div', { style: 'position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
+  const summary = el('div', { class: 'summary-totals', style: 'margin:0' },
     el('div', { class: 'summary-row' },
       el('span', { class: 'label' }, 'Items priced'),
       el('span', { class: 'value' }, String(totals.itemCount))),
@@ -1605,7 +1615,20 @@ function renderPhase3() {
       el('span', { class: 'label' }, 'Running Subtotal'),
       el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
   );
-  root.appendChild(summary);
+  sticky.appendChild(summary);
+  // Column header row — same grid template as data rows so cells align.
+  const colHdr = el('div', {
+    style: DETAIL_GRID_BASE + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-top:1px solid #e5e7eb'
+  },
+    el('div', {}, 'Item'),
+    el('div', { style: 'text-align:center' }, '=MF'),
+    el('div', { style: 'text-align:right' }, '# Qty'),
+    el('div', {}, 'Qty Type'),
+    el('div', { style: 'text-align:right' }, '$/Qty'),
+    el('div', { style: 'text-align:right' }, '$ Amt'),
+  );
+  sticky.appendChild(colHdr);
+  root.appendChild(sticky);
 
   if (countChecked() === 0) {
     root.appendChild(el('div', { class: 'home-empty' },
@@ -1646,65 +1669,100 @@ function renderPhase3() {
 
 function renderDetailItem(gi, si, ii, item, summaryNode) {
   const v = getP3(gi, si, ii);
-  const hasValue = (Number(v.qty) || 0) > 0 && (Number(v.unit_cost) || 0) > 0;
-  const itemWrap = el('div', { class: 'capex-item' + (hasValue ? ' has-value' : '') });
-  itemWrap.appendChild(el('div', { class: 'capex-item-header' },
-    el('div', {},
-      el('div', { class: 'capex-item-name' }, item.name),
-      item.gl_account ? el('div', { class: 'capex-item-gl' }, item.gl_account) : null
-    )
-  ));
-
+  // If this row is linked to MF Units (=MF checkbox on), force its qty to
+  // match the current Basics → Units & Area mf_units value before rendering.
+  if (v.mf_linked) {
+    const mf = Number(STATE.phase1.mf_units) || 0;
+    if (mf > 0 && v.qty !== mf) {
+      setP3(gi, si, ii, { qty: mf });
+    }
+  }
   const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
-  const row = el('div', { class: 'capex-row detail-row' });
 
-  const qtyField = el('div', { class: 'field' },
-    el('label', {}, '# Units'),
-    (() => {
-      const i = el('input', { type: 'number', min: 0, step: 'any' });
-      i.value = v.qty;
-      i.addEventListener('input', () => {
-        setP3(gi, si, ii, { qty: i.value === '' ? '' : Number(i.value) });
-        renderDetailTotals(itemWrap, gi, si, ii);
-        updateDetailSummary(summaryNode);
-      });
-      return i;
-    })()
-  );
-  const utField = el('div', { class: 'field' },
-    el('label', {}, 'Unit Type'),
-    (() => {
-      const s = el('select');
-      s.appendChild(el('option', { value: '' }, '—'));
-      UNIT_TYPES.forEach(u => {
-        const o = el('option', { value: u }, u);
-        if (v.unit_type === u) o.selected = true;
-        s.appendChild(o);
-      });
-      s.addEventListener('change', () => setP3(gi, si, ii, { unit_type: s.value }));
-      return s;
-    })()
-  );
-  const costField = el('div', { class: 'field' },
-    el('label', {}, '$/Unit'),
-    (() => {
-      const i = el('input', { type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '' });
-      i.value = v.unit_cost !== '' ? v.unit_cost : '';
-      i.addEventListener('input', () => {
-        setP3(gi, si, ii, { unit_cost: i.value === '' ? '' : Number(i.value) });
-        renderDetailTotals(itemWrap, gi, si, ii);
-        updateDetailSummary(summaryNode);
-      });
-      return i;
-    })()
-  );
-  const totalEl = el('div', { class: 'total', 'data-total': true }, fmtMoney(total));
+  // Single-line row using the same 6-col grid as the sticky header.
+  const itemWrap = el('div', {
+    style: DETAIL_GRID_BASE + ';border-bottom:1px solid #e5e7eb;' + (total > 0 ? 'background:#f0fdf4' : '')
+  });
 
-  row.appendChild(qtyField);
-  row.appendChild(utField);
-  row.appendChild(costField);
-  row.appendChild(totalEl);
-  itemWrap.appendChild(row);
+  // Col 1: item name + GL account (small, below the name)
+  const nameCell = el('div', { style: 'min-width:0;overflow:hidden' },
+    el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
+    item.gl_account
+      ? el('div', { style: 'font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.gl_account)
+      : null
+  );
+  itemWrap.appendChild(nameCell);
+
+  // Inputs are declared up front so the =MF handler can flip qty's readonly/value.
+  const qtyInp = el('input', {
+    type: 'number', min: 0, step: 'any',
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
+  });
+  qtyInp.value = v.qty;
+  if (v.mf_linked) { qtyInp.readOnly = true; qtyInp.style.background = '#f1f5f9'; }
+  qtyInp.addEventListener('input', () => {
+    if (qtyInp.readOnly) return;
+    setP3(gi, si, ii, { qty: qtyInp.value === '' ? '' : Number(qtyInp.value) });
+    renderDetailTotals(itemWrap, gi, si, ii);
+    updateDetailSummary(summaryNode);
+  });
+
+  // Col 2: =MF Units checkbox
+  const mfCb = el('input', { type: 'checkbox', style: 'width:16px;height:16px;cursor:pointer' });
+  mfCb.checked = !!v.mf_linked;
+  mfCb.title = '=MF Units (auto-fill # Qty from Basics → Number of MF Units)';
+  mfCb.addEventListener('change', () => {
+    const linked = mfCb.checked;
+    if (linked) {
+      const mf = Number(STATE.phase1.mf_units) || 0;
+      setP3(gi, si, ii, { mf_linked: true, qty: mf });
+      qtyInp.value = mf || '';
+      qtyInp.readOnly = true;
+      qtyInp.style.background = '#f1f5f9';
+    } else {
+      setP3(gi, si, ii, { mf_linked: false });
+      qtyInp.readOnly = false;
+      qtyInp.style.background = '';
+    }
+    renderDetailTotals(itemWrap, gi, si, ii);
+    updateDetailSummary(summaryNode);
+  });
+  itemWrap.appendChild(el('div', { style: 'text-align:center' }, mfCb));
+
+  // Col 3: # Qty
+  itemWrap.appendChild(qtyInp);
+
+  // Col 4: Qty Type
+  const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
+  utSel.appendChild(el('option', { value: '' }, '—'));
+  UNIT_TYPES.forEach(u => {
+    const o = el('option', { value: u }, u);
+    if (v.unit_type === u) o.selected = true;
+    utSel.appendChild(o);
+  });
+  utSel.addEventListener('change', () => setP3(gi, si, ii, { unit_type: utSel.value }));
+  itemWrap.appendChild(utSel);
+
+  // Col 5: $/Qty
+  const costInp = el('input', {
+    type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
+  });
+  costInp.value = v.unit_cost !== '' ? v.unit_cost : '';
+  costInp.addEventListener('input', () => {
+    setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
+    renderDetailTotals(itemWrap, gi, si, ii);
+    updateDetailSummary(summaryNode);
+  });
+  itemWrap.appendChild(costInp);
+
+  // Col 6: $ Amt (computed, read-only display)
+  const totalEl = el('div', {
+    'data-total': true,
+    style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a'
+  }, fmtMoney(total));
+  itemWrap.appendChild(totalEl);
+
   return itemWrap;
 }
 function renderDetailTotals(itemWrap, gi, si, ii) {
@@ -1712,7 +1770,9 @@ function renderDetailTotals(itemWrap, gi, si, ii) {
   const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
   const t = itemWrap.querySelector('[data-total]');
   if (t) t.textContent = fmtMoney(total);
-  itemWrap.classList.toggle('has-value', total > 0);
+  // Light green tint for rows with a non-zero amount (replaces the old
+  // .has-value CSS class since rows are inline-styled now).
+  itemWrap.style.background = total > 0 ? '#f0fdf4' : '';
 }
 function updateDetailSummary(node) {
   if (!node) return;
