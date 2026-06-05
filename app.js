@@ -1607,8 +1607,10 @@ function renderPhase3() {
   const totals = computeTotals();
 
   // Sticky top panel: summary (items priced + running subtotal) + column header.
-  // position:sticky pins it to the viewport top while the user scrolls the list.
-  const sticky = el('div', { style: 'position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
+  // Pinned just below the global app-header (top 60px) + phase-tabs (~41px) so the
+  // main nav tabs stay visible at all times. z-index 8 stays under the app-header (10)
+  // and phase-tabs (9).
+  const sticky = el('div', { style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
   const summary = el('div', { class: 'summary-totals', style: 'margin:0' },
     el('div', { class: 'summary-row' },
       el('span', { class: 'label' }, 'Items priced'),
@@ -1686,12 +1688,10 @@ function renderDetailItem(gi, si, ii, item, summaryNode) {
     style: DETAIL_GRID_BASE + ';border-bottom:1px solid #e5e7eb;' + (total > 0 ? 'background:#f0fdf4' : '')
   });
 
-  // Col 1: item name + GL account (small, below the name)
+  // Col 1: item name (GL account dropped per user request — kept in schema for
+  // export but not displayed on Details rows).
   const nameCell = el('div', { style: 'min-width:0;overflow:hidden' },
-    el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
-    item.gl_account
-      ? el('div', { style: 'font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.gl_account)
-      : null
+    el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name)
   );
   itemWrap.appendChild(nameCell);
 
