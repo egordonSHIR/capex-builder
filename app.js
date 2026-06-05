@@ -1521,6 +1521,16 @@ function textOn(hex) {
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return lum > 0.6 ? '#0f172a' : '#ffffff';
 }
+// Lighten a hex color toward white. blend=0 returns the input, blend=1 returns white.
+// Used to derive sub-section and line-item tints from each group's banner color.
+function lightenHex(hex, blend) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const mix = (n) => Math.round(n + (255 - n) * blend).toString(16).padStart(2, '0');
+  return '#' + mix(r) + mix(g) + mix(b);
+}
 // Build a colored group <header> for the CAPEX group sections.
 function groupHeader(groupName) {
   const color = GROUP_COLORS[groupName];
@@ -1557,6 +1567,12 @@ function renderPhase2() {
     if (!group.sections.length) return;
     // groupBody carries .section-body so collapsing the group hides everything inside.
     const groupBody = el('div', { class: 'section-body group-body' });
+    // Group-derived tints (same scheme as renderPhase3): sub-section headers
+    // get a medium-light tint; line items get a very-light tint of the same hue.
+    const groupColor = GROUP_COLORS[group.name];
+    const subHeaderBg = groupColor ? lightenHex(groupColor, 0.55) : '';
+    const subHeaderTxt = groupColor ? textOn(subHeaderBg) : '';
+    const rowIdleBg = groupColor ? lightenHex(groupColor, 0.88) : '';
     group.sections.forEach((sec, si) => {
       if (!sec.items.length) return;
       const secBody = el('div', { class: 'section-body' });
@@ -1564,15 +1580,20 @@ function renderPhase2() {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = isChecked(gi, si, ii);
         cb.addEventListener('change', () => { setChecked(gi, si, ii, cb.checked); refreshCount(); });
-        secBody.appendChild(el('label', { class: 'check-item' }, cb, el('span', {}, item.name)));
+        const itemLabel = el('label', { class: 'check-item' }, cb, el('span', {}, item.name));
+        if (rowIdleBg) itemLabel.style.background = rowIdleBg;
+        secBody.appendChild(itemLabel);
       });
       // Questionnaire sub-sections start expanded so users can see all available
       // line items at a glance — collapse is still available via the chevron.
+      const secHeaderStyle = subHeaderBg
+        ? `background:${subHeaderBg};color:${subHeaderTxt}`
+        : '';
       const secNode = el('section', { class: 'section' },
-        el('header', { class: 'section-header',
+        el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           el('span', {}, sec.name),
-          el('span', { class: 'chev' }, '▼')
+          el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
         secBody
       );
@@ -1644,6 +1665,15 @@ function renderPhase3() {
     if (!group.sections.length) return;
     const groupBody = el('div', { class: 'section-body group-body' });
     let groupHasChecked = false;
+    // Derive sub-section + row tints from the group banner color. Sub-section
+    // headers get a medium-light tint (still readable text); idle line-item
+    // rows get an even lighter tint; rows with a non-zero $ Amt get a slightly
+    // more saturated version of the same hue so "priced" reads at a glance.
+    const groupColor = GROUP_COLORS[group.name];
+    const subHeaderBg = groupColor ? lightenHex(groupColor, 0.55) : '';
+    const subHeaderTxt = groupColor ? textOn(subHeaderBg) : '';
+    const rowIdleBg = groupColor ? lightenHex(groupColor, 0.88) : '';
+    const rowPricedBg = groupColor ? lightenHex(groupColor, 0.72) : '#f0fdf4';
     group.sections.forEach((sec, si) => {
       const checkedItems = sec.items
         .map((item, ii) => ({ item, ii }))
@@ -1652,13 +1682,16 @@ function renderPhase3() {
       groupHasChecked = true;
       const secBody = el('div', { class: 'section-body' });
       checkedItems.forEach(({ item, ii }) => {
-        secBody.appendChild(renderDetailItem(gi, si, ii, item, summary));
+        secBody.appendChild(renderDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg }));
       });
+      const secHeaderStyle = subHeaderBg
+        ? `background:${subHeaderBg};color:${subHeaderTxt}`
+        : '';
       const secNode = el('section', { class: 'section' },
-        el('header', { class: 'section-header',
+        el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           el('span', {}, sec.name),
-          el('span', { class: 'chev' }, '▼')
+          el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
         secBody
       );
@@ -1671,7 +1704,7 @@ function renderPhase3() {
   return root;
 }
 
-function renderDetailItem(gi, si, ii, item, summaryNode) {
+function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const v = getP3(gi, si, ii);
   // If this row is linked to MF Units (=MF checkbox on), force its qty to
   // match the current Basics → Units & Area mf_units value before rendering.
@@ -1682,11 +1715,18 @@ function renderDetailItem(gi, si, ii, item, summaryNode) {
     }
   }
   const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  // Group-derived tints: idle = very-light group color, priced = slightly more
+  // saturated of the same hue. renderDetailTotals reads these from dataset to
+  // re-tint as the user types.
+  const rowIdleBg = (tints && tints.rowIdleBg) || '';
+  const rowPricedBg = (tints && tints.rowPricedBg) || '#f0fdf4';
 
   // Single-line row using the same 6-col grid as the sticky header.
   const itemWrap = el('div', {
-    style: DETAIL_GRID_BASE + ';border-bottom:1px solid #e5e7eb;' + (total > 0 ? 'background:#f0fdf4' : '')
+    style: DETAIL_GRID_BASE + ';border-bottom:1px solid #e5e7eb;background:' + (total > 0 ? rowPricedBg : rowIdleBg)
   });
+  itemWrap.dataset.bgIdle = rowIdleBg;
+  itemWrap.dataset.bgPriced = rowPricedBg;
 
   // Col 1: item name (GL account dropped per user request — kept in schema for
   // export but not displayed on Details rows).
@@ -1772,9 +1812,12 @@ function renderDetailTotals(itemWrap, gi, si, ii) {
   const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
   const t = itemWrap.querySelector('[data-total]');
   if (t) t.textContent = fmtMoney(total);
-  // Light green tint for rows with a non-zero amount (replaces the old
-  // .has-value CSS class since rows are inline-styled now).
-  itemWrap.style.background = total > 0 ? '#f0fdf4' : '';
+  // Use the group-derived tints stashed on the row at render time (see
+  // renderDetailItem). Falls back to the legacy green/blank if the dataset
+  // is missing for any reason.
+  const idle = itemWrap.dataset.bgIdle || '';
+  const priced = itemWrap.dataset.bgPriced || '#f0fdf4';
+  itemWrap.style.background = total > 0 ? priced : idle;
 }
 function updateDetailSummary(node) {
   if (!node) return;
