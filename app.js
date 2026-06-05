@@ -669,7 +669,9 @@ function removeSurveyBuilding(i) {
 
 function renderSurveyBlock() {
   ensureSurveyState();
-  const section = el('section', { class: 'section' });
+  // Start collapsed by default — most users don't need to see the per-building
+  // breakdown unless they're importing a survey.
+  const section = el('section', { class: 'section collapsed' });
   section.appendChild(el('header', { class: 'section-header',
     onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
     el('span', {}, 'Per-Building Survey Breakdown'),
