@@ -401,9 +401,38 @@ function renderSchemaForm(sections, bag, onUpdate) {
   return frag;
 }
 
+// Compact "Expand all / Collapse all" bar rendered at the top of Phases 1/2/3.
+// Targets every `<section class="section">` inside #phase-content — schema
+// sections, CAPEX group banners, sub-sections, Unit Mix, and the Survey
+// Breakdown block. Unit-mix item rows, survey-building rows, and conditional
+// .expansion-group toggles have their own UX and are intentionally left alone.
+function renderExpandCollapseBar() {
+  const btnStyle = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--primary);white-space:nowrap';
+  const bar = el('div', {
+    class: 'expand-collapse-bar',
+    style: 'display:flex;justify-content:flex-end;gap:6px;margin:0 0 10px'
+  });
+  bar.appendChild(el('button', {
+    type: 'button', style: btnStyle, title: 'Expand all sections on this tab',
+    onClick: () => {
+      $('#phase-content').querySelectorAll('.section.collapsed')
+        .forEach(s => s.classList.remove('collapsed'));
+    },
+  }, '▼ Expand all'));
+  bar.appendChild(el('button', {
+    type: 'button', style: btnStyle, title: 'Collapse all sections on this tab',
+    onClick: () => {
+      $('#phase-content').querySelectorAll('.section')
+        .forEach(s => s.classList.add('collapsed'));
+    },
+  }, '▶ Collapse all'));
+  return bar;
+}
+
 // ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
 function renderPhase1() {
   const root = el('div');
+  root.appendChild(renderExpandCollapseBar());
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units & Area" schema section so the
@@ -1549,6 +1578,7 @@ function groupHeader(groupName) {
 // ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
 function renderPhase2() {
   const root = el('div');
+  root.appendChild(renderExpandCollapseBar());
   const summary = el('div', { class: 'summary-totals' },
     el('div', { class: 'summary-row grand' },
       el('span', { class: 'label' }, 'Items selected'),
@@ -1625,6 +1655,7 @@ const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS}
 
 function renderPhase3() {
   const root = el('div');
+  root.appendChild(renderExpandCollapseBar());
   const totals = computeTotals();
 
   // Sticky top panel: summary (items priced + running subtotal) + column header.
