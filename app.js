@@ -1609,11 +1609,31 @@ function renderPhase2() {
       sec.items.forEach((item, ii) => {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = isChecked(gi, si, ii);
+        cb.setAttribute('data-cb-key', ckKey(gi, si, ii));
         cb.addEventListener('change', () => { setChecked(gi, si, ii, cb.checked); refreshCount(); });
         const itemLabel = el('label', { class: 'check-item' }, cb, el('span', {}, item.name));
         if (rowIdleBg) itemLabel.style.background = rowIdleBg;
         secBody.appendChild(itemLabel);
       });
+      // Bulk Select all / Clear buttons for this subsection. stopPropagation
+      // so clicking them doesn't also collapse the section via the header.
+      const bulkBtnStyle = 'padding:3px 8px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.92);color:#0f172a;border:1px solid rgba(0,0,0,0.18);border-radius:4px;cursor:pointer;white-space:nowrap;text-transform:none;letter-spacing:0';
+      const bulkSet = (value) => {
+        sec.items.forEach((_, ii) => {
+          setChecked(gi, si, ii, value);
+          const cb = secBody.querySelector(`[data-cb-key="${ckKey(gi, si, ii)}"]`);
+          if (cb) cb.checked = value;
+        });
+        refreshCount();
+      };
+      const selectAllBtn = el('button', {
+        type: 'button', style: bulkBtnStyle, title: 'Select every item in this subsection',
+        onClick: (e) => { e.stopPropagation(); bulkSet(true); },
+      }, '✓ All');
+      const clearBtn = el('button', {
+        type: 'button', style: bulkBtnStyle, title: 'Deselect every item in this subsection',
+        onClick: (e) => { e.stopPropagation(); bulkSet(false); },
+      }, '✗ None');
       // Questionnaire sub-sections start expanded so users can see all available
       // line items at a glance — collapse is still available via the chevron.
       const secHeaderStyle = subHeaderBg
@@ -1622,8 +1642,12 @@ function renderPhase2() {
       const secNode = el('section', { class: 'section' },
         el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', {}, sec.name),
-          el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
+          el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1' }, sec.name),
+          el('span', { style: 'display:flex;align-items:center;gap:6px;flex-shrink:0' },
+            selectAllBtn,
+            clearBtn,
+            el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
+          )
         ),
         secBody
       );
