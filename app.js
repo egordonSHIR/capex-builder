@@ -1830,11 +1830,16 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   itemWrap.appendChild(qtyInp);
 
   // Col 4: Qty Type
+  // If the schema carries a default_qty_type for this item (from column H of
+  // Capex_Builder_Line_Items_Control.xlsx) and the user hasn't picked one yet,
+  // pre-select the default. Users can still override to anything in the list,
+  // and selecting "—" effectively means "fall back to the default on next render."
+  const effectiveUT = v.unit_type || item.default_qty_type || '';
   const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
   utSel.appendChild(el('option', { value: '' }, '—'));
   UNIT_TYPES.forEach(u => {
     const o = el('option', { value: u }, u);
-    if (v.unit_type === u) o.selected = true;
+    if (effectiveUT === u) o.selected = true;
     utSel.appendChild(o);
   });
   utSel.addEventListener('change', () => setP3(gi, si, ii, { unit_type: utSel.value }));
