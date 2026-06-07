@@ -36,7 +36,10 @@ const DEFAULT_PROPERTY = () => ({
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
   unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
   checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
-  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes}
+  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id}
+  // User-defined CAPEX Groups: buckets of line items used as the base for any
+  // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
+  capexGroups: [],
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
   // Survey-derived site specs (from survey-breakdown-specs skill).
   // Flat values land in phase1 (parking_spots_hc, site_perimeter_lf, etc.);
@@ -1660,15 +1663,125 @@ function renderPhase2() {
 }
 
 // ---------- Phase 3: Details (checked items only — # units, unit type, $/unit) ----------
-const UNIT_TYPES = ['Each', 'SF', 'LF', 'SY', 'CY', 'LS', 'Unit', 'Allowance', 'Hour', 'Day'];
+// '%' is a special type: the row's $/Qty becomes a read-only display of
+// (selected CAPEX Group total) / 100, and the row's $ Amt = (qty / 100) ×
+// group total. A sub-row appears below the line item to pick the group.
+const UNIT_TYPES = ['Each', 'SF', 'LF', 'SY', 'CY', 'LS', 'Unit', 'Allowance', 'Hour', 'Day', '%'];
 
 function getP3(gi, si, ii) {
-  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '' };
+  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '' };
 }
 function setP3(gi, si, ii, patch) {
   const k = ckKey(gi, si, ii);
   STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
   saveState();
+}
+
+// ---------- CAPEX Groups (user-defined buckets for percentage-based line items) ----------
+// A CAPEX Group is a named bucket of detail-page line items. Any line item priced
+// as a percentage references one group; its $ Amt = (qty / 100) × the group's
+// total (sum of non-% line items in the group, to prevent recursion).
+function ensureCapexGroups() {
+  if (!Array.isArray(STATE.capexGroups)) STATE.capexGroups = [];
+  return STATE.capexGroups;
+}
+function findCapexGroup(id) {
+  return ensureCapexGroups().find(g => g.id === id) || null;
+}
+function createCapexGroup() {
+  const g = { id: 'cg_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36), name: '', itemKeys: [] };
+  ensureCapexGroups().push(g);
+  saveState();
+  return g;
+}
+function updateCapexGroup(id, patch) {
+  const g = findCapexGroup(id);
+  if (g) { Object.assign(g, patch); saveState(); }
+}
+function removeCapexGroup(id) {
+  const arr = ensureCapexGroups();
+  const idx = arr.findIndex(g => g.id === id);
+  if (idx < 0) return;
+  arr.splice(idx, 1);
+  // Clear any phase3 rows that referenced this group so they don't dangle.
+  Object.values(STATE.phase3 || {}).forEach(v => {
+    if (v && v.pct_group_id === id) v.pct_group_id = '';
+  });
+  saveState();
+}
+// Group total = sum of $ Amts of non-% items in the group (anti-recursion).
+function getCapexGroupTotal(groupId) {
+  const g = findCapexGroup(groupId);
+  if (!g) return 0;
+  let total = 0;
+  for (const key of (g.itemKeys || [])) {
+    const parts = key.split('.').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) continue;
+    const [gi, si, ii] = parts;
+    if (!isChecked(gi, si, ii)) continue;
+    const v = STATE.phase3[key];
+    if (!v || v.unit_type === '%') continue;
+    total += (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  }
+  return total;
+}
+// Unified $ Amt calculation — handles both normal (qty × cost) and % rows.
+function getDetailItemTotal(gi, si, ii) {
+  const v = getP3(gi, si, ii);
+  const qty = Number(v.qty) || 0;
+  if (v.unit_type === '%') {
+    return (qty / 100) * getCapexGroupTotal(v.pct_group_id);
+  }
+  return qty * (Number(v.unit_cost) || 0);
+}
+// Look up the schema item for a ckKey (used by the CAPEX Groups UI to render
+// item names + filter the Add Item dropdown).
+function getSchemaItemByKey(ckKey) {
+  const parts = ckKey.split('.').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  const [gi, si, ii] = parts;
+  const g = SCHEMA.phase3[gi]; if (!g) return null;
+  const s = g.sections && g.sections[si]; if (!s) return null;
+  return (s.items && s.items[ii]) || null;
+}
+// Walk all % rows on the Details page and refresh their displayed $/Qty + $ Amt,
+// then update the running subtotal. Called whenever any qty/cost/group change
+// could affect a percentage calculation.
+function recomputePctRowsAndSummary(summaryNode) {
+  $$('.detail-item-wrap').forEach(wrap => {
+    const key = wrap.dataset.ckkey;
+    if (!key) return;
+    const parts = key.split('.').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return;
+    const [gi, si, ii] = parts;
+    const v = getP3(gi, si, ii);
+    if (v.unit_type === '%') {
+      const grpTotal = getCapexGroupTotal(v.pct_group_id);
+      const costInp = wrap.querySelector('[data-cost-input]');
+      if (costInp) costInp.value = grpTotal ? (grpTotal / 100).toFixed(2) : '';
+      const grpTotEl = wrap.querySelector('[data-pct-grouptotal]');
+      if (grpTotEl) grpTotEl.textContent = grpTotal ? `(group: ${fmtMoney(grpTotal)})` : '';
+    }
+    renderDetailTotals(wrap, gi, si, ii);
+  });
+  if (summaryNode) updateDetailSummary(summaryNode);
+}
+// Re-populate every visible % group dropdown when CAPEX Groups change
+// (added / renamed / deleted) so the in-line item % selectors stay current
+// without a full Phase 3 re-render.
+function refreshAllPctGroupSelects() {
+  $$('[data-pct-group-select]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '';
+    sel.appendChild(el('option', { value: '' }, '— pick a CAPEX Group —'));
+    ensureCapexGroups()
+      .filter(g => (g.name || '').trim())
+      .forEach(g => {
+        const o = el('option', { value: g.id }, g.name);
+        if (cur === g.id) o.selected = true;
+        sel.appendChild(o);
+      });
+  });
 }
 
 // Shared 6-col grid for the Details page: item name | =MF checkbox | # Qty |
@@ -1756,6 +1869,8 @@ function renderPhase3() {
     const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name), groupBody);
     root.appendChild(groupNode);
   });
+  // CAPEX Groups manager — user-defined buckets used by any % line item.
+  root.appendChild(renderCapexGroupsSection(summary));
   return root;
 }
 
@@ -1769,17 +1884,21 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       setP3(gi, si, ii, { qty: mf });
     }
   }
-  const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  const total = getDetailItemTotal(gi, si, ii);
   // Group-derived tints: idle = very-light group color, priced = slightly more
   // saturated of the same hue. renderDetailTotals reads these from dataset to
   // re-tint as the user types.
   const rowIdleBg = (tints && tints.rowIdleBg) || '';
   const rowPricedBg = (tints && tints.rowPricedBg) || '#f0fdf4';
 
-  // Single-line row using the same 6-col grid as the sticky header.
+  // Single-line row using the same 6-col grid as the sticky header. The .detail-item-wrap
+  // class + data-ckkey attribute let recomputePctRowsAndSummary walk every row to
+  // refresh % calculations when a non-% row's qty or cost changes.
   const itemWrap = el('div', {
+    class: 'detail-item-wrap',
     style: DETAIL_GRID_BASE + ';border-bottom:1px solid #e5e7eb;background:' + (total > 0 ? rowPricedBg : rowIdleBg)
   });
+  itemWrap.dataset.ckkey = ckKey(gi, si, ii);
   itemWrap.dataset.bgIdle = rowIdleBg;
   itemWrap.dataset.bgPriced = rowPricedBg;
 
@@ -1790,7 +1909,8 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   );
   itemWrap.appendChild(nameCell);
 
-  // Inputs are declared up front so the =MF handler can flip qty's readonly/value.
+  // Inputs are declared up front so the =MF and type-change handlers can flip
+  // qty/cost readonly state.
   const qtyInp = el('input', {
     type: 'number', min: 0, step: 'any',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
@@ -1800,8 +1920,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   qtyInp.addEventListener('input', () => {
     if (qtyInp.readOnly) return;
     setP3(gi, si, ii, { qty: qtyInp.value === '' ? '' : Number(qtyInp.value) });
-    renderDetailTotals(itemWrap, gi, si, ii);
-    updateDetailSummary(summaryNode);
+    recomputePctRowsAndSummary(summaryNode);
   });
 
   // Col 2: =MF Units checkbox
@@ -1821,16 +1940,15 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
     }
-    renderDetailTotals(itemWrap, gi, si, ii);
-    updateDetailSummary(summaryNode);
+    recomputePctRowsAndSummary(summaryNode);
   });
   itemWrap.appendChild(el('div', { style: 'text-align:center' }, mfCb));
 
-  // Col 3: # Qty
+  // Col 3: # Qty (interpreted as the percentage value when unit_type === '%')
   itemWrap.appendChild(qtyInp);
 
   // Col 4: Qty Type
-  // If the schema carries a default_qty_type for this item (from column H of
+  // If the schema carries a default_qty_type for this item (from column G of
   // Capex_Builder_Line_Items_Control.xlsx) and the user hasn't picked one yet,
   // pre-select the default. Users can still override to anything in the list,
   // and selecting "—" effectively means "fall back to the default on next render."
@@ -1842,34 +1960,91 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     if (effectiveUT === u) o.selected = true;
     utSel.appendChild(o);
   });
-  utSel.addEventListener('change', () => setP3(gi, si, ii, { unit_type: utSel.value }));
+  utSel.addEventListener('change', () => {
+    setP3(gi, si, ii, { unit_type: utSel.value });
+    syncTypeRelatedUI();
+    recomputePctRowsAndSummary(summaryNode);
+  });
   itemWrap.appendChild(utSel);
 
-  // Col 5: $/Qty
+  // Col 5: $/Qty — becomes a read-only display (group total ÷ 100) when type === '%'.
   const costInp = el('input', {
     type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
+  costInp.setAttribute('data-cost-input', '');
   costInp.value = v.unit_cost !== '' ? v.unit_cost : '';
   costInp.addEventListener('input', () => {
+    if (costInp.readOnly) return;
     setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
-    renderDetailTotals(itemWrap, gi, si, ii);
-    updateDetailSummary(summaryNode);
+    recomputePctRowsAndSummary(summaryNode);
   });
   itemWrap.appendChild(costInp);
 
-  // Col 6: $ Amt (computed, read-only display)
+  // Col 6: $ Amt (computed, read-only display — driven by getDetailItemTotal so
+  // % rows render correctly out of the gate).
   const totalEl = el('div', {
     'data-total': true,
     style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a'
   }, fmtMoney(total));
   itemWrap.appendChild(totalEl);
 
+  // --- Sub-row: only visible when unit_type === '%' ---
+  // Lets the user pick which CAPEX Group this percentage applies to. Spans all
+  // 6 grid columns via grid-column:1/-1 so it sits below the line item.
+  const subRow = el('div', {
+    class: 'detail-pct-subrow',
+    style: 'grid-column:1/-1;padding:4px 4px 8px 4px;display:none;align-items:center;gap:8px;font-size:12px;color:#475569;flex-wrap:wrap'
+  });
+  subRow.appendChild(el('span', { style: 'font-weight:600' }, '% of:'));
+  const grpSel = el('select', {
+    style: 'flex:1;min-width:140px;max-width:280px;padding:3px 4px;font-size:12px;box-sizing:border-box',
+  });
+  grpSel.setAttribute('data-pct-group-select', '');
+  // Populate initial options — refreshAllPctGroupSelects keeps these current.
+  grpSel.appendChild(el('option', { value: '' }, '— pick a CAPEX Group —'));
+  ensureCapexGroups().filter(g => (g.name || '').trim()).forEach(g => {
+    const o = el('option', { value: g.id }, g.name);
+    if (v.pct_group_id === g.id) o.selected = true;
+    grpSel.appendChild(o);
+  });
+  grpSel.addEventListener('change', () => {
+    setP3(gi, si, ii, { pct_group_id: grpSel.value });
+    syncTypeRelatedUI();
+    recomputePctRowsAndSummary(summaryNode);
+  });
+  subRow.appendChild(grpSel);
+  const grpTotEl = el('span', { 'data-pct-grouptotal': '', style: 'color:#64748b;font-style:italic;white-space:nowrap' }, '');
+  subRow.appendChild(grpTotEl);
+  itemWrap.appendChild(subRow);
+
+  // Apply type-dependent UI: show/hide sub-row, toggle cost input read-only,
+  // and display the auto-computed $/Qty value for % rows.
+  function syncTypeRelatedUI() {
+    const cur = getP3(gi, si, ii);
+    if (cur.unit_type === '%') {
+      subRow.style.display = 'flex';
+      const grpTotal = getCapexGroupTotal(cur.pct_group_id);
+      costInp.value = grpTotal ? (grpTotal / 100).toFixed(2) : '';
+      costInp.readOnly = true;
+      costInp.style.background = '#f1f5f9';
+      costInp.title = 'Auto-computed: selected CAPEX Group total ÷ 100';
+      grpTotEl.textContent = grpTotal ? `(group: ${fmtMoney(grpTotal)})` : '(no group total yet)';
+    } else {
+      subRow.style.display = 'none';
+      costInp.readOnly = false;
+      costInp.style.background = '';
+      costInp.title = '';
+      costInp.value = cur.unit_cost !== '' ? cur.unit_cost : '';
+    }
+  }
+  syncTypeRelatedUI();
+
   return itemWrap;
 }
 function renderDetailTotals(itemWrap, gi, si, ii) {
-  const v = getP3(gi, si, ii);
-  const total = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+  // Centralized via getDetailItemTotal so % rows compute correctly here too.
+  const total = getDetailItemTotal(gi, si, ii);
   const t = itemWrap.querySelector('[data-total]');
   if (t) t.textContent = fmtMoney(total);
   // Use the group-derived tints stashed on the row at render time (see
@@ -1887,6 +2062,203 @@ function updateDetailSummary(node) {
   if (vals[1]) vals[1].textContent = fmtMoney(totals.subtotal);
 }
 
+// ---------- CAPEX Groups manager (bottom of Details page) ----------
+// Section listing all user-defined CAPEX Groups, with a top-level "+ Add Group"
+// button. Each group renders as a card with a name input, an Add Item picker
+// (styled <select> so mobile gets the native picker), a Save button, and a
+// delete button — plus the list of items in the group with per-item delete.
+function renderCapexGroupsSection(summaryNode) {
+  const section = el('section', { class: 'section', style: 'margin-top:20px' });
+  const header = el('header', {
+    class: 'section-header',
+    style: 'background:#0f172a;color:#fff',
+    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed'),
+  });
+  header.appendChild(el('span', {}, 'CAPEX GROUPS'));
+  header.appendChild(el('span', { class: 'chev', style: 'color:#fff' }, '▼'));
+  section.appendChild(header);
+
+  const body = el('div', { class: 'section-body' });
+  section.appendChild(body);
+
+  function rebuild() {
+    body.innerHTML = '';
+    const groups = ensureCapexGroups();
+
+    body.appendChild(el('div', { class: 'muted small', style: 'padding:4px 16px 8px' },
+      'Create named buckets of line items to use as the base for any line item priced as a percentage. ' +
+      (groups.length === 0
+        ? 'No groups yet — tap + Add Group to start.'
+        : `${groups.length} group${groups.length === 1 ? '' : 's'} defined.`)
+    ));
+
+    body.appendChild(el('div', { style: 'padding:0 16px 12px' },
+      el('button', {
+        class: 'um-btn',
+        style: 'white-space:nowrap;font-size:13px;padding:8px 14px',
+        onClick: () => {
+          createCapexGroup();
+          rebuild();
+          refreshAllPctGroupSelects();
+        },
+      }, '+ Add Group')
+    ));
+
+    groups.forEach(grp => body.appendChild(renderCapexGroupCard(grp, rebuild, summaryNode)));
+  }
+
+  rebuild();
+  return section;
+}
+
+function renderCapexGroupCard(grp, rebuildList, summaryNode) {
+  const card = el('div', {
+    style: 'border:1px solid #e5e7eb;border-radius:8px;margin:6px 16px;background:#fff;overflow:hidden'
+  });
+
+  // Top row — name input + Add Item (styled select) + Save + Delete group.
+  const topRow = el('div', {
+    style: 'display:flex;align-items:center;gap:6px;padding:10px 12px;background:#f8fafc;border-bottom:1px solid #e5e7eb;flex-wrap:wrap'
+  });
+
+  const nameInp = el('input', {
+    type: 'text', placeholder: 'Group name (e.g. Hard Costs)',
+    style: 'flex:1;min-width:140px;padding:6px 8px;font-size:13px;font-weight:600;border:1px solid #cbd5e1;border-radius:4px',
+  });
+  nameInp.value = grp.name || '';
+  // Auto-save name keystrokes so users don't lose work; the % dropdowns and
+  // Add Item selector also live-update from the latest name.
+  nameInp.addEventListener('input', () => {
+    updateCapexGroup(grp.id, { name: nameInp.value });
+    refreshAllPctGroupSelects();
+    rebuildAddOptions();
+  });
+
+  // + Add Item — a <select> styled as a button. On mobile this triggers the
+  // native picker; on desktop it opens an inline list. Options auto-filter to
+  // checked items not already in the group and exclude % rows (anti-recursion).
+  const addSel = el('select', {
+    style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:6px 10px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;cursor:pointer',
+  });
+  function rebuildAddOptions() {
+    addSel.innerHTML = '';
+    const ready = !!(grp.name || '').trim();
+    addSel.appendChild(el('option', { value: '' }, ready ? '+ Add Item' : '+ Add Item (name first)'));
+    if (!ready) {
+      addSel.disabled = true;
+      addSel.style.opacity = '0.55';
+      addSel.style.cursor = 'not-allowed';
+      return;
+    }
+    addSel.disabled = false;
+    addSel.style.opacity = '1';
+    addSel.style.cursor = 'pointer';
+    const existing = new Set(grp.itemKeys || []);
+    let added = 0;
+    SCHEMA.phase3.forEach((g, gi) => {
+      g.sections.forEach((s, si) => {
+        s.items.forEach((it, ii) => {
+          if (!isChecked(gi, si, ii)) return;
+          const k = ckKey(gi, si, ii);
+          if (existing.has(k)) return;
+          const v = getP3(gi, si, ii);
+          if (v.unit_type === '%') return; // exclude % rows to prevent recursion
+          addSel.appendChild(el('option', { value: k }, `${g.name} → ${it.name}`));
+          added++;
+        });
+      });
+    });
+    if (!added) {
+      addSel.appendChild(el('option', { value: '', disabled: true }, 'No eligible items — check more on the Questionnaire'));
+    }
+  }
+  rebuildAddOptions();
+  addSel.addEventListener('change', () => {
+    if (!addSel.value) return;
+    grp.itemKeys = grp.itemKeys || [];
+    grp.itemKeys.push(addSel.value);
+    saveState();
+    addSel.value = '';
+    rebuildList();
+    refreshAllPctGroupSelects();
+    recomputePctRowsAndSummary(summaryNode);
+  });
+
+  const saveBtn = el('button', {
+    style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:6px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer',
+    title: 'Persist this group and refresh % dropdowns',
+    onClick: () => {
+      saveState();
+      refreshAllPctGroupSelects();
+      recomputePctRowsAndSummary(summaryNode);
+      const label = (grp.name || '').trim() || '(unnamed)';
+      toast(`Saved "${label}"`, 'success');
+    },
+  }, '💾 Save');
+
+  const delBtn = el('button', {
+    title: 'Delete this group',
+    style: 'white-space:nowrap;font-size:14px;padding:6px 10px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:4px;cursor:pointer',
+    onClick: () => {
+      if (!confirm(`Delete CAPEX Group "${grp.name || '(unnamed)'}"?\n\nAny % line items referencing it will lose their group selection.`)) return;
+      removeCapexGroup(grp.id);
+      rebuildList();
+      refreshAllPctGroupSelects();
+      recomputePctRowsAndSummary(summaryNode);
+    },
+  }, '✕');
+
+  topRow.appendChild(nameInp);
+  topRow.appendChild(addSel);
+  topRow.appendChild(saveBtn);
+  topRow.appendChild(delBtn);
+  card.appendChild(topRow);
+
+  // Items list (or empty-state hint).
+  const itemsList = el('div', { style: 'padding:6px 12px' });
+  if (!grp.itemKeys || !grp.itemKeys.length) {
+    itemsList.appendChild(el('div', { class: 'muted small', style: 'padding:8px 0;font-style:italic' },
+      (grp.name || '').trim()
+        ? 'No items yet — use + Add Item to pick from your Details rows.'
+        : 'Type a name above, then use + Add Item to pick rows.'
+    ));
+  } else {
+    grp.itemKeys.forEach((key, idx) => {
+      const it = getSchemaItemByKey(key);
+      const v = STATE.phase3[key] || {};
+      const itemTotal = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+      const row = el('div', {
+        style: 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px'
+      });
+      row.appendChild(el('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a' },
+        it ? it.name : `(missing item ${key})`
+      ));
+      row.appendChild(el('span', { style: 'color:#64748b;white-space:nowrap;font-size:12px' },
+        itemTotal > 0 ? fmtMoney(itemTotal) : '—'
+      ));
+      row.appendChild(el('button', {
+        title: 'Remove from this group',
+        style: 'width:26px;height:26px;font-size:13px;background:transparent;color:#991b1b;border:1px solid #fecaca;border-radius:4px;cursor:pointer;padding:0;line-height:1',
+        onClick: () => {
+          grp.itemKeys.splice(idx, 1);
+          saveState();
+          rebuildList();
+          refreshAllPctGroupSelects();
+          recomputePctRowsAndSummary(summaryNode);
+        },
+      }, '✕'));
+      itemsList.appendChild(row);
+    });
+    const grpTotal = getCapexGroupTotal(grp.id);
+    itemsList.appendChild(el('div', {
+      style: 'display:flex;justify-content:flex-end;padding:8px 0 4px;font-size:12px;color:#475569;font-weight:600'
+    }, `Group total: ${fmtMoney(grpTotal)}`));
+  }
+  card.appendChild(itemsList);
+
+  return card;
+}
+
 // ---------- Phase 4: Review ----------
 function computeTotals() {
   let subtotal = 0;
@@ -1897,8 +2269,9 @@ function computeTotals() {
     g.sections.forEach((s, si) => {
       s.items.forEach((it, ii) => {
         if (!isChecked(gi, si, ii)) return; // only priced items that are selected
-        const v = getP3(gi, si, ii);
-        const t = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+        // Use getDetailItemTotal so % rows contribute their group-scaled value
+        // (qty/100 × CAPEX Group total) instead of qty × literal unit_cost.
+        const t = getDetailItemTotal(gi, si, ii);
         if (t > 0) { subtotal += t; itemCount += 1; byGroup[g.name] += t; }
       });
     });
