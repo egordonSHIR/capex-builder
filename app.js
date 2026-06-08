@@ -2789,6 +2789,27 @@ function renderPropertyCard(local, remote) {
   if (remote && remote.lastEditor) subBits.push('by ' + remote.lastEditor);
   const subtitle = subBits.join(' · ') || 'No details yet';
 
+  // Quick-status badges: survey processed + unit mix imported. Prefer manifest
+  // values for remote-only entries, fall back to live local state for opened ones.
+  const surveyOk = remote
+    ? !!remote.surveyProcessed
+    : !!(p.survey && p.survey.processed_at);
+  const unitMixOk = remote
+    ? !!remote.unitMixImported
+    : (Array.isArray(p.unitMix) && p.unitMix.length > 0);
+  const unitMixCount = remote
+    ? (remote.unitMixTypeCount || 0)
+    : (Array.isArray(p.unitMix) ? p.unitMix.length : 0);
+  const statusBadges = el('div', { style: 'display:flex;gap:6px;margin-top:3px;flex-wrap:wrap' });
+  statusBadges.appendChild(el('span', {
+    title: surveyOk ? 'Survey processed' : 'No survey processed yet',
+    style: `font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:${surveyOk ? '#dcfce7' : '#f1f5f9'};color:${surveyOk ? '#166534' : '#94a3b8'}`,
+  }, surveyOk ? '📐 survey' : '📐 no survey'));
+  statusBadges.appendChild(el('span', {
+    title: unitMixOk ? `Unit mix imported (${unitMixCount} types)` : 'No unit mix imported',
+    style: `font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:${unitMixOk ? '#dcfce7' : '#f1f5f9'};color:${unitMixOk ? '#166534' : '#94a3b8'}`,
+  }, unitMixOk ? `🏠 unit mix${unitMixCount ? ` (${unitMixCount})` : ''}` : '🏠 no unit mix'));
+
   let syncCls, syncIcon, syncTitle;
   if (!local) {
     syncCls = 'remote'; syncIcon = '☁'; syncTitle = 'In org index — tap to open from Drive';
@@ -2822,6 +2843,7 @@ function renderPropertyCard(local, remote) {
     el('div', { class: 'pc-main' },
       el('div', { class: 'pc-name' }, p.name || (remote && remote.name) || '(unnamed)'),
       el('div', { class: 'pc-sub' }, subtitle),
+      statusBadges,
       editorBadge,
     ),
     el('div', { class: 'pc-actions' },
@@ -3640,6 +3662,8 @@ async function removeManifestEntry(propertyId) {
 
 function buildManifestEntry({ asEditor }) {
   const me = (CURRENT_USER || {}).email || 'unknown';
+  const survey = STATE.survey || {};
+  const unitMix = Array.isArray(STATE.unitMix) ? STATE.unitMix : [];
   return {
     id: STATE.id,
     name: STATE.name || (STATE.phase1 && STATE.phase1.prop_name) || 'Untitled',
@@ -3649,6 +3673,11 @@ function buildManifestEntry({ asEditor }) {
     lastEditor: me,
     currentEditor: asEditor ? me : '',
     currentEditorHeartbeatAt: asEditor ? new Date().toISOString() : '',
+    // Quick-status flags surfaced on the home-screen index. Auto-sync refreshes
+    // these every minute so the org index stays current.
+    surveyProcessed: !!survey.processed_at,
+    unitMixImported: unitMix.length > 0,
+    unitMixTypeCount: unitMix.length,
   };
 }
 
