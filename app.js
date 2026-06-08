@@ -123,13 +123,23 @@ function openProperty(id) {
   CURRENT_PHASE = 1;
   CURRENT_VIEW = 'property';
   renderShell();
+  // Kick off the auto-sync loop for this property — pushes dirty changes,
+  // refreshes our heartbeat, surfaces concurrent-editor banners.
+  if (typeof startAutoSync === 'function') startAutoSync();
 }
 function closeProperty() {
+  // Stop auto-sync and release our editor lock so teammates don't see a stale
+  // heartbeat. Fire-and-forget on the lock release; the heartbeat goes stale
+  // (>2.5 min) anyway, so an inflight failure here is harmless.
+  if (typeof stopAutoSync === 'function') stopAutoSync();
+  if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
   STORE.currentPropertyId = null;
   STATE = null;
   saveState();
   CURRENT_VIEW = 'home';
   renderShell();
+  // Refresh the home screen with the latest manifest snapshot.
+  if (typeof refreshHomeIndex === 'function') refreshHomeIndex().catch(() => {});
 }
 function deleteProperty(id) {
   delete STORE.properties[id];
@@ -139,6 +149,12 @@ function deleteProperty(id) {
     CURRENT_VIEW = 'home';
   }
   saveState();
+  // Best-effort: remove from the org manifest too. If a teammate still has
+  // the property locally, their next sync tick will recreate the entry —
+  // which is what we want (delete = drop my local copy, not org-wide remove).
+  if (typeof removeManifestEntry === 'function' && getDriveToken()) {
+    removeManifestEntry(id).catch((e) => console.warn('removeManifestEntry failed', e));
+  }
 }
 
 // ---------- Helpers ----------
@@ -2582,8 +2598,11 @@ function renderShell() {
   $('#phase-tabs').classList.toggle('hidden', !inProp);
   $('#btn-back').classList.toggle('hidden', !inProp);
   $('#btn-save').classList.toggle('hidden', !inProp);
-  $('#btn-pull').classList.toggle('hidden', !inProp || !STATE.drive.folderId);
-  $('#btn-push').classList.toggle('hidden', !inProp || !STATE.drive.folderId);
+  // Header Push/Pull buttons are now hidden by default — auto-sync handles
+  // routine pushes every minute. Manual force-sync remains available via the
+  // ☰ drawer (#btn-push-drawer / #btn-pull-drawer).
+  $('#btn-pull').classList.add('hidden');
+  $('#btn-push').classList.add('hidden');
   $('#drawer-property-section').classList.toggle('hidden', !inProp);
   $('#header-title').textContent = inProp
     ? (STATE.name || STATE.phase1.prop_name || 'Untitled Property')
@@ -2666,7 +2685,9 @@ function renderOnboardingCard() {
           localStorage.setItem(DRIVE_EVER_CONNECTED_KEY, '1');
           updateDriveStatus();
           toast('Drive connected', 'success');
+          try { await fetchCurrentUser({ force: true }); } catch (e) { console.warn('fetchCurrentUser failed', e); }
           renderHome();
+          refreshHomeIndex().catch(() => {});
         } catch (e) {
           toast('Connect failed: ' + e.message, 'error');
         }
@@ -2688,50 +2709,127 @@ function renderOnboardingCard() {
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
-  const props = Object.values(STORE.properties)
-    .sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
 
   if (shouldShowOnboarding()) main.appendChild(renderOnboardingCard());
 
   main.appendChild(el('button', { class: 'home-new-btn', onClick: () => promptNewProperty() },
     '+ New Property'));
 
-  if (!props.length) {
+  // Org-wide index status bar (only if Drive is connected — otherwise no index).
+  if (getDriveToken()) {
+    const driveToken = !!getDriveToken();
+    const statusBar = el('div', {
+      style: 'padding:8px 12px;margin:6px 0 10px;background:#f1f5f9;border-radius:6px;font-size:12px;color:#475569;display:flex;align-items:center;justify-content:space-between;gap:8px'
+    });
+    const statusText = HOME_INDEX_LOADING
+      ? '🔄 Loading org index…'
+      : (MANIFEST_CACHE
+          ? `📋 Org index loaded ${MANIFEST_CACHE.fetchedAt ? '(' + relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) + ')' : ''}`
+          : '📋 Tap Refresh to load org index');
+    statusBar.appendChild(el('span', {}, statusText));
+    const meBits = el('span', { style: 'display:flex;align-items:center;gap:8px' });
+    if (CURRENT_USER && CURRENT_USER.email) {
+      meBits.appendChild(el('span', { style: 'color:#64748b' }, CURRENT_USER.email));
+    }
+    meBits.appendChild(el('button', {
+      style: 'background:none;border:none;color:#1e3a8a;font-size:12px;cursor:pointer;font-weight:600;padding:0',
+      onClick: () => refreshHomeIndex(),
+    }, '🔄 Refresh'));
+    statusBar.appendChild(meBits);
+    main.appendChild(statusBar);
+  }
+
+  // Merge local properties + manifest entries by id.
+  const merged = new Map();
+  Object.values(STORE.properties).forEach(p => merged.set(p.id, { local: p, remote: null }));
+  if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
+    MANIFEST_CACHE.data.properties.forEach(entry => {
+      const cur = merged.get(entry.id) || { local: null, remote: null };
+      cur.remote = entry;
+      merged.set(entry.id, cur);
+    });
+  }
+
+  // Sort by latest activity (manifest lastModified preferred, fall back to local updated).
+  const entries = Array.from(merged.values()).sort((a, b) => {
+    const aTime = (a.remote && a.remote.lastModified) || (a.local && a.local.updated) || '';
+    const bTime = (b.remote && b.remote.lastModified) || (b.local && b.local.updated) || '';
+    return bTime.localeCompare(aTime);
+  });
+
+  if (!entries.length) {
     main.appendChild(el('div', { class: 'home-empty' },
       'No properties yet. Tap "+ New Property" to start.'));
     return;
   }
 
   const list = el('div', { class: 'home-list' });
-  props.forEach(p => {
-    const subBits = [];
-    if (p.phase1 && p.phase1.city) subBits.push(p.phase1.city);
-    if (p.phase1 && p.phase1.mf_units) subBits.push(`${p.phase1.mf_units} units`);
-    if (p.updated) subBits.push('updated ' + relativeTime(p.updated));
-    const subtitle = subBits.join(' · ') || 'No details yet';
-
-    let syncCls = 'nolink', syncIcon = '⊘', syncTitle = 'No Drive folder linked';
-    if (p.drive.folderId) {
-      const inSync = p.drive.lastPushed && p.drive.lastPushed >= p.updated;
-      syncCls = inSync ? 'synced' : 'dirty';
-      syncIcon = inSync ? '●' : '○';
-      syncTitle = inSync ? 'In sync with Drive (last push: ' + relativeTime(p.drive.lastPushed) + ')'
-                         : 'Local changes since last push';
-    }
-
-    list.appendChild(el('div', { class: 'property-card', onClick: () => openProperty(p.id) },
-      el('div', { class: 'pc-main' },
-        el('div', { class: 'pc-name' }, p.name || '(unnamed)'),
-        el('div', { class: 'pc-sub' }, subtitle)
-      ),
-      el('div', { class: 'pc-actions' },
-        el('span', { class: 'pc-sync ' + syncCls, title: syncTitle }, syncIcon),
-        el('button', { class: 'btn-icon pc-menu',
-          onClick: (e) => { e.stopPropagation(); propertyMenu(p); } }, '⋮')
-      )
-    ));
-  });
+  entries.forEach(({ local, remote }) => list.appendChild(renderPropertyCard(local, remote)));
   main.appendChild(list);
+}
+
+// Render one property card. Either `local` or `remote` (or both) may be set.
+// Local-only: classic flow. Manifest-only (no local copy): card click triggers
+// openRemoteProperty(). Both set: live local card, but we also surface the
+// remote `lastEditor` / `currentEditor` for awareness.
+function renderPropertyCard(local, remote) {
+  const p = local || {
+    id: remote.id,
+    name: remote.name,
+    phase1: {},
+    drive: { folderId: remote.dealFolderId },
+    updated: remote.lastModified,
+  };
+
+  const subBits = [];
+  if (p.phase1 && p.phase1.city) subBits.push(p.phase1.city);
+  if (p.phase1 && p.phase1.mf_units) subBits.push(`${p.phase1.mf_units} units`);
+  const ts = (remote && remote.lastModified) || p.updated;
+  if (ts) subBits.push('updated ' + relativeTime(ts));
+  if (remote && remote.lastEditor) subBits.push('by ' + remote.lastEditor);
+  const subtitle = subBits.join(' · ') || 'No details yet';
+
+  let syncCls, syncIcon, syncTitle;
+  if (!local) {
+    syncCls = 'remote'; syncIcon = '☁'; syncTitle = 'In org index — tap to open from Drive';
+  } else if (!p.drive.folderId) {
+    syncCls = 'nolink'; syncIcon = '⊘'; syncTitle = 'No Drive folder linked';
+  } else {
+    const inSync = p.drive.lastPushed && p.drive.lastPushed >= p.updated;
+    syncCls = inSync ? 'synced' : 'dirty';
+    syncIcon = inSync ? '●' : '○';
+    syncTitle = inSync
+      ? 'Synced with Drive (last push: ' + relativeTime(p.drive.lastPushed) + ')'
+      : 'Local changes — next auto-sync within 1 min';
+  }
+
+  // Active-editor badge: another teammate has a fresh heartbeat right now.
+  let editorBadge = null;
+  if (remote && remote.currentEditor && remote.currentEditorHeartbeatAt) {
+    const beat = Date.parse(remote.currentEditorHeartbeatAt);
+    const meEmail = (CURRENT_USER || {}).email;
+    if (Date.now() - beat < HEARTBEAT_STALE_MS && remote.currentEditor !== meEmail) {
+      editorBadge = el('div', {
+        style: 'font-size:11px;color:#92400e;background:#fef3c7;padding:2px 6px;border-radius:4px;margin-top:4px;display:inline-block;font-weight:600'
+      }, `✏️ ${remote.currentEditor} editing now`);
+    }
+  }
+
+  return el('div', { class: 'property-card', onClick: () => {
+    if (local) openProperty(local.id);
+    else openRemoteProperty(remote);
+  } },
+    el('div', { class: 'pc-main' },
+      el('div', { class: 'pc-name' }, p.name || (remote && remote.name) || '(unnamed)'),
+      el('div', { class: 'pc-sub' }, subtitle),
+      editorBadge,
+    ),
+    el('div', { class: 'pc-actions' },
+      el('span', { class: 'pc-sync ' + syncCls, title: syncTitle }, syncIcon),
+      local ? el('button', { class: 'btn-icon pc-menu',
+        onClick: (e) => { e.stopPropagation(); propertyMenu(local); } }, '⋮') : null,
+    )
+  );
 }
 
 function relativeTime(iso) {
@@ -2860,15 +2958,14 @@ function updateSyncBar() {
     return;
   }
   const lastPush = STATE.drive.lastPushed;
-  const lastPull = STATE.drive.lastPulled;
   const dirty = !lastPush || lastPush < STATE.updated;
   if (dirty) {
     bar.className = 'sync-bar warn';
-    bar.textContent = 'Local changes — tap ⬆ to push to Drive.' +
+    bar.textContent = 'Local changes — auto-sync within 1 min.' +
       (lastPush ? ' Last push: ' + relativeTime(lastPush) : '');
   } else {
     bar.className = 'sync-bar ok';
-    bar.textContent = 'In sync with Drive (last push ' + relativeTime(lastPush) + ').';
+    bar.textContent = 'Auto-synced with Drive (last push ' + relativeTime(lastPush) + ').';
   }
   bar.classList.remove('hidden');
 }
@@ -3105,6 +3202,11 @@ async function driveConnect() {
     await driveRequestToken({ silent: false });
     updateDriveStatus();
     toast('Drive connected', 'success');
+    // Fetch the signed-in user's identity so the manifest can record edits as
+    // theirs, then load the org-wide index in the background.
+    try { await fetchCurrentUser({ force: true }); } catch (e) { console.warn('fetchCurrentUser failed', e); }
+    if (CURRENT_VIEW === 'home') refreshHomeIndex().catch(() => {});
+    else if (CURRENT_VIEW === 'property') startAutoSync();
   } catch (e) {
     toast('Connect failed: ' + e.message, 'error');
   }
@@ -3359,18 +3461,26 @@ async function driveUploadBinary(folderId, filename, blob, mimeType) {
   return r.json();
 }
 
-async function pushToDrive() {
+async function pushToDrive(opts = {}) {
+  const { silent = false } = opts;
   if (!STATE) return;
-  if (!STATE.drive.folderId) { toast('Link a Drive folder first', 'error'); return; }
-  if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
+  if (!STATE.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
-    toast('Pushing to Drive…');
+    if (!silent) toast('Pushing to Drive…');
     const targetFolder = await resolveCapexFolder();
-    // Warn if remote is newer than what we last pulled
+    // Warn if remote is newer than what we last pulled.
     const existing = await driveFindFile(targetFolder, STATE_FILENAME);
     if (existing && STATE.drive.remoteModifiedTime
         && existing.modifiedTime > STATE.drive.remoteModifiedTime
         && (!STATE.drive.lastPushed || existing.modifiedTime > STATE.drive.lastPushed)) {
+      if (silent) {
+        // Auto-sync mustn't silently clobber a newer remote. Skip this tick;
+        // the concurrent-editor banner (driven by the manifest) already warns
+        // the user, and the next tick can retry after they reconcile.
+        console.warn('pushToDrive: remote newer than local — skipping silent push');
+        return;
+      }
       if (!confirm('The Drive copy was modified more recently than your last sync. Overwrite it with your local data?')) {
         return;
       }
@@ -3382,9 +3492,10 @@ async function pushToDrive() {
     saveState();
     updateSyncBar();
     updateFolderStatus();
-    toast('Pushed to Drive', 'success');
+    if (!silent) toast('Pushed to Drive', 'success');
   } catch (e) {
-    toast('Push failed: ' + e.message, 'error');
+    if (silent) console.warn('Silent push failed:', e);
+    else toast('Push failed: ' + e.message, 'error');
   }
 }
 
@@ -3415,12 +3526,299 @@ async function pullFromDrive() {
   }
 }
 
+// ---------- Multi-device / multi-user sync (org-wide via central manifest) ----------
+// Architecture: a single JSON manifest file lives in SYNC_FOLDER_ID. Every
+// teammate's app reads + writes the same manifest, so the home screen shows
+// an org-wide index of properties, the auto-sync timer pushes local edits to
+// the deal folder every minute, and the heartbeat field surfaces a banner
+// when another teammate is editing the same property simultaneously.
+//
+// Per-property payload still lives in <deal>/25. Capex/Capex Builder Budget/
+// capex_builder.json — the manifest just indexes those files + carries
+// presence info ({lastModified, lastEditor, currentEditor, heartbeatAt}).
+
+// THE shared org-wide sync folder (provided by user 2026-06-07). All teammates
+// must point at this same folder ID. Hardcoded so there's no per-machine setup.
+const SYNC_FOLDER_ID = '1yUJKGpeDfzepdV-BjRwmPHe210dK4lDw';
+const MANIFEST_FILENAME = 'capex_builder_manifest.json';
+const MANIFEST_FILE_ID_KEY = 'capex_manifest_file_id';
+const CURRENT_USER_KEY = 'capex_current_user';
+const SYNC_INTERVAL_MS = 60_000;            // 1 minute between sync ticks
+const HEARTBEAT_STALE_MS = 2.5 * 60_000;    // a heartbeat is "stale" after 2.5 min
+
+let CURRENT_USER = null;            // { email, name, photoLink }
+let SYNC_INTERVAL_ID = null;        // setInterval handle
+let MANIFEST_CACHE = null;          // last fetched manifest, used by renderHome
+let HOME_INDEX_LOADING = false;     // prevent overlapping fetches
+
+// Hydrate cached user identity early so renderHome can paint user-aware UI
+// before any network call resolves.
+try {
+  const cached = localStorage.getItem(CURRENT_USER_KEY);
+  if (cached) CURRENT_USER = JSON.parse(cached);
+} catch {}
+
+async function fetchCurrentUser({ force = false } = {}) {
+  if (CURRENT_USER && !force) return CURRENT_USER;
+  const r = await driveFetch('https://www.googleapis.com/drive/v3/about?fields=user');
+  const j = await r.json();
+  if (!j.user || !j.user.emailAddress) throw new Error('Could not read Drive user identity');
+  CURRENT_USER = {
+    email: j.user.emailAddress,
+    name: j.user.displayName || j.user.emailAddress,
+    photoLink: j.user.photoLink || '',
+  };
+  localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(CURRENT_USER));
+  return CURRENT_USER;
+}
+
+// Find (or create) the manifest file in SYNC_FOLDER_ID. The file ID is cached
+// locally so subsequent loads skip the Drive search.
+async function resolveManifestFileId() {
+  const cached = localStorage.getItem(MANIFEST_FILE_ID_KEY);
+  if (cached) {
+    try {
+      const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${cached}?fields=id,trashed`);
+      const j = await r.json();
+      if (j.id && !j.trashed) return cached;
+    } catch { /* fall through to search */ }
+    localStorage.removeItem(MANIFEST_FILE_ID_KEY);
+  }
+  const file = await driveFindFile(SYNC_FOLDER_ID, MANIFEST_FILENAME);
+  if (file) {
+    localStorage.setItem(MANIFEST_FILE_ID_KEY, file.id);
+    return file.id;
+  }
+  // First-time: create an empty manifest in the sync folder.
+  const initial = { version: 1, updated: new Date().toISOString(), properties: [] };
+  const res = await driveUploadJson(SYNC_FOLDER_ID, MANIFEST_FILENAME, initial);
+  localStorage.setItem(MANIFEST_FILE_ID_KEY, res.id);
+  return res.id;
+}
+
+async function fetchManifest() {
+  const fileId = await resolveManifestFileId();
+  const metaR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,modifiedTime`);
+  const meta = await metaR.json();
+  const dataR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  let data;
+  try { data = await dataR.json(); } catch { data = null; }
+  if (!data || typeof data !== 'object' || !Array.isArray(data.properties)) {
+    data = { version: 1, updated: new Date().toISOString(), properties: [] };
+  }
+  MANIFEST_CACHE = { data, fileId, modifiedTime: meta.modifiedTime, fetchedAt: Date.now() };
+  return MANIFEST_CACHE;
+}
+
+async function writeManifest(data) {
+  const fileId = await resolveManifestFileId();
+  data.updated = new Date().toISOString();
+  const res = await driveUploadJson(SYNC_FOLDER_ID, MANIFEST_FILENAME, data, fileId);
+  MANIFEST_CACHE = { data, fileId, modifiedTime: res.modifiedTime, fetchedAt: Date.now() };
+  return res;
+}
+
+// Read-modify-write a single manifest entry. Race-prone (last writer wins) but
+// acceptable for v1 since updates are sparse and small.
+async function upsertManifestEntry(entry) {
+  const { data } = await fetchManifest();
+  const idx = data.properties.findIndex(p => p.id === entry.id);
+  if (idx >= 0) data.properties[idx] = { ...data.properties[idx], ...entry };
+  else data.properties.push({ ...entry });
+  await writeManifest(data);
+  return data;
+}
+
+async function removeManifestEntry(propertyId) {
+  const { data } = await fetchManifest();
+  const idx = data.properties.findIndex(p => p.id === propertyId);
+  if (idx < 0) return data;
+  data.properties.splice(idx, 1);
+  await writeManifest(data);
+  return data;
+}
+
+function buildManifestEntry({ asEditor }) {
+  const me = (CURRENT_USER || {}).email || 'unknown';
+  return {
+    id: STATE.id,
+    name: STATE.name || (STATE.phase1 && STATE.phase1.prop_name) || 'Untitled',
+    dealFolderId: STATE.drive.folderId || '',
+    capexFileId: STATE.drive.fileId || '',
+    lastModified: STATE.updated,
+    lastEditor: me,
+    currentEditor: asEditor ? me : '',
+    currentEditorHeartbeatAt: asEditor ? new Date().toISOString() : '',
+  };
+}
+
+// Open a property that's in the manifest but not yet on this device:
+// resolve the deal folder, download capex_builder.json from
+// <deal>/25. Capex/Capex Builder Budget/, then open it locally.
+async function openRemoteProperty(entry) {
+  if (!entry || !entry.dealFolderId) { toast('No deal folder linked for this property', 'error'); return; }
+  if (!getDriveToken()) { try { await driveRequestToken({ silent: false }); } catch (e) { toast('Connect Drive first', 'error'); return; } }
+  try {
+    toast('Loading from Drive…');
+    const capexParent = await driveEnsureSubfolder(entry.dealFolderId, '25. Capex');
+    const budgetFolder = await driveEnsureSubfolder(capexParent, 'Capex Builder Budget');
+    const remote = await driveDownloadJson(budgetFolder, STATE_FILENAME);
+    if (!remote) { toast(`No ${STATE_FILENAME} found in deal folder`, 'error'); return; }
+    const now = new Date().toISOString();
+    const p = Object.assign(DEFAULT_PROPERTY(), remote.data, {
+      id: entry.id,
+      drive: {
+        folderId: entry.dealFolderId,
+        fileId: remote.id,
+        capexFolderId: budgetFolder,
+        lastPushed: now,
+        lastPulled: now,
+        remoteModifiedTime: remote.modifiedTime,
+        autoSearchAttempted: true,
+      },
+    });
+    STORE.properties[p.id] = p;
+    STORE.currentPropertyId = p.id;
+    STATE = p;
+    saveState();
+    CURRENT_PHASE = 1;
+    CURRENT_VIEW = 'property';
+    renderShell();
+    startAutoSync();
+    toast('Opened from Drive', 'success');
+  } catch (e) {
+    toast('Open failed: ' + e.message, 'error');
+  }
+}
+
+// ---------- Auto-sync timer ----------
+function startAutoSync() {
+  stopAutoSync();
+  // Fire one immediately, then on an interval.
+  syncTick().catch(() => {});
+  SYNC_INTERVAL_ID = setInterval(() => { syncTick().catch(() => {}); }, SYNC_INTERVAL_MS);
+}
+function stopAutoSync() {
+  if (SYNC_INTERVAL_ID) clearInterval(SYNC_INTERVAL_ID);
+  SYNC_INTERVAL_ID = null;
+}
+
+// One sync pass: push if dirty, refresh heartbeat in the manifest, surface a
+// banner when another teammate is editing. Best-effort — failures log and
+// retry on the next tick. Called every SYNC_INTERVAL_MS while a property is open.
+async function syncTick() {
+  if (!STATE) return;
+  if (!getDriveToken()) return;
+  if (!CURRENT_USER) {
+    try { await fetchCurrentUser(); } catch { return; }
+  }
+  if (!STATE.drive.folderId) return; // can't sync property data without a deal folder
+  try {
+    // 1. Push local changes if dirty.
+    const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
+    if (dirty) {
+      await pushToDrive({ silent: true });
+    }
+    // 2. Pull the manifest and check for a concurrent editor.
+    const { data } = await fetchManifest();
+    const meEmail = (CURRENT_USER || {}).email || '';
+    const entry = data.properties.find(p => p.id === STATE.id);
+    if (entry && entry.currentEditor && entry.currentEditor !== meEmail) {
+      const beat = entry.currentEditorHeartbeatAt ? Date.parse(entry.currentEditorHeartbeatAt) : 0;
+      if (Date.now() - beat < HEARTBEAT_STALE_MS) {
+        showConcurrentEditBanner(entry.currentEditor, entry.currentEditorHeartbeatAt);
+      } else {
+        hideConcurrentEditBanner();
+      }
+    } else {
+      hideConcurrentEditBanner();
+    }
+    // 3. Write our heartbeat + lastModified to the manifest.
+    await upsertManifestEntry(buildManifestEntry({ asEditor: true }));
+    updateSyncBar();
+  } catch (e) {
+    console.warn('syncTick failed:', e);
+  }
+}
+
+// Release the editor lock when leaving a property. Best-effort.
+async function releaseEditorLock() {
+  if (!STATE) return;
+  try {
+    await upsertManifestEntry(buildManifestEntry({ asEditor: false }));
+  } catch (e) {
+    console.warn('releaseEditorLock failed:', e);
+  }
+}
+
+// ---------- Concurrent edit banner ----------
+function showConcurrentEditBanner(email, heartbeatAt) {
+  let b = $('#concurrent-edit-banner');
+  if (!b) {
+    b = el('div', {
+      id: 'concurrent-edit-banner',
+      style: 'background:#fef3c7;color:#92400e;padding:8px 14px;text-align:center;font-size:12px;font-weight:600;border-bottom:1px solid #fbbf24;line-height:1.4'
+    });
+    const target = $('#phase-content');
+    if (target && target.parentElement) target.parentElement.insertBefore(b, target);
+    else document.body.appendChild(b);
+  }
+  const ago = heartbeatAt ? relativeTime(heartbeatAt) : 'just now';
+  b.textContent = `⚠️ ${email} is also editing this property (active ${ago}) — your edits may overwrite theirs.`;
+  b.style.display = 'block';
+}
+function hideConcurrentEditBanner() {
+  const b = $('#concurrent-edit-banner');
+  if (b) b.style.display = 'none';
+}
+
+// ---------- Home screen org-wide index ----------
+// Fetches the manifest in the background, then re-renders the home view with
+// the merged list (local properties + remote-only properties from the manifest).
+async function refreshHomeIndex() {
+  if (HOME_INDEX_LOADING) return;
+  if (!getDriveToken()) return;
+  HOME_INDEX_LOADING = true;
+  try {
+    if (!CURRENT_USER) await fetchCurrentUser();
+    await fetchManifest();
+    if (CURRENT_VIEW === 'home') renderHome();
+  } catch (e) {
+    console.warn('refreshHomeIndex failed:', e);
+    if (CURRENT_VIEW === 'home') renderHome();
+  } finally {
+    HOME_INDEX_LOADING = false;
+  }
+}
+
 // ---------- Init ----------
 document.addEventListener('DOMContentLoaded', () => {
   bindShell();
   renderShell();
   // Try to silently refresh the Drive token on load so push/pull just works.
   if (GOOGLE_CLIENT_ID && !getDriveToken()) {
-    driveRequestToken({ silent: true }).then(updateDriveStatus).catch(() => {});
+    driveRequestToken({ silent: true })
+      .then(async () => {
+        updateDriveStatus();
+        try { await fetchCurrentUser(); } catch {}
+        // Refresh the home index (if on home) or start sync (if on a property).
+        if (CURRENT_VIEW === 'home') refreshHomeIndex();
+        else if (CURRENT_VIEW === 'property') startAutoSync();
+      })
+      .catch(() => {});
+  } else if (getDriveToken()) {
+    // Token already valid — fetch user + refresh / sync without re-prompting.
+    fetchCurrentUser().catch(() => {});
+    if (CURRENT_VIEW === 'home') refreshHomeIndex();
+    else if (CURRENT_VIEW === 'property') startAutoSync();
   }
+  // Best-effort lock release when the user closes the tab.
+  window.addEventListener('beforeunload', () => {
+    if (STATE) {
+      // Fire-and-forget; some browsers cancel async work but the heartbeat
+      // will go stale (>2.5 min) anyway, so the lock auto-releases.
+      try { releaseEditorLock(); } catch {}
+    }
+    stopAutoSync();
+  });
 });
