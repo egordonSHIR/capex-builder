@@ -362,6 +362,7 @@ main {
 .pc-sync.synced { color: var(--success); }
 .pc-sync.dirty { color: #d97706; }
 .pc-sync.nolink { color: #94a3b8; }
+.pc-sync.remote { color: #1e3a8a; }  /* org-index entry not yet on this device */
 .pc-menu {
   background: transparent;
   border: none;
