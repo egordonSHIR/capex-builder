@@ -1,4 +1,4 @@
-// Capex Builder — multi-property web app
+﻿// Capex Builder — multi-property web app
 // STORE = { version, properties: {[id]: Property}, currentPropertyId }
 // STATE = live reference to the current property (so existing render code keeps working).
 
@@ -9,6 +9,7 @@ const DRIVE_TOKEN_EXP_KEY = 'capex_builder_drive_token_exp';
 const OPTIONS_KEY = 'capex_options_overrides_v1';
 const ONBOARDING_DISMISSED_KEY = 'capex_onboarding_dismissed_v1';
 const DRIVE_EVER_CONNECTED_KEY = 'capex_drive_ever_connected_v1';
+const ANTHROPIC_KEY_STORAGE = 'capex_anthropic_key_v1';
 
 // ---------- Dropdown option overrides (loaded from Excel via import) ----------
 function loadOptionOverrides() {
@@ -21,6 +22,19 @@ function getFieldOptions(field) {
 }
 function resetOptionOverrides() {
   localStorage.removeItem(OPTIONS_KEY);
+}
+
+// ---------- Anthropic API key (for Process Survey) ----------
+function getAnthropicKey() { return localStorage.getItem(ANTHROPIC_KEY_STORAGE) || ''; }
+function setAnthropicKey(k) {
+  if (k) localStorage.setItem(ANTHROPIC_KEY_STORAGE, k);
+  else localStorage.removeItem(ANTHROPIC_KEY_STORAGE);
+}
+function updateAnthropicKeyStatus() {
+  const s = $('#anthropic-key-status');
+  if (!s) return;
+  const k = getAnthropicKey();
+  s.textContent = k ? 'Key set (' + k.slice(0, 14) + '…)' : 'No key set';
 }
 
 function newPropertyId() {
@@ -128,7 +142,7 @@ function openProperty(id) {
   if (typeof startAutoSync === 'function') startAutoSync();
 }
 function closeProperty() {
-  // Stop auto-sync and release our editor lock so teammates don't see a stale
+  // Stop auto-sync and release our editor lock so teammates do not see a stale
   // heartbeat. Fire-and-forget on the lock release; the heartbeat goes stale
   // (>2.5 min) anyway, so an inflight failure here is harmless.
   if (typeof stopAutoSync === 'function') stopAutoSync();
@@ -359,7 +373,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
       if (inp) inp.setAttribute('data-key', f.key);
 
       // Group consecutive same-show_if fields into an indented expansion-group container,
-      // but ONLY when 2+ fields share the same show_if (single-field conditionals don't need a toggle).
+      // but ONLY when 2+ fields share the same show_if (single-field conditionals do not need a toggle).
       if (f.show_if) {
         // Look back + ahead: is this field part of a multi-field run with the same expression?
         const fi = sec.fields.indexOf(f);
@@ -452,6 +466,11 @@ function renderExpandCollapseBar() {
 function renderPhase1() {
   const root = el('div');
   root.appendChild(renderExpandCollapseBar());
+  root.appendChild(el('button', {
+    type: 'button', class: 'um-btn secondary',
+    style: 'width:100%;margin-bottom:12px;font-size:14px;padding:10px 14px;text-align:center;font-weight:600',
+    onClick: () => pullBasicsAndUnitsFromDrive(),
+  }, '☁ Import Basics + Units from GDrive'));
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units & Area" schema section so the
@@ -504,7 +523,7 @@ function removeUnitRow(i) {
 // Sums from the unit mix populate the mf_units and mf_rsf fields in the
 // "Units & Area" schema section, plus the computed overall_rsf. Triggered
 // on every unit mix change (add/remove/edit/import). Empty rows are
-// ignored so they don't clobber a user's manual entries.
+// ignored so they do not clobber a user's manual entries.
 function syncUnitMixSumsToPhase1() {
   if (!STATE || !STATE.phase1) return;
   const rows = getUnitMix();
@@ -512,7 +531,7 @@ function syncUnitMixSumsToPhase1() {
   const totalRSF = rows.reduce((s, r) => s + (Number(r.count) || 0) * (Number(r.sqft) || 0), 0);
   if (totalUnits > 0) STATE.phase1.mf_units = totalUnits;
   if (totalRSF > 0)   STATE.phase1.mf_rsf   = totalRSF;
-  // Reflect the new values in the visible inputs (no-op if Phase 1 isn't on screen).
+  // Reflect the new values in the visible inputs (no-op if Phase 1 is not on screen).
   const setVal = (key, val) => {
     const inp = document.querySelector(`[data-key="${key}"]`);
     if (inp) inp.value = val ? val : '';
@@ -579,8 +598,8 @@ function renderUnitMix() {
     // Guidance for proforma extraction.
     body.appendChild(el('div', { class: 'um-note' },
       el('strong', {}, 'Importing the unit mix: '),
-      el('strong', {}, '☁ Pull from Drive'),
-      ' finds the latest “Full AI UW” file in this deal’s 2. UW-Analysis folder (you confirm it first), or use ',
+      el('strong', {}, '☁ Import > GDrive'),
+      ' finds the latest “Full AI UW” (or “Init UW” fallback) in the 2. UW-Analysis folder (you confirm it first), or use ',
       el('strong', {}, '⬆ Upload'),
       ' to pick a file manually. Either way it reads the ',
       el('strong', {}, 'RR (rent roll) tab'),
@@ -717,12 +736,12 @@ function removeSurveyBuilding(i) {
 
 function renderSurveyBlock() {
   ensureSurveyState();
-  // Start collapsed by default — most users don't need to see the per-building
-  // breakdown unless they're importing a survey.
+  // Start collapsed by default — most users do not need to see the per-building
+  // breakdown unless they are importing a survey.
   const section = el('section', { class: 'section collapsed' });
   section.appendChild(el('header', { class: 'section-header',
     onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-    el('span', {}, 'Per-Building Survey Breakdown'),
+    el('span', {}, 'Site Survey Breakdown'),
     el('span', { class: 'chev' }, '▼')
   ));
   const body = el('div', { class: 'section-body' });
@@ -767,7 +786,7 @@ function renderSurveyBlock() {
       el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
         onClick: () => fileInput.click() }, '⬆ Upload XLSX'),
       el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => toast('Coming in Push 2 — for now, run the survey-breakdown-specs skill in Claude, then click Import Survey.', 'success') }, '🛰 Process Survey'),
+        onClick: () => processSurveyWithClaude(rebuild) }, '🛰 Process Survey'),
       fileInput
     );
     body.appendChild(actions);
@@ -778,7 +797,7 @@ function renderSurveyBlock() {
       el('strong', {}, 'Populating these fields: '),
       'click ', el('strong', {}, '📥 Import Survey'), ' to load the latest ',
       el('em', {}, '*_SurveyBreakdownSpecs_*.xlsx'),
-      ' from this deal’s ', el('em', {}, '7. Title_Survey/Reports/'),
+      ' from the deal folder: ', el('em', {}, '7. Title_Survey/Reports/'),
       ' folder, or ', el('strong', {}, '⬆ Upload XLSX'),
       ' to pick a file manually. Each import overwrites the flat fields above ',
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
@@ -935,7 +954,7 @@ function parseSurveyXlsx(wb) {
 
   const flat = {};
   const buildings = [];
-  let currentSection = null;   // '7' | '8' | '9' — which item we're inside
+  let currentSection = null;   // '7' | '8' | '9' — which item we are inside
   let bldIdx = 0;
   const notes = [];
   const discrepancies = [];
@@ -1076,7 +1095,7 @@ async function importSurveyFromFile(file, rebuild) {
   }
 }
 
-// Find and import the latest *_SurveyBreakdownSpecs_*.xlsx from this deal's
+// Find and import the latest *_SurveyBreakdownSpecs_*.xlsx from this deal
 // 7. Title_Survey/Reports/ folder (with legacy SurveyLayoutSpecs fallback).
 async function importSurveyFromDrive(rebuild) {
   if (!STATE) return;
@@ -1141,6 +1160,231 @@ async function importSurveyFromDrive(rebuild) {
     toast(`Survey imported from ${chosen.name} — ${summary}`, 'success');
   } catch (e) {
     toast('Survey import failed: ' + e.message, 'error');
+  }
+}
+
+// ---------- Process Survey with Claude AI ----------
+// Searches the deal folder for a survey PDF, downloads it, sends it to the
+// Anthropic API as a base64 document block, and applies the parsed results via
+// applySurveyParsedData(). Requires an Anthropic API key stored in localStorage.
+// Uses anthropic-dangerous-direct-browser-access:true to allow direct browser calls.
+
+// Find the best survey PDF in the deal folder.
+// Checks 7. Title_Survey (priority 5) and 1. Offering Materials (priority 0)
+// with one level of subfolder recursion. ALTA files score +10.
+async function findSurveyPdfInDrive() {
+  if (!STATE || !STATE.drive.folderId) return null;
+  const topSubs = await listSubfolders(STATE.drive.folderId);
+
+  const candidates = [];
+  const scoredFile = (f, base) => ({
+    ...f,
+    _priority: base + (/alta/i.test(f.name) ? 10 : 0),
+  });
+
+  async function scanFolder(folderId, basePriority) {
+    const files = await driveListFilesInFolder(folderId);
+    for (const f of files) {
+      if (/\.pdf$/i.test(f.name) && /survey|alta/i.test(f.name)) {
+        candidates.push(scoredFile(f, basePriority));
+      }
+    }
+    const subs = await listSubfolders(folderId);
+    for (const sf of subs) {
+      const sfFiles = await driveListFilesInFolder(sf.id);
+      for (const f of sfFiles) {
+        if (/\.pdf$/i.test(f.name) && /survey|alta/i.test(f.name)) {
+          candidates.push(scoredFile(f, basePriority));
+        }
+      }
+    }
+  }
+
+  const ts = topSubs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
+          || topSubs.find(f => /title[\s_\-]*survey/i.test(f.name));
+  const om = topSubs.find(f => /^\s*1\.?\s*offering/i.test(f.name))
+          || topSubs.find(f => /offering\s*materials?/i.test(f.name));
+
+  if (ts) await scanFolder(ts.id, 5);
+  if (om) await scanFolder(om.id, 0);
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) =>
+    b._priority !== a._priority
+      ? b._priority - a._priority
+      : (b.modifiedTime || '').localeCompare(a.modifiedTime || '')
+  );
+
+  // Confirm walk — same UX as Import Survey and proforma import.
+  const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const remaining = candidates.length - i - 1;
+    const ok = confirm(
+      `Process this survey PDF with Claude AI?\n\n📄 ${c.name}\nModified: ${fmtD(c.modifiedTime)}` +
+      (remaining > 0
+        ? `\n\n[OK = use this · Cancel = see next (${remaining} more)]`
+        : '\n\n[OK = use this · Cancel = abort]')
+    );
+    if (ok) return c;
+    if (remaining === 0) return null;
+  }
+  return null;
+}
+
+// Call the Anthropic Messages API with the survey PDF as a base64 document block.
+// Returns a parsed object matching the shape expected by applySurveyParsedData().
+async function callClaudeWithSurveyPdf(apiKey, pdfBase64, filename) {
+  const system = `You are a real estate survey analyst. Extract physical site specs from the survey PDF and return a JSON object. Return ONLY the raw JSON — no markdown fences, no explanation.
+
+JSON schema:
+{
+  "flat": {
+    "parking_regular": number|null,
+    "parking_spots_hc": number|null,
+    "parking_spots_existing": number|null,
+    "land_sf": number|null,
+    "land_acres": number|null,
+    "site_perimeter_lf": number|null,
+    "fencing_notes": "string or n/a",
+    "gates_notes": "string or n/a",
+    "parking_lot_sf": number|null,
+    "num_buildings": number|null,
+    "total_footprint_sf": number|null,
+    "total_roof_sf": number|null,
+    "total_facade_sf": number|null,
+    "landscaping_sf": number|null
+  },
+  "buildings": [
+    {
+      "label": "string",
+      "footprint_sf": number|null,
+      "stories": number|null,
+      "height_ft": number|null,
+      "roof_pitch": "e.g. 4:12 or flat",
+      "roof_sf": number|null,
+      "facade_sf": number|null
+    }
+  ],
+  "meta": {
+    "property_name": "string",
+    "survey_date": "YYYY-MM-DD",
+    "address": "string",
+    "scale_paper": "e.g. 1 inch = 30 feet",
+    "ft_per_pixel": number|null
+  },
+  "notes": "any cross-reference notes as a single string",
+  "discrepancies": ["array of discrepancy strings"]
+}
+
+Rules:
+- Use null (not 0, not empty string) for any value you cannot determine.
+- fencing_notes / gates_notes: use "n/a" if the survey shows none.
+- parking_spots_existing = regular + HC total.
+- total_footprint_sf = sum of all buildings footprint_sf.
+- total_roof_sf = sum of all buildings roof_sf.
+- total_facade_sf = sum of all buildings facade_sf.
+- landscaping_sf ≈ land_sf − total_footprint_sf − parking_lot_sf.
+- roof_sf per building = footprint_sf multiplied by pitch factor: flat=1.02, 3:12=1.031, 4:12=1.054, 5:12=1.083, 6:12=1.118, 8:12=1.202.
+- List each building separately in the buildings array.
+- Extract the graphic scale bar or stated paper scale to populate meta fields.`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-8',
+      max_tokens: 4096,
+      system,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+          { type: 'text', text: `Extract all site specs from this survey file ("${filename}") and return the JSON object.` },
+        ],
+      }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Anthropic ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const data = await resp.json();
+  const text = (data.content && data.content[0] && data.content[0].text) || '';
+  if (!text) throw new Error('Empty response from Claude');
+
+  // Strip optional markdown code fences then parse.
+  const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const m = clean.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error('Could not parse JSON from Claude response — check the browser console');
+  }
+}
+
+// Main entry point for the 🛰 Process Survey button.
+async function processSurveyWithClaude(rebuild) {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) {
+    toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error');
+    return;
+  }
+
+  let apiKey = getAnthropicKey();
+  if (!apiKey) {
+    const entered = prompt(
+      'Enter your Anthropic API key to process surveys with Claude AI.\n\n' +
+      'The key will be stored in this browser\'s localStorage only.\n' +
+      'Get one at console.anthropic.com → API Keys.',
+      'sk-ant-...'
+    );
+    if (!entered || !entered.trim()) return;
+    const trimmed = entered.trim();
+    if (!trimmed.startsWith('sk-ant-')) {
+      toast('API key must start with sk-ant-', 'error');
+      return;
+    }
+    setAnthropicKey(trimmed);
+    updateAnthropicKeyStatus();
+    apiKey = trimmed;
+  }
+
+  try {
+    toast('Searching for survey PDF in Drive…');
+    const pdfFile = await findSurveyPdfInDrive();
+    if (!pdfFile) {
+      toast('No survey PDF found in 7. Title_Survey or 1. Offering Materials.', 'error');
+      return;
+    }
+
+    toast('Downloading survey PDF…');
+    const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${pdfFile.id}?alt=media`);
+    const buf = await r.arrayBuffer();
+    const b64 = arrayBufferToBase64(buf);
+
+    toast('Sending to Claude AI — this may take 1–3 minutes…');
+    const parsed = await callClaudeWithSurveyPdf(apiKey, b64, pdfFile.name);
+
+    const summary = applySurveyParsedData(parsed, pdfFile.name);
+    if (rebuild) rebuild();
+    renderShell();
+    toast(`Survey processed by AI — ${summary}`, 'success');
+  } catch (e) {
+    if (/401|invalid.*key|auth/i.test(e.message)) {
+      toast('API key rejected — update it via ☰ → Set Anthropic API Key.', 'error');
+    } else {
+      toast('Survey processing failed: ' + e.message, 'error');
+    }
+    console.error('processSurveyWithClaude:', e);
   }
 }
 
@@ -1429,95 +1673,76 @@ async function driveListFilesInFolder(folderId) {
   return all;
 }
 
+// Shared helper: locate and confirm a proforma file in this property 2. UW-Analysis
+// folder. Tries “Full AI UW” first; falls back to “Init UW” if no match found.
+// Returns the chosen file object or null if nothing found / user aborted.
+async function _findProformaInUWFolder(actionLabel) {
+  if (!STATE || !STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return null; }
+  const subs = await listSubfolders(STATE.drive.folderId);
+  const uw = subs.find(f => /uw[\s\-_.]*analysis/i.test(f.name))
+          || subs.find(f => /uw/i.test(f.name) && /analy/i.test(f.name));
+  if (!uw) { toast('No “2. UW-Analysis” folder found in the deal folder.', 'error'); return null; }
+
+  const files = await driveListFilesInFolder(uw.id);
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isSheet = (f) => /\.xlsx?$/i.test(f.name) ||
+    f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
+    f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+  let matches = files.filter(f => norm(f.name).includes(norm('Full AI UW')) && isSheet(f));
+  if (!matches.length) {
+    // Fallback: look for an “Init UW” file (early-stage deals may not have a Full AI UW yet).
+    matches = files.filter(f => norm(f.name).includes(norm('Init UW')) && isSheet(f));
+    if (!matches.length) { toast('No “Full AI UW” or “Init UW” spreadsheet found in 2. UW-Analysis.', 'error'); return null; }
+  }
+
+  const extractVersion = (name) => { const m = String(name||'').match(/[vV](\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : -1; };
+  matches.sort((a, b) => { const vd = extractVersion(b.name) - extractVersion(a.name); return vd !== 0 ? vd : (b.modifiedTime||'').localeCompare(a.modifiedTime||''); });
+  const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+  const labelFor = (mf) => { const v = extractVersion(mf.name); return v >= 0 ? `v${v}` : '(no version tag)'; };
+
+  const topVersion = extractVersion(matches[0].name);
+  const tiedAtTop = matches.filter(m => extractVersion(m.name) === topVersion);
+
+  if (tiedAtTop.length > 1) {
+    const vl = topVersion >= 0 ? `v${topVersion}` : '(no version tag)';
+    const msg = `Multiple proforma files share the highest version (${vl}).\nPick one:\n\n` +
+      tiedAtTop.map((c, i) => `${i + 1}. ${c.name}\n   Modified: ${fmtD(c.modifiedTime)}`).join('\n\n') +
+      `\n\nEnter 1-${tiedAtTop.length} (or blank to cancel):`;
+    const pick = prompt(msg, '1');
+    const idx = parseInt(pick, 10);
+    if (!idx || idx < 1 || idx > tiedAtTop.length) return null;
+    return tiedAtTop[idx - 1];
+  } else {
+    for (let idx = 0; idx < matches.length; idx++) {
+      const candidate = matches[idx];
+      const remaining = matches.length - idx - 1;
+      const nextHint = remaining > 0
+        ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
+        : `\n\n[OK = use this · Cancel = abort (no more candidates)]`;
+      const ok = confirm(
+        `${actionLabel || 'Import from this proforma?'}\n\n` +
+        `📄 ${candidate.name}\n` +
+        `Version:  ${labelFor(candidate)}\n` +
+        `Created:  ${fmtD(candidate.createdTime)}\n` +
+        `Modified: ${fmtD(candidate.modifiedTime)}` + nextHint
+      );
+      if (ok) return candidate;
+      if (remaining === 0) return null;
+    }
+    return null;
+  }
+}
+
 // Pull the proforma straight from the linked deal folder: find 2. UW-Analysis →
-// the latest "Full AI UW" workbook, confirm it (with created/modified dates), then import.
+// the latest “Full AI UW” (or “Init UW”) workbook, confirm it, then import unit mix.
 async function pullProformaFromDrive(rebuild) {
   if (!STATE) return;
-  if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { toast('Connect Google Drive first', 'error'); return; }
   try {
     toast('Finding the proforma in Drive…');
-    // 1) Locate the "2. UW-Analysis" subfolder of the deal folder.
-    const subs = await listSubfolders(STATE.drive.folderId);
-    const uw = subs.find(f => /uw[\s\-_.]*analysis/i.test(f.name))
-            || subs.find(f => /uw/i.test(f.name) && /analy/i.test(f.name));
-    if (!uw) { toast('No “2. UW-Analysis” folder found in the deal folder.', 'error'); return; }
-
-    // 2) Files with "Full AI UW" in the name (xlsx or Google Sheet).
-    const files = await driveListFilesInFolder(uw.id);
-    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const needle = norm('Full AI UW');
-    const matches = files.filter(f =>
-      norm(f.name).includes(needle) &&
-      (/\.xlsx?$/i.test(f.name) ||
-       f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
-       f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    );
-    if (!matches.length) { toast('No “Full AI UW” spreadsheet found in 2. UW-Analysis.', 'error'); return; }
-
-    // 3) Sort by version number desc (v3.5 > v3 > v2.5 > v2 > v1), with
-    //    modifiedTime as a tiebreaker for files without a version tag.
-    const extractVersion = (name) => {
-      const m = String(name || '').match(/[vV](\d+(?:\.\d+)?)/);
-      return m ? parseFloat(m[1]) : -1;
-    };
-    matches.sort((a, b) => {
-      const vDiff = extractVersion(b.name) - extractVersion(a.name);
-      if (vDiff !== 0) return vDiff;
-      return (b.modifiedTime || '').localeCompare(a.modifiedTime || '');
-    });
-    const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
-    const labelFor = (mf) => {
-      const v = extractVersion(mf.name);
-      return v >= 0 ? `v${v}` : `(no version tag)`;
-    };
-
-    // Detect a tie at the top: multiple files share the highest version number.
-    // When that happens, the version-only sort isn't decisive (modifiedTime
-    // tiebreaker is arbitrary), so let the user pick from a numbered list.
-    const topVersion = extractVersion(matches[0].name);
-    const tiedAtTop = matches.filter(m => extractVersion(m.name) === topVersion);
-
-    let f = null;
-    if (tiedAtTop.length > 1) {
-      const versionLabel = topVersion >= 0 ? `v${topVersion}` : '(no version tag)';
-      const msg =
-        `Multiple proforma files share the highest version (${versionLabel}).\n` +
-        `Pick one:\n\n` +
-        tiedAtTop.map((c, i) =>
-          `${i + 1}. ${c.name}\n` +
-          `   Modified: ${fmtD(c.modifiedTime)}`
-        ).join('\n\n') +
-        `\n\nEnter 1-${tiedAtTop.length} (or blank to cancel):`;
-      const pick = prompt(msg, '1');
-      const idx = parseInt(pick, 10);
-      if (!idx || idx < 1 || idx > tiedAtTop.length) return;
-      f = tiedAtTop[idx - 1];
-    } else {
-      // Unique highest version — confirm it, with OK/Cancel walk through the
-      // rest of the sorted list as a fallback if the user rejects.
-      for (let idx = 0; idx < matches.length; idx++) {
-        const candidate = matches[idx];
-        const remaining = matches.length - idx - 1;
-        const nextHint = remaining > 0
-          ? `\n\n[OK = use this · Cancel = see next best (${remaining} more)]`
-          : `\n\n[OK = use this · Cancel = abort (no more candidates)]`;
-        const ok = confirm(
-          `Import unit mix from this proforma?\n\n` +
-          `📄 ${candidate.name}\n` +
-          `Version:  ${labelFor(candidate)}\n` +
-          `Created:  ${fmtD(candidate.createdTime)}\n` +
-          `Modified: ${fmtD(candidate.modifiedTime)}` +
-          nextHint
-        );
-        if (ok) { f = candidate; break; }
-        // Cancelled: if no more candidates, abort entirely.
-        if (remaining === 0) return;
-      }
-      if (!f) return;
-    }
-
-    // 4) Download (export if it's a native Google Sheet) and parse.
+    const f = await _findProformaInUWFolder('Import unit mix from this proforma?');
+    if (!f) return;
     toast('Downloading proforma…');
     const isGSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
     const url = isGSheet
@@ -1530,11 +1755,139 @@ async function pullProformaFromDrive(rebuild) {
     if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
     STATE.unitMix = out;
+    syncUnitMixSumsToPhase1();
     saveState();
     rebuild();
     toast(`Imported ${out.length} unit row(s) from ${f.name}`, 'success');
   } catch (e) {
     toast('Proforma pull failed: ' + e.message, 'error');
+  }
+}
+
+// Parse identity + area fields from the “Dash” sheet of a SHIR proforma workbook.
+// Cell references: E6=address, E7=city/state/zip, E9=year_built, E12=commercial_rsf,
+// E13=common_sf, E17=property_type, E18=occupancy.
+function parseDashSheet(wb) {
+  const sheetName = wb.SheetNames.find(n => /^dash$/i.test(n));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  if (!ws) return null;
+
+  const cv = (addr) => {
+    const c = ws[addr];
+    if (!c) return '';
+    return c.w !== undefined ? String(c.w).trim() : (c.v !== undefined ? String(c.v).trim() : '');
+  };
+  const nv = (addr) => {
+    const v = cv(addr);
+    if (v === '') return '';
+    const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isFinite(n) ? n : '';
+  };
+
+  const result = {};
+
+  const addr = cv('E6');
+  if (addr) result.mailing_address = addr;
+
+  // E7: “Dallas, TX 75001” → city + state + zip
+  const csz = cv('E7');
+  if (csz) {
+    const m = csz.match(/^(.*?),?\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\s*$/);
+    if (m) {
+      result.city = m[1].trim();
+      result.state = m[2];
+      result.zip = m[3];
+    } else {
+      const stM = csz.match(/\b([A-Z]{2})\b/);
+      const zipM = csz.match(/\b(\d{5})\b/);
+      const cityPart = csz.replace(/\b[A-Z]{2}\b/, '').replace(/\b\d{5}(?:-\d{4})?\b/, '').replace(/[,\s]+$/, '').trim();
+      if (cityPart) result.city = cityPart;
+      if (stM) result.state = stM[1];
+      if (zipM) result.zip = zipM[1];
+    }
+  }
+
+  const yb = nv('E9');
+  if (yb !== '') result.year_built = yb;
+
+  const commRsf = nv('E12');
+  if (commRsf !== '') result.commercial_rsf = commRsf;
+
+  const commonSf = nv('E13');
+  if (commonSf !== '') result.common_sf = commonSf;
+
+  const propType = cv('E17');
+  if (propType) {
+    const pt = propType.toUpperCase().replace(/[\s\-_]/g, '');
+    if (pt.includes('EXSTAY') || pt.includes('EXTENDEDSTAY')) result.property_type = 'EXSTAY';
+    else if (pt.includes('MFVA') || pt.includes('MULTIFAMILY') || pt.includes('MF')) result.property_type = 'MFVA';
+    else result.property_type = propType;
+  }
+
+  // E18: occupancy — may be stored as 0.85 or “85%” in the cell
+  const occRaw = cv('E18');
+  if (occRaw !== '') {
+    let occ = parseFloat(String(occRaw).replace(/[^0-9.]/g, ''));
+    if (isFinite(occ)) {
+      if (occ > 1) occ = occ / 100;
+      result.current_occupancy = Math.round(occ * 10000) / 10000;
+    }
+  }
+
+  return Object.keys(result).length ? result : null;
+}
+
+// Import identity fields from the Dash sheet AND unit mix from the RR tab in one shot.
+async function pullBasicsAndUnitsFromDrive() {
+  if (!STATE) return;
+  if (!GOOGLE_CLIENT_ID) { toast('Connect Google Drive first', 'error'); return; }
+  try {
+    toast('Finding the proforma in Drive…');
+    const f = await _findProformaInUWFolder('Import Basics + Units from this proforma?');
+    if (!f) return;
+    toast('Downloading proforma…');
+    const isGSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
+    const url = isGSheet
+      ? `https://www.googleapis.com/drive/v3/files/${f.id}/export?mimeType=${encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}`
+      : `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`;
+    const r = await driveFetch(url);
+    const buf = await r.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+
+    const filled = [];
+    const FIELD_LABELS = {
+      mailing_address: 'Mailing Address', city: 'City', state: 'State', zip: 'ZIP',
+      year_built: 'Year Built', property_type: 'Property Type',
+      current_occupancy: 'Occupancy', commercial_rsf: 'Commercial RSF', common_sf: 'Common SF',
+    };
+
+    // Apply Dash sheet basics
+    const basics = parseDashSheet(wb);
+    if (basics) {
+      Object.assign(STATE.phase1, basics);
+      for (const k of Object.keys(basics)) {
+        if (basics[k] !== '' && basics[k] != null) filled.push(FIELD_LABELS[k] || k);
+      }
+    }
+
+    // Apply unit mix from RR tab
+    const umOut = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+    if (umOut && umOut.length) {
+      const existingCount = getUnitMix().length;
+      if (!existingCount || confirm(`Replace the current ${existingCount} unit type(s) with ${umOut.length} from ${f.name}?`)) {
+        STATE.unitMix = umOut;
+        syncUnitMixSumsToPhase1();
+        filled.push(`${umOut.length} unit type${umOut.length === 1 ? '' : 's'}`);
+      }
+    }
+
+    if (!filled.length) { toast('Nothing could be extracted from the Dash or RR tab in this file.', 'error'); return; }
+    saveState();
+    renderShell();
+    toast(`Imported from ${f.name}: ${filled.join(', ')}`, 'success');
+  } catch (e) {
+    toast('Basics import failed: ' + e.message, 'error');
   }
 }
 
@@ -1635,7 +1988,7 @@ function renderPhase2() {
         secBody.appendChild(itemLabel);
       });
       // Bulk Select all / Clear buttons for this subsection. stopPropagation
-      // so clicking them doesn't also collapse the section via the header.
+      // so clicking them does not also collapse the section via the header.
       const bulkBtnStyle = 'padding:3px 8px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.92);color:#0f172a;border:1px solid rgba(0,0,0,0.18);border-radius:4px;cursor:pointer;white-space:nowrap;text-transform:none;letter-spacing:0';
       const bulkSet = (value) => {
         sec.items.forEach((_, ii) => {
@@ -1719,7 +2072,7 @@ function removeCapexGroup(id) {
   const idx = arr.findIndex(g => g.id === id);
   if (idx < 0) return;
   arr.splice(idx, 1);
-  // Clear any phase3 rows that referenced this group so they don't dangle.
+  // Clear any phase3 rows that referenced this group so they do not dangle.
   Object.values(STATE.phase3 || {}).forEach(v => {
     if (v && v.pct_group_id === id) v.pct_group_id = '';
   });
@@ -1841,7 +2194,7 @@ function renderPhase3() {
 
   if (countChecked() === 0) {
     root.appendChild(el('div', { class: 'home-empty' },
-      'No items selected yet. Check items on the Questionnaire tab and they’ll appear here for pricing.'));
+      'No items selected yet. Check items on the Questionnaire tab and they will appear here for pricing.'));
     return root;
   }
 
@@ -1965,7 +2318,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   // Col 4: Qty Type
   // If the schema carries a default_qty_type for this item (from column G of
-  // Capex_Builder_Line_Items_Control.xlsx) and the user hasn't picked one yet,
+  // Capex_Builder_Line_Items_Control.xlsx) and the user has not picked one yet,
   // pre-select the default. Users can still override to anything in the list,
   // and selecting "—" effectively means "fall back to the default on next render."
   const effectiveUT = v.unit_type || item.default_qty_type || '';
@@ -2142,7 +2495,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
     style: 'flex:1;min-width:140px;padding:6px 8px;font-size:13px;font-weight:600;border:1px solid #cbd5e1;border-radius:4px',
   });
   nameInp.value = grp.name || '';
-  // Auto-save name keystrokes so users don't lose work; the % dropdowns and
+  // Auto-save name keystrokes so users do not lose work; the % dropdowns and
   // Add Item selector also live-update from the latest name.
   nameInp.addEventListener('input', () => {
     updateCapexGroup(grp.id, { name: nameInp.value });
@@ -2341,7 +2694,7 @@ function renderPhase4() {
     el('div', { style: 'font-size:14px;color:#0f172a;line-height:1.5' },
       el('strong', {}, 'Capex line items are entered in the exported Excel.'),
       el('div', { style: 'margin-top:6px;color:#475569' },
-        'Tap Export below. You’ll get a workbook with three sheets: Property Basics, Physical, and a full Capex Budget template. ' +
+        'Tap Export below. You will get a workbook with three sheets: Property Basics, Physical, and a full Capex Budget template. ' +
         'In the Capex Budget sheet, fill in # Items and $/Item for the relevant rows. Section subtotals, group totals, contingency, mgmt fee, and grand total all recalculate live in Excel.'
       )
     )
@@ -2550,7 +2903,7 @@ async function exportXlsx() {
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
   if (!STATE || !STATE.drive.folderId) {
-    // No linked folder — fall back to local download so the user isn't stuck.
+    // No linked folder — fall back to local download so the user is not stuck.
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;
@@ -2637,8 +2990,8 @@ function renderOnboardingCard() {
 
   card.appendChild(el('h2', {}, '👋 Welcome to Capex Builder'));
   card.appendChild(el('p', {},
-    'Capture tour notes, sync to the deal’s Google Drive folder, and hand off to Excel ' +
-    'when you’re ready to finalize the budget.'
+    'Capture tour notes, sync to the deal Google Drive folder, and hand off to Excel ' +
+    'when you are ready to finalize the budget.'
   ));
 
   const steps = el('ol', { class: 'onboarding-steps' });
@@ -2655,21 +3008,21 @@ function renderOnboardingCard() {
     el('span', { class: 'onb-sync-icon' }, '💾'),
     el('span', {},
       el('strong', {}, 'Save'),
-      ' stores your work on this device only (your browser). It does NOT upload to Google Drive — it’s just a quick local save so you don’t lose progress between sessions on this device.'
+      ' stores your work on this device only (your browser). It does NOT upload to Google Drive — it is just a quick local save so you do not lose progress between sessions on this device.'
     )
   ));
   sync.appendChild(el('div', { class: 'onb-sync-row' },
     el('span', { class: 'onb-sync-icon' }, '⬆'),
     el('span', {},
       el('strong', {}, 'Push to Drive'),
-      ' saves your data to the deal’s Google Drive folder (25. Capex / Capex Builder Budget) for long-term, team-shared storage. Do this whenever you finish a round of edits.'
+      ' saves your data to the deal Google Drive folder (25. Capex / Capex Builder Budget) for long-term, team-shared storage. Do this whenever you finish a round of edits.'
     )
   ));
   sync.appendChild(el('div', { class: 'onb-sync-row' },
     el('span', { class: 'onb-sync-icon' }, '⬇'),
     el('span', {},
       el('strong', {}, 'Pull from Drive'),
-      ' loads the latest saved copy back into the app so you — or a teammate on another device — can review and keep editing. Pull before you start, push when you’re done.'
+      ' loads the latest saved copy back into the app so you — or a teammate on another device — can review and keep editing. Pull before you start, push when you are done.'
     )
   ));
   card.appendChild(sync);
@@ -3093,8 +3446,32 @@ function bindShell() {
       toast('Options reset', 'success');
     }
   });
+  $('#btn-set-anthropic-key').addEventListener('click', () => {
+    const cur = getAnthropicKey();
+    const entered = prompt(
+      'Anthropic API key (stored in localStorage only).\n' +
+      'Leave blank to clear the stored key.\n\n' +
+      'Get one at console.anthropic.com → API Keys.',
+      cur || ''
+    );
+    if (entered === null) return;
+    const trimmed = entered.trim();
+    if (!trimmed) {
+      setAnthropicKey('');
+      updateAnthropicKeyStatus();
+      toast('API key cleared');
+    } else if (!trimmed.startsWith('sk-ant-')) {
+      toast('Key must start with sk-ant-', 'error');
+    } else {
+      setAnthropicKey(trimmed);
+      updateAnthropicKeyStatus();
+      toast('API key saved', 'success');
+    }
+    closeDrawer();
+  });
   updateDriveStatus();
   updateOptionsStatus();
+  updateAnthropicKeyStatus();
 }
 
 function updateOptionsStatus() {
@@ -3538,7 +3915,7 @@ async function pullFromDrive() {
     Object.assign(STATE, remote.data);
     STATE.id = keep.id;
     STATE.drive = { ...keep.drive, fileId: remote.id, lastPulled: new Date().toISOString(), remoteModifiedTime: remote.modifiedTime, lastPushed: new Date().toISOString() };
-    // After pulling, local matches remote — mark pushed time so it's not flagged dirty.
+    // After pulling, local matches remote — mark pushed time so it is not flagged dirty.
     STATE.updated = remote.modifiedTime || STATE.updated;
     saveState();
     renderShell();
@@ -3560,7 +3937,7 @@ async function pullFromDrive() {
 // presence info ({lastModified, lastEditor, currentEditor, heartbeatAt}).
 
 // THE shared org-wide sync folder (provided by user 2026-06-07). All teammates
-// must point at this same folder ID. Hardcoded so there's no per-machine setup.
+// must point at this same folder ID. Hardcoded so there is no per-machine setup.
 const SYNC_FOLDER_ID = '1yUJKGpeDfzepdV-BjRwmPHe210dK4lDw';
 const MANIFEST_FILENAME = 'capex_builder_manifest.json';
 const MANIFEST_FILE_ID_KEY = 'capex_manifest_file_id';
@@ -3681,7 +4058,7 @@ function buildManifestEntry({ asEditor }) {
   };
 }
 
-// Open a property that's in the manifest but not yet on this device:
+// Open a property that is in the manifest but not yet on this device:
 // resolve the deal folder, download capex_builder.json from
 // <deal>/25. Capex/Capex Builder Budget/, then open it locally.
 async function openRemoteProperty(entry) {
@@ -3741,7 +4118,7 @@ async function syncTick() {
   if (!CURRENT_USER) {
     try { await fetchCurrentUser(); } catch { return; }
   }
-  if (!STATE.drive.folderId) return; // can't sync property data without a deal folder
+  if (!STATE.drive.folderId) return; // cannot sync property data without a deal folder
   try {
     // 1. Push local changes if dirty.
     const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
