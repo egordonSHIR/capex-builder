@@ -3600,10 +3600,21 @@ async function driveConnect() {
   try {
     await driveRequestToken({ silent: false });
     updateDriveStatus();
-    toast('Drive connected', 'success');
     // Fetch the signed-in user's identity so the manifest can record edits as
-    // theirs, then load the org-wide index in the background.
-    try { await fetchCurrentUser({ force: true }); } catch (e) { console.warn('fetchCurrentUser failed', e); }
+    // theirs, then load the org-wide index in the background. This also enforces
+    // the company-domain allowlist — an unauthorized account is disconnected here.
+    try {
+      await fetchCurrentUser({ force: true });
+    } catch (e) {
+      if (e && e.code === 'ACCESS_DENIED') {
+        updateDriveStatus();
+        toast('Access denied', 'error');
+        alert(e.message);
+        return;
+      }
+      console.warn('fetchCurrentUser failed', e);
+    }
+    toast('Drive connected', 'success');
     if (CURRENT_VIEW === 'home') refreshHomeIndex().catch(() => {});
     else if (CURRENT_VIEW === 'property') startAutoSync();
   } catch (e) {
@@ -3957,11 +3968,46 @@ try {
   if (cached) CURRENT_USER = JSON.parse(cached);
 } catch {}
 
+// Access is restricted to SHIR Capital and affiliated domains. The Google OAuth
+// consent screen ("Internal" user type) already limits sign-in to our Workspace,
+// but we enforce the same allowlist here as defense-in-depth so a misconfigured
+// consent screen can never grant access to an outside Google account.
+const ALLOWED_EMAIL_DOMAINS = [
+  'shircapital.com',
+  'pghnexus.com',
+  'signaturenexus.com',
+  'avasconstruction.com',
+];
+function isAllowedEmail(email) {
+  if (!email || email.indexOf('@') < 0) return false;
+  const domain = email.split('@').pop().trim().toLowerCase();
+  return ALLOWED_EMAIL_DOMAINS.includes(domain);
+}
+async function revokeDriveAccess() {
+  const tok = localStorage.getItem(DRIVE_TOKEN_KEY);
+  clearDriveToken();
+  CURRENT_USER = null;
+  try { localStorage.removeItem(CURRENT_USER_KEY); } catch {}
+  if (tok && window.google && google.accounts && google.accounts.oauth2) {
+    try { google.accounts.oauth2.revoke(tok); } catch {}
+  }
+  updateDriveStatus();
+}
+
 async function fetchCurrentUser({ force = false } = {}) {
   if (CURRENT_USER && !force) return CURRENT_USER;
   const r = await driveFetch('https://www.googleapis.com/drive/v3/about?fields=user');
   const j = await r.json();
   if (!j.user || !j.user.emailAddress) throw new Error('Could not read Drive user identity');
+  if (!isAllowedEmail(j.user.emailAddress)) {
+    await revokeDriveAccess();
+    const err = new Error(
+      'Access is restricted to SHIR Capital and affiliated domains (' +
+      ALLOWED_EMAIL_DOMAINS.join(', ') + '). The account ' + j.user.emailAddress +
+      ' is not authorized. Sign in with your company Google account.');
+    err.code = 'ACCESS_DENIED';
+    throw err;
+  }
   CURRENT_USER = {
     email: j.user.emailAddress,
     name: j.user.displayName || j.user.emailAddress,
