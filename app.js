@@ -1857,8 +1857,12 @@ function importProformaUnitMix(file, rebuild) {
       }
       if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from the proforma?`)) return;
       STATE.unitMix = out;
+      syncUnitMixSumsToPhase1();
       saveState();
-      rebuild();
+      // Full re-render (not just the unit-mix block) so every derived field —
+      // mf_units / mf_rsf / overall_rsf and anything conditional on them —
+      // shows the imported values without a manual page refresh.
+      renderShell();
       toast(`Imported ${out.length} unit type/status row(s) from the proforma`, 'success');
     } catch (err) {
       toast('Import failed: ' + err.message, 'error');
@@ -2044,7 +2048,8 @@ async function pullProformaFromDrive(rebuild) {
     STATE.unitMix = out;
     syncUnitMixSumsToPhase1();
     saveState();
-    rebuild();
+    // Full re-render so all derived fields reflect the import immediately.
+    renderShell();
     toast(`Imported ${out.length} unit row(s) from ${f.name}`, 'success');
   } catch (e) {
     toast('Proforma pull failed: ' + e.message, 'error');
