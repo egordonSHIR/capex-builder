@@ -1719,6 +1719,65 @@ function parseSHIRSummaryRR(wb) {
   return out.length ? out : null;
 }
 
+// Parser for the ExStay proforma "UNITS" tab — the same nested group/plan/
+// status column layout as the MFVA "RR" tab (BR/BA group@col B, plan@C,
+// status@D, # units@E, # BRs@F, # BAs@G, Total SF@H, SF/unit@I), but the tab
+// is named "UNITS" and its subtotal blocks sit at DIFFERENT row positions —
+// the RR hardcoded skip-list would drop real data here (e.g. Eff rows at
+// Excel rows 47-49), so subtotal rows are identified by text instead
+// ("Subtotal/Avg", plan "ALL", "Grand Tot/Avg"). Beds/baths fall back to the
+// BR/BA group label ("2x2(.5)" → 2 beds / 2.5 baths) because the # BRs /
+// # BAs cells are often uncached formulas that SheetJS reads as blank. The
+// read range is bounded: these sheets can carry a corrupt dimension record
+// (A1:AZ1047135 on the live Towneplace workbook) and an unbounded
+// blankrows:true read would materialize a million rows.
+// Worked out from the live Towneplace Suites South ExStay Init UW workbook.
+function parseUnitsTab(wb) {
+  const sheetName = wb.SheetNames.find(n => /^units$/i.test(String(n).trim()));
+  if (!sheetName) return null;
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName],
+    { header: 1, blankrows: true, defval: null, range: 'A1:Z1200' });
+  // Header row: has "# Units" plus "Type" or "# BRs" within the first 15 rows.
+  let hi = -1;
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const cells = (rows[i] || []).map(umNorm);
+    if (cells.some(c => /^#?units?$/.test(c)) && cells.some(c => /^#?brs?$/.test(c) || c === 'type')) { hi = i; break; }
+  }
+  if (hi < 0) return null;
+  const agg = new Map();
+  let curGroup = '';
+  for (let i = hi + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const g = String(row[1] == null ? '' : row[1]).trim();
+    if (g) curGroup = g;
+    const plan = String(row[2] == null ? '' : row[2]).trim();
+    if (!plan) continue;                                   // pre-allocated placeholder rows
+    if (/^all$|grand|subtotal|tot\s*\/?\s*avg/i.test(plan)) continue;
+    const status = umStatus(row[3]);
+    const count = Number(row[4]);
+    if (!isFinite(count) || count <= 0) continue;
+    if (count > SHIR_RR_MAX_PER_ROW_COUNT) continue;
+    let beds = umNum(row[5]), baths = umNum(row[6]);
+    const gm = curGroup.match(/^(\d+)\s*x\s*(\d+)\s*(\(\.5\))?$/);
+    if (beds === '' && gm) beds = Number(gm[1]);
+    if (baths === '' && gm) baths = Number(gm[2]) + (gm[3] ? 0.5 : 0);
+    let sqft = umNum(row[8]);
+    if (sqft === '') { const t = umNum(row[7]); if (t !== '' && count) sqft = Math.round(t / count); }
+    const key = `${plan}||${status}`;
+    const existing = agg.get(key);
+    if (existing) {
+      existing.count += count;
+      if (existing.sqft === '' || existing.sqft == null) existing.sqft = sqft;
+      if (existing.beds === '' || existing.beds == null) existing.beds = beds;
+      if (existing.baths === '' || existing.baths == null) existing.baths = baths;
+    } else {
+      agg.set(key, { type: plan, status, count, beds, baths, sqft });
+    }
+  }
+  const out = [...agg.values()];
+  return out.length ? out : null;
+}
+
 // Parser for the SHIR proforma "U Mix Sum" (Unit Mix Summary) tab — a clean,
 // already-aggregated table with one row per (floor plan, upgrade status). Used as a
 // fallback when the "RR" tab is empty or non-standard (e.g. early "Init UW" files, or
@@ -1726,12 +1785,22 @@ function parseSHIRSummaryRR(wb) {
 // "Floor Plan" and "# Units"; per-plan "Average" sub-rows and the trailing
 // "Grand Tot / Avg" row are skipped. Columns are detected by label, not position.
 function parseUMixSum(wb) {
-  const sheetName = wb.SheetNames.find(n =>
-    /u\s*mix\s*sum|unit\s*mix\s*sum/i.test(n) || /^units?$/i.test(String(n).trim()));
-  if (!sheetName) return null;
+  // Try every name-matching sheet (priority: "U Mix Sum"-style names, then a
+  // bare "Units") instead of only the first match — ExStay workbooks name
+  // their RR-layout tab "UNITS", which matched first and made this parser
+  // bail before ever reading the real "U Mix Sum" tab.
+  const candidates = wb.SheetNames.filter(n => /u\s*mix\s*sum|unit\s*mix\s*sum/i.test(n))
+    .concat(wb.SheetNames.filter(n => /^units?$/i.test(String(n).trim())));
+  for (const sheetName of candidates) {
+    const out = _parseUMixSumSheet(wb.Sheets[sheetName]);
+    if (out) return out;
+  }
+  return null;
+}
+function _parseUMixSumSheet(sheet) {
   // defval:null fills empty cells so rows aren't sparse — otherwise .map(umNorm)
   // leaves holes that findIndex visits as undefined and .includes() throws.
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: null });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: null });
   let hi = -1, C = null;
   for (let i = 0; i < Math.min(rows.length, 20); i++) {
     const cells = (rows[i] || []).map(umNorm);
@@ -1813,34 +1882,43 @@ function parseProformaRR(wb) {
   return null;
 }
 
-// Fallback parser: a simple unit-mix summary table (one row per unit type) on any sheet.
+// Fallback parser: a simple unit-mix summary table (one row per unit type).
+// Scans "unit mix"-named sheets first, then every other sheet. A sheet is
+// accepted only if at least one parsed row carries a positive unit count —
+// without that guard the loose header detection false-positives on dashboard
+// sheets (e.g. the DASH tab's "Property Type" / "Commercial RSF" labels) and
+// imports garbage rows.
 function parseGenericUnitMix(wb) {
-  const sheetName = wb.SheetNames.find(n => /unit\s*mix/i.test(n)) || wb.SheetNames[0];
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: null });
-  let headerIdx = -1, cols = {};
-  for (let i = 0; i < Math.min(rows.length, 30); i++) {
-    const cells = (rows[i] || []).map(umNorm);
-    const has = (...keys) => cells.findIndex(c => keys.some(k => c.includes(k)));
-    const type = has('unittype', 'type', 'plan', 'floorplan', 'unitname');
-    const beds = cells.findIndex(c => c === 'bd' || c === 'br' || c.includes('bed') || c === 'brs');
-    const baths = cells.findIndex(c => c === 'ba' || c.includes('bath'));
-    const sqft = cells.findIndex(c => c.includes('sqft') || c.includes('squarefe') || c === 'sf' || c.includes('rsf'));
-    if (type >= 0 && (beds >= 0 || baths >= 0 || sqft >= 0)) {
-      headerIdx = i;
-      cols = { type, beds, baths, sqft, count: has('ofunits', 'units', 'qty', 'count', 'quantity'), status: has('status', 'condition', 'reno') };
-      break;
+  const sheets = wb.SheetNames.slice().sort((a, b) =>
+    (/unit\s*mix/i.test(b) ? 1 : 0) - (/unit\s*mix/i.test(a) ? 1 : 0));
+  for (const sheetName of sheets) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: null });
+    let headerIdx = -1, cols = {};
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      const cells = (rows[i] || []).map(umNorm);
+      const has = (...keys) => cells.findIndex(c => keys.some(k => c.includes(k)));
+      const type = has('unittype', 'type', 'plan', 'floorplan', 'unitname');
+      const beds = cells.findIndex(c => c === 'bd' || c === 'br' || c.includes('bed') || c === 'brs');
+      const baths = cells.findIndex(c => c === 'ba' || c.includes('bath'));
+      const sqft = cells.findIndex(c => c.includes('sqft') || c.includes('squarefe') || c === 'sf' || c.includes('rsf'));
+      if (type >= 0 && (beds >= 0 || baths >= 0 || sqft >= 0)) {
+        headerIdx = i;
+        cols = { type, beds, baths, sqft, count: has('ofunits', 'units', 'qty', 'count', 'quantity'), status: has('status', 'condition', 'reno') };
+        break;
+      }
     }
+    if (headerIdx < 0) continue;
+    const out = [];
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const get = (idx) => (idx >= 0 ? row[idx] : '');
+      const typeVal = String(get(cols.type) || '').trim();
+      if (!typeVal) continue;
+      out.push({ type: typeVal, count: umNum(get(cols.count)), beds: umNum(get(cols.beds)), baths: umNum(get(cols.baths)), sqft: umNum(get(cols.sqft)), status: umStatus(get(cols.status)) });
+    }
+    if (out.length && out.some(r => typeof r.count === 'number' && r.count > 0)) return out;
   }
-  if (headerIdx < 0) return null;
-  const out = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i] || [];
-    const get = (idx) => (idx >= 0 ? row[idx] : '');
-    const typeVal = String(get(cols.type) || '').trim();
-    if (!typeVal) continue;
-    out.push({ type: typeVal, count: umNum(get(cols.count)), beds: umNum(get(cols.beds)), baths: umNum(get(cols.baths)), sqft: umNum(get(cols.sqft)), status: umStatus(get(cols.status)) });
-  }
-  return out.length ? out : null;
+  return null;
 }
 
 // Import unit mix from the deal proforma. Reads the SHIR "RR" rent roll first,
@@ -1850,7 +1928,7 @@ function importProformaUnitMix(file, rebuild) {
   reader.onload = (e) => {
     try {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-      const out = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+      const out = parseSHIRSummaryRR(wb) || parseUnitsTab(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
       if (!out || !out.length) {
         toast('Could not find unit-mix data (looked for the RR rent roll — see the note).', 'error');
         return;
@@ -2042,7 +2120,7 @@ async function pullProformaFromDrive(rebuild) {
     const r = await driveFetch(url);
     const buf = await r.arrayBuffer();
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
-    const out = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+    const out = parseSHIRSummaryRR(wb) || parseUnitsTab(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
     STATE.unitMix = out;
@@ -2164,7 +2242,7 @@ async function pullBasicsAndUnitsFromDrive() {
     }
 
     // Apply unit mix from RR tab
-    const umOut = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+    const umOut = parseSHIRSummaryRR(wb) || parseUnitsTab(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (umOut && umOut.length) {
       const existingCount = getUnitMix().length;
       if (!existingCount || confirm(`Replace the current ${existingCount} unit type(s) with ${umOut.length} from ${f.name}?`)) {
