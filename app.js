@@ -1489,6 +1489,52 @@ function parseSHIRSummaryRR(wb) {
   return out.length ? out : null;
 }
 
+// Parser for the SHIR proforma "U Mix Sum" (Unit Mix Summary) tab — a clean,
+// already-aggregated table with one row per (floor plan, upgrade status). Used as a
+// fallback when the "RR" tab is empty or non-standard (e.g. early "Init UW" files, or
+// proformas that keep the rent roll only as this summary). Header row has both
+// "Floor Plan" and "# Units"; per-plan "Average" sub-rows and the trailing
+// "Grand Tot / Avg" row are skipped. Columns are detected by label, not position.
+function parseUMixSum(wb) {
+  const sheetName = wb.SheetNames.find(n =>
+    /u\s*mix\s*sum|unit\s*mix\s*sum/i.test(n) || /^units?$/i.test(String(n).trim()));
+  if (!sheetName) return null;
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
+  let hi = -1, C = null;
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const cells = (rows[i] || []).map(umNorm);
+    const plan = cells.findIndex(c => c.includes('floorplan'));
+    const units = cells.findIndex(c => /^#?units?$/.test(c));
+    if (plan >= 0 && units >= 0) {
+      const find = (re) => cells.findIndex(c => re.test(c));
+      hi = i;
+      C = { plan, units, status: find(/upgrade|status/), beds: find(/^#?brs?$|bed/),
+            baths: find(/^#?bas?$|bath/), sfunit: find(/sfunit|sfperunit/), totsf: find(/totalsf/) };
+      break;
+    }
+  }
+  if (hi < 0) return null;
+  const agg = new Map();
+  for (let i = hi + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const g = (k) => (k >= 0 && k < row.length ? row[k] : null);
+    const plan = String(g(C.plan) == null ? '' : g(C.plan)).trim();
+    if (!plan || /grand|total|avg/i.test(plan)) continue;   // stop at / skip the totals row
+    const status = umStatus(g(C.status));
+    if (!status) continue;                                  // skips per-plan "Average" sub-rows
+    const cnt = umNum(g(C.units));
+    if (!(typeof cnt === 'number' && cnt > 0)) continue;
+    let sqft = umNum(g(C.sfunit));
+    if (sqft === '' && C.totsf >= 0) { const t = umNum(g(C.totsf)); if (t !== '') sqft = Math.round(t / cnt); }
+    const key = plan + '||' + status;
+    const existing = agg.get(key);
+    if (existing) existing.count += cnt;
+    else agg.set(key, { type: plan, status, count: cnt, beds: umNum(g(C.beds)), baths: umNum(g(C.baths)), sqft });
+  }
+  const out = [...agg.values()];
+  return out.length ? out : null;
+}
+
 // Secondary parser: raw per-unit rent roll — aggregate one row per unit by
 // (Unit Type Name + Reno/Unreno status). Header must have both a "Unit Type Name"
 // column and a per-unit "Unit #" column to be recognized.
@@ -1572,7 +1618,7 @@ function importProformaUnitMix(file, rebuild) {
   reader.onload = (e) => {
     try {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-      const out = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+      const out = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
       if (!out || !out.length) {
         toast('Could not find unit-mix data (looked for the RR rent roll — see the note).', 'error');
         return;
@@ -1688,12 +1734,21 @@ async function _findProformaInUWFolder(actionLabel) {
   const isSheet = (f) => /\.xlsx?$/i.test(f.name) ||
     f.mimeType === 'application/vnd.google-apps.spreadsheet' ||
     f.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const isTemp = (f) => /^~\$/.test(String(f.name || ''));   // Excel lock/temp files (~$…)
+  // The team's versioned working-model convention, e.g. "AUS - TX - Crestwood_v2.5.xlsx"
+  // or "… v3.xlsx". Supplements (+RR+T12, +Comps, Demographics, _working) carry no
+  // " v#"/"_v#" suffix so they're naturally excluded.
+  const isVersionedModel = (f) => /[ _]v\d+(?:\.\d+)?\.xlsx?$/i.test(String(f.name || ''));
 
-  let matches = files.filter(f => norm(f.name).includes(norm('Full AI UW')) && isSheet(f));
+  let matches = files.filter(f => isSheet(f) && !isTemp(f) && norm(f.name).includes(norm('Full AI UW')));
   if (!matches.length) {
-    // Fallback: look for an “Init UW” file (early-stage deals may not have a Full AI UW yet).
-    matches = files.filter(f => norm(f.name).includes(norm('Init UW')) && isSheet(f));
-    if (!matches.length) { toast('No “Full AI UW” or “Init UW” spreadsheet found in 2. UW-Analysis.', 'error'); return null; }
+    // Fallback: "Init UW" (early-stage deals) OR the "<name>_v#.xlsx" working model
+    // (the common naming once underwriting is underway — Crestwood, etc.). The version
+    // sort below picks the HIGHEST version, so the current model wins over a stale
+    // "Init UW v1" whose rent roll may still be empty.
+    matches = files.filter(f => isSheet(f) && !isTemp(f) &&
+      (norm(f.name).includes(norm('Init UW')) || isVersionedModel(f)));
+    if (!matches.length) { toast('No “Full AI UW”, “Init UW”, or “<name>_v#” proforma spreadsheet found in 2. UW-Analysis.', 'error'); return null; }
   }
 
   const extractVersion = (name) => { const m = String(name||'').match(/[vV](\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : -1; };
@@ -1751,7 +1806,7 @@ async function pullProformaFromDrive(rebuild) {
     const r = await driveFetch(url);
     const buf = await r.arrayBuffer();
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
-    const out = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+    const out = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
     STATE.unitMix = out;
@@ -1872,7 +1927,7 @@ async function pullBasicsAndUnitsFromDrive() {
     }
 
     // Apply unit mix from RR tab
-    const umOut = parseSHIRSummaryRR(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
+    const umOut = parseSHIRSummaryRR(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (umOut && umOut.length) {
       const existingCount = getUnitMix().length;
       if (!existingCount || confirm(`Replace the current ${existingCount} unit type(s) with ${umOut.length} from ${f.name}?`)) {
