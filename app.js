@@ -1378,6 +1378,11 @@ async function processSurveyWithClaude(rebuild) {
     if (rebuild) rebuild();
     renderShell();
     toast(`Survey processed by AI — ${summary}`, 'success');
+
+    // Final leg: regenerate the SHIR workbook into 7. Title_Survey/Reports/ so
+    // the deal folder carries the standard artifact and 📥 Import Survey works
+    // for every teammate/device.
+    await uploadSurveyWorkbookToDrive(parsed);
   } catch (e) {
     if (/401|invalid.*key|auth/i.test(e.message)) {
       toast('API key rejected — update it via ☰ → Set Anthropic API Key.', 'error');
@@ -1385,6 +1390,151 @@ async function processSurveyWithClaude(rebuild) {
       toast('Survey processing failed: ' + e.message, 'error');
     }
     console.error('processSurveyWithClaude:', e);
+  }
+}
+
+// ---------- SHIR survey workbook regeneration ----------
+// Rebuild the standard <Property>_SurveyBreakdownSpecs_<date>.xlsx from the
+// parsed survey object (AI path). Layout mirrors the survey-breakdown-specs
+// skill export closely enough that parseSurveyXlsx() re-imports it: title +
+// subtitle rows, an "Item | Unit | Tract 1 | Site Total" header, numbered item
+// rows, 4-space-indented per-building sub-rows under items 7/8/9, and the
+// Google Maps notes + Discrepancies footer.
+async function generateSurveyBreakdownXlsx(parsed) {
+  if (typeof ExcelJS === 'undefined') throw new Error('ExcelJS not loaded yet — try again');
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9';
+  const flat = parsed.flat || {};
+  const meta = parsed.meta || {};
+  const buildings = parsed.buildings || [];
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(meta.survey_date || ''))
+    ? meta.survey_date : new Date().toISOString().slice(0, 10);
+  const propName = String(meta.property_name || (STATE && STATE.name) || 'Property').trim();
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Capex Builder';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('Survey Breakdown Specs');
+  ws.columns = [{ width: 48 }, { width: 10 }, { width: 28 }, { width: 16 }];
+
+  const title = ws.addRow([`${propName} — Survey Breakdown Specs — ${dateStr}`]);
+  title.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+  title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  title.height = 24;
+  title.alignment = { vertical: 'middle' };
+  ws.mergeCells(`A${title.number}:D${title.number}`);
+
+  const subParts = [meta.address || '—'];
+  if (meta.scale_paper) subParts.push(`Paper scale: ${meta.scale_paper}`);
+  if (meta.ft_per_pixel != null && meta.ft_per_pixel !== '') subParts.push(`ft/pixel: ${meta.ft_per_pixel}`);
+  const sub = ws.addRow([subParts.join('    |    ')]);
+  sub.font = { italic: true, size: 10 };
+  ws.mergeCells(`A${sub.number}:D${sub.number}`);
+  ws.addRow([]);
+
+  const header = ws.addRow(['Item', 'Unit', 'Tract 1', 'Site Total']);
+  header.font = { bold: true };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+  header.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
+
+  const num = (v) => {
+    if (v == null || v === '') return '';
+    const n = Number(v);
+    return isFinite(n) ? n : '';
+  };
+  // Numeric items carry their value in Site Total (col D — what the parser
+  // reads); free-text items (fencing/gates) carry it in the tract col (C).
+  const addItem = (label, unit, siteVal, opts = {}) => {
+    const r = ws.addRow([label, unit || '', opts.tractText || '', siteVal == null ? '' : siteVal]);
+    if (opts.bold) r.font = { bold: true };
+    if (typeof r.getCell(4).value === 'number') r.getCell(4).numFmt = '#,##0';
+    return r;
+  };
+
+  addItem('1. Parking — Regular', 'spots', num(flat.parking_regular));
+  addItem('1. Parking — Handicapped', 'spots', num(flat.parking_spots_hc));
+  addItem('1. Parking — Total', 'spots', num(flat.parking_spots_existing), { bold: true });
+  addItem('2. Land area (SF)', 'SF', num(flat.land_sf));
+  addItem('2. Land area (acres)', 'acres', num(flat.land_acres));
+  addItem('3. Perimeter — TOTAL', 'LF', num(flat.site_perimeter_lf));
+  addItem('4. Fencing', 'notes', '', { tractText: flat.fencing_notes || 'n/a' });
+  addItem('4. Gates', 'notes', '', { tractText: flat.gates_notes || 'n/a' });
+  addItem('5. Parking lot SF', 'SF', num(flat.parking_lot_sf));
+  addItem('6. Building count', 'count', num(flat.num_buildings));
+
+  // The "(N Story, Ht X')" / "(pitch X:Y)" suffixes are what parseSurveyXlsx()
+  // extracts stories/height/pitch from — keep the exact shapes.
+  addItem('7. Building footprint', 'SF', num(flat.total_footprint_sf), { bold: true });
+  buildings.forEach((b, i) => {
+    const lbl = b.label || `Building ${i + 1}`;
+    let suffix = '';
+    if (b.stories != null && b.stories !== '') {
+      suffix = (b.height_ft != null && b.height_ft !== '')
+        ? ` (${b.stories} Story, Ht ${b.height_ft}')`
+        : ` (${b.stories} Story)`;
+    }
+    addItem(`    ${lbl}${suffix}`, 'SF', num(b.footprint_sf));
+  });
+  addItem('8. Roof SF', 'SF', num(flat.total_roof_sf), { bold: true });
+  buildings.forEach((b, i) => {
+    const lbl = b.label || `Building ${i + 1}`;
+    const pitch = b.roof_pitch ? ` (pitch ${b.roof_pitch})` : '';
+    addItem(`    Roof — ${lbl}${pitch}`, 'SF', num(b.roof_sf));
+  });
+  addItem('9. Facade SF', 'SF', num(flat.total_facade_sf), { bold: true });
+  buildings.forEach((b, i) => {
+    addItem(`    Facade — ${b.label || `Building ${i + 1}`}`, 'SF', num(b.facade_sf));
+  });
+  addItem('10. Landscaping', 'SF', num(flat.landscaping_sf));
+
+  ws.addRow([]);
+  const notesHdr = ws.addRow(['Google Maps Cross-Reference Notes']);
+  notesHdr.font = { bold: true };
+  const noteLines = String(parsed.notes || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
+  if (noteLines.length) noteLines.forEach(n => ws.addRow([n]));
+  else ws.addRow(['—']);
+  ws.addRow([]);
+  const discHdr = ws.addRow(['Discrepancies (Survey vs Google Maps)']);
+  discHdr.font = { bold: true };
+  const discs = (parsed.discrepancies || []).map(s => String(s).trim()).filter(Boolean);
+  if (discs.length) discs.forEach(d => ws.addRow([`• ${d}`]));
+  else ws.addRow(['—']);
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const filename = `${propName.replace(/[^a-z0-9]+/gi, '')}_SurveyBreakdownSpecs_${dateStr}.xlsx`;
+  return { blob, filename };
+}
+
+// Upload the regenerated survey workbook to <deal>/7. Title_Survey/Reports/
+// (folders created if missing). Falls back to a local download if the Drive
+// upload fails so the artifact isn't lost.
+async function uploadSurveyWorkbookToDrive(parsed) {
+  let wbOut = null;
+  try {
+    toast('Generating SHIR survey workbook…');
+    wbOut = await generateSurveyBreakdownXlsx(parsed);
+    const subs = await listSubfolders(STATE.drive.folderId);
+    const ts = subs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
+            || subs.find(f => /title[\s_\-]*survey/i.test(f.name));
+    const tsId = ts ? ts.id : await driveEnsureSubfolder(STATE.drive.folderId, '7. Title_Survey');
+    const tsSubs = await listSubfolders(tsId);
+    const reports = tsSubs.find(f => /^reports?$/i.test(f.name));
+    const reportsId = reports ? reports.id : await driveEnsureSubfolder(tsId, 'Reports');
+    await driveUploadBinary(reportsId, wbOut.filename, wbOut.blob,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    toast(`Saved ${wbOut.filename} to 7. Title_Survey/Reports/`, 'success');
+  } catch (e) {
+    console.error('uploadSurveyWorkbookToDrive:', e);
+    if (wbOut) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(wbOut.blob);
+      a.download = wbOut.filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+      toast(`Drive upload failed (${e.message}) — workbook downloaded locally instead.`, 'error');
+    } else {
+      toast('Survey workbook generation failed: ' + e.message, 'error');
+    }
   }
 }
 
