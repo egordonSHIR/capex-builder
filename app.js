@@ -1499,7 +1499,9 @@ function parseUMixSum(wb) {
   const sheetName = wb.SheetNames.find(n =>
     /u\s*mix\s*sum|unit\s*mix\s*sum/i.test(n) || /^units?$/i.test(String(n).trim()));
   if (!sheetName) return null;
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
+  // defval:null fills empty cells so rows aren't sparse — otherwise .map(umNorm)
+  // leaves holes that findIndex visits as undefined and .includes() throws.
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: null });
   let hi = -1, C = null;
   for (let i = 0; i < Math.min(rows.length, 20); i++) {
     const cells = (rows[i] || []).map(umNorm);
@@ -1543,7 +1545,7 @@ function parseProformaRR(wb) {
   const sheets = wb.SheetNames.slice().sort((a, b) =>
     (/^rr$|rent\s*roll/i.test(b) ? 1 : 0) - (/^rr$|rent\s*roll/i.test(a) ? 1 : 0));
   for (const sn of sheets) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, blankrows: false, defval: null });
     let h = -1, col = null;
     for (let i = 0; i < rows.length; i++) {
       const cells = (rows[i] || []).map(umNorm);
@@ -1584,7 +1586,7 @@ function parseProformaRR(wb) {
 // Fallback parser: a simple unit-mix summary table (one row per unit type) on any sheet.
 function parseGenericUnitMix(wb) {
   const sheetName = wb.SheetNames.find(n => /unit\s*mix/i.test(n)) || wb.SheetNames[0];
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, defval: null });
   let headerIdx = -1, cols = {};
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const cells = (rows[i] || []).map(umNorm);
