@@ -4252,12 +4252,15 @@ async function refreshHomeIndex() {
   try {
     if (!CURRENT_USER) await fetchCurrentUser();
     await fetchManifest();
-    if (CURRENT_VIEW === 'home') renderHome();
   } catch (e) {
     console.warn('refreshHomeIndex failed:', e);
-    if (CURRENT_VIEW === 'home') renderHome();
   } finally {
+    // Clear the flag BEFORE rendering so the status bar reads "loaded" (or the
+    // tap-to-refresh hint), not a frozen "Loading org index…". renderHome reads
+    // HOME_INDEX_LOADING synchronously, so rendering while it's still true was
+    // leaving the label stuck even though the manifest had loaded fine.
     HOME_INDEX_LOADING = false;
+    if (CURRENT_VIEW === 'home') renderHome();
   }
 }
 
