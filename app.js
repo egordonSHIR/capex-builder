@@ -3581,7 +3581,25 @@ async function driveAuthHeader() {
   return 'Bearer ' + tok;
 }
 
+// Append the Shared-Drive params Google requires to see / download / write files
+// that live in a Shared Drive (our deal folders do). Without supportsAllDrives=true,
+// media downloads of Shared-Drive files 404 and list queries silently omit them;
+// list queries additionally need includeItemsFromAllDrives=true (which itself requires
+// supportsAllDrives=true). Centralized here so every Drive call inherits it.
+function withSharedDriveParams(url) {
+  if (!/googleapis\.com\/(?:upload\/)?drive\/v3\/files/.test(url)) return url;
+  const join = url.includes('?') ? '&' : '?';
+  const extra = [];
+  if (!/[?&]supportsAllDrives=/.test(url)) extra.push('supportsAllDrives=true');
+  // Only list endpoints take a `q=` query; give those includeItemsFromAllDrives too.
+  if (/[?&]q=/.test(url) && !/[?&]includeItemsFromAllDrives=/.test(url)) {
+    extra.push('includeItemsFromAllDrives=true');
+  }
+  return extra.length ? url + join + extra.join('&') : url;
+}
+
 async function driveFetch(url, opts = {}) {
+  url = withSharedDriveParams(url);
   const auth = await driveAuthHeader();
   let r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: auth } });
   if (r.status === 401) {
