@@ -67,7 +67,7 @@ async function fetchSharedAnthropicKey(force) {
 // Merges into the existing config file so future config fields survive.
 async function shareAnthropicKeyOrgWide() {
   const k = getAnthropicKey();
-  if (!k) { toast('Set your personal Anthropic API key first (button above).', 'error'); return; }
+  if (!k) { alert('No API key stored in this browser yet.\n\nClick "Set Anthropic API Key" first, then share it org-wide.'); return; }
   if (!confirm(
     'Share your Anthropic API key org-wide?\n\n' +
     'It will be stored in the shared Capex Builder sync folder on Drive. ' +
@@ -83,12 +83,18 @@ async function shareAnthropicKeyOrgWide() {
     existing.anthropic_key_shared_by = (CURRENT_USER && CURRENT_USER.email) || '';
     existing.anthropic_key_shared_at = new Date().toISOString();
     await driveUploadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME, existing);
-    SHARED_ANTHROPIC_KEY_CACHE = k;
+    // Verify by re-reading from Drive — an alert (not just a toast) so the
+    // one-time setup action gets unmistakable confirmation.
+    const check = await fetchSharedAnthropicKey(true);
+    if (check === k) {
+      alert('✅ API key shared org-wide.\n\nVerified: the key is now readable from the shared Drive sync folder. Teammates\' 🛰 Process Survey will use it automatically — no key entry needed.');
+    } else {
+      alert('⚠️ Upload completed but verification read back a different value — try again, or check the sync folder (capex_builder_config.json).');
+    }
     updateAnthropicKeyStatus();
-    toast('API key shared org-wide via Drive.', 'success');
   } catch (e) {
     console.error('shareAnthropicKeyOrgWide:', e);
-    toast('Could not share key: ' + e.message, 'error');
+    alert('❌ Could not share key: ' + e.message);
   }
 }
 
@@ -541,18 +547,18 @@ function renderPhase1() {
     }
   }
 
-  // Inject the survey block (per-building breakdown + Import/Process buttons)
-  // INSIDE the "Survey-Derived Site Specs" schema section so it lives with the
-  // flat fields it populates — same pattern as Unit Mix in Units & Area.
+  // Inject the survey block (action buttons + per-building breakdown) at the
+  // TOP of the "Survey Site Specs" schema section body, so the section reads
+  // buttons-first, then the flat fields those buttons populate.
   let surveyHost = null;
   for (const sec of sections) {
     const hdr = sec.querySelector('.section-header span');
-    if (hdr && /^survey[\s\-]*derived site specs$/i.test(hdr.textContent.trim())) {
+    if (hdr && /^survey([\s\-]*derived)?[\s\-]*site specs$/i.test(hdr.textContent.trim())) {
       surveyHost = sec.querySelector('.section-body');
       break;
     }
   }
-  if (surveyHost) surveyHost.appendChild(renderSurveyBlock());
+  if (surveyHost) surveyHost.insertBefore(renderSurveyBlock(), surveyHost.firstChild);
   else root.appendChild(renderSurveyBlock());   // fallback if the schema section is renamed
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
@@ -763,10 +769,11 @@ function renderUnitRow(r, i, rebuild) {
   return wrap;
 }
 
-// ---------- Survey-derived site specs (Per-building breakdown + Import / Process) ----------
+// ---------- Survey site specs (Per-building breakdown + Import / Process) ----------
 // The flat survey fields (perimeter, parking lot SF, roof/facade totals, fencing notes,
-// landscaping_sf, etc.) are part of phase1[Survey-Derived Site Specs] and render as a
-// regular schema section above this block. This section adds:
+// landscaping_sf, etc.) are part of phase1[Survey Site Specs] and render as a
+// regular schema section BELOW this block (injected at the top of that section's
+// body by renderPhase1). This block adds:
 //   - the repeatable per-building list (label/footprint/stories/height/pitch/roof_sf/facade_sf)
 //   - the 📥 Import Survey and 🛰 Process Survey buttons
 //   - a small status line showing when the survey was last processed
@@ -801,21 +808,35 @@ function removeSurveyBuilding(i) {
 
 function renderSurveyBlock() {
   ensureSurveyState();
-  // Start collapsed by default — most users do not need to see the per-building
-  // breakdown unless they are importing a survey.
-  const section = el('section', { class: 'section collapsed' });
-  section.appendChild(el('header', { class: 'section-header',
-    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-    el('span', {}, 'Site Survey Breakdown'),
-    el('span', { class: 'chev' }, '▼')
-  ));
-  const body = el('div', { class: 'section-body' });
-  section.appendChild(body);
+  // Plain block injected at the TOP of the "Survey Site Specs" schema section
+  // body: action buttons first, then summary/meta, then the per-building rows.
+  // The flat schema fields follow below this block.
+  const body = el('div', { class: 'survey-block', style: 'border-bottom:1px solid var(--border, #e5e7eb);margin-bottom:10px;padding-bottom:6px' });
 
   function rebuild() {
     body.innerHTML = '';
     const s = ensureSurveyState();
     const blds = s.buildings;
+
+    // Action buttons row at the very top — same nowrap-scroll pattern as Unit Mix.
+    const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (f) importSurveyFromFile(f, rebuild);
+      e.target.value = '';
+    });
+    const actions = el('div', { style: 'padding:8px 16px;display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto' },
+      el('button', { class: 'um-btn', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => { addSurveyBuilding(); rebuild(); } }, '+ Building'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => importSurveyFromDrive(rebuild) }, '📥 Import Survey'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => fileInput.click() }, '⬆ Upload XLSX'),
+      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+        onClick: () => processSurveyWithClaude(rebuild) }, '🛰 Process Survey'),
+      fileInput
+    );
+    body.appendChild(actions);
 
     // Summary / meta line
     const totalFp = blds.reduce((a, b) => a + (Number(b.footprint_sf) || 0), 0);
@@ -836,26 +857,6 @@ function renderSurveyBlock() {
       summaryBits.length ? summaryBits.join(' · ') : 'No buildings logged.'));
     body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px;font-style:italic' }, metaLine));
 
-    // Action buttons row — same nowrap-scroll pattern as Unit Mix.
-    const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
-    fileInput.addEventListener('change', (e) => {
-      const f = e.target.files[0];
-      if (f) importSurveyFromFile(f, rebuild);
-      e.target.value = '';
-    });
-    const actions = el('div', { style: 'padding:8px 16px;display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto' },
-      el('button', { class: 'um-btn', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => { addSurveyBuilding(); rebuild(); } }, '+ Building'),
-      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => importSurveyFromDrive(rebuild) }, '📥 Import Survey'),
-      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => fileInput.click() }, '⬆ Upload XLSX'),
-      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => processSurveyWithClaude(rebuild) }, '🛰 Process Survey'),
-      fileInput
-    );
-    body.appendChild(actions);
-
     blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
 
     body.appendChild(el('div', { class: 'um-note' },
@@ -864,14 +865,14 @@ function renderSurveyBlock() {
       el('em', {}, '*_SurveyBreakdownSpecs_*.xlsx'),
       ' from the deal folder: ', el('em', {}, '7. Title_Survey/Reports/'),
       ' folder, or ', el('strong', {}, '⬆ Upload XLSX'),
-      ' to pick a file manually. Each import overwrites the flat fields above ',
+      ' to pick a file manually. Each import overwrites the flat fields below ',
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
       'and replaces the buildings list with the Site-Total values from the workbook.'
     ));
     return body;
   }
   rebuild();
-  return section;
+  return body;
 }
 
 function renderSurveyBuildingRow(b, i, rebuild) {

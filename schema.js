@@ -240,7 +240,7 @@ window.SCHEMA = {
     ]
   },
   {
-    "section": "Survey-Derived Site Specs",
+    "section": "Survey Site Specs",
     "fields": [
       {
         "key": "parking_spots_hc",
