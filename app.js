@@ -25,6 +25,13 @@ function resetOptionOverrides() {
 }
 
 // ---------- Anthropic API key (for Process Survey) ----------
+// Resolution order: personal key (this browser's localStorage) → org-shared
+// key (capex_builder_config.json in the central Drive sync folder). The shared
+// key lives ONLY on Drive — readable by company-domain accounts, never baked
+// into the public repo/site. Publish yours via ☰ → Share Key Org-Wide.
+const SHARED_CONFIG_FILENAME = 'capex_builder_config.json';
+let SHARED_ANTHROPIC_KEY_CACHE = null;   // null = not fetched this session; '' = fetched, none found
+
 function getAnthropicKey() { return localStorage.getItem(ANTHROPIC_KEY_STORAGE) || ''; }
 function setAnthropicKey(k) {
   if (k) localStorage.setItem(ANTHROPIC_KEY_STORAGE, k);
@@ -34,7 +41,55 @@ function updateAnthropicKeyStatus() {
   const s = $('#anthropic-key-status');
   if (!s) return;
   const k = getAnthropicKey();
-  s.textContent = k ? 'Key set (' + k.slice(0, 14) + '…)' : 'No key set';
+  if (k) s.textContent = 'Personal key set (' + k.slice(0, 14) + '…)';
+  else if (SHARED_ANTHROPIC_KEY_CACHE) s.textContent = 'Using org-shared key (Drive)';
+  else s.textContent = 'No personal key — org-shared key used if available';
+}
+
+// Fetch the org-shared key from the sync folder. Requires Drive to be
+// connected (Process Survey already does). Cached per session; pass force to
+// refetch (e.g. after a 401 — the key may have been rotated).
+async function fetchSharedAnthropicKey(force) {
+  if (!force && SHARED_ANTHROPIC_KEY_CACHE !== null) return SHARED_ANTHROPIC_KEY_CACHE;
+  try {
+    const res = await driveDownloadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME);
+    SHARED_ANTHROPIC_KEY_CACHE = (res && res.data && typeof res.data.anthropic_api_key === 'string')
+      ? res.data.anthropic_api_key.trim() : '';
+  } catch (e) {
+    console.warn('fetchSharedAnthropicKey:', e);
+    SHARED_ANTHROPIC_KEY_CACHE = '';
+  }
+  updateAnthropicKeyStatus();
+  return SHARED_ANTHROPIC_KEY_CACHE;
+}
+
+// Publish this browser's personal key org-wide (☰ → Share Key Org-Wide).
+// Merges into the existing config file so future config fields survive.
+async function shareAnthropicKeyOrgWide() {
+  const k = getAnthropicKey();
+  if (!k) { toast('Set your personal Anthropic API key first (button above).', 'error'); return; }
+  if (!confirm(
+    'Share your Anthropic API key org-wide?\n\n' +
+    'It will be stored in the shared Capex Builder sync folder on Drive. ' +
+    'Everyone in the company domains can then run 🛰 Process Survey billed to your Anthropic account.'
+  )) return;
+  try {
+    let existing = {};
+    try {
+      const res = await driveDownloadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME);
+      if (res && res.data && typeof res.data === 'object') existing = res.data;
+    } catch {}
+    existing.anthropic_api_key = k;
+    existing.anthropic_key_shared_by = (CURRENT_USER && CURRENT_USER.email) || '';
+    existing.anthropic_key_shared_at = new Date().toISOString();
+    await driveUploadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME, existing);
+    SHARED_ANTHROPIC_KEY_CACHE = k;
+    updateAnthropicKeyStatus();
+    toast('API key shared org-wide via Drive.', 'success');
+  } catch (e) {
+    console.error('shareAnthropicKeyOrgWide:', e);
+    toast('Could not share key: ' + e.message, 'error');
+  }
 }
 
 function newPropertyId() {
@@ -486,9 +541,19 @@ function renderPhase1() {
     }
   }
 
-  // Survey block (per-building breakdown + Import/Process buttons) follows the
-  // flat "Survey-Derived Site Specs" schema section.
-  root.appendChild(renderSurveyBlock());
+  // Inject the survey block (per-building breakdown + Import/Process buttons)
+  // INSIDE the "Survey-Derived Site Specs" schema section so it lives with the
+  // flat fields it populates — same pattern as Unit Mix in Units & Area.
+  let surveyHost = null;
+  for (const sec of sections) {
+    const hdr = sec.querySelector('.section-header span');
+    if (hdr && /^survey[\s\-]*derived site specs$/i.test(hdr.textContent.trim())) {
+      surveyHost = sec.querySelector('.section-body');
+      break;
+    }
+  }
+  if (surveyHost) surveyHost.appendChild(renderSurveyBlock());
+  else root.appendChild(renderSurveyBlock());   // fallback if the schema section is renamed
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
@@ -1339,10 +1404,17 @@ async function processSurveyWithClaude(rebuild) {
     return;
   }
 
+  // Personal key first, then the org-shared key from the Drive sync folder.
+  let usingSharedKey = false;
   let apiKey = getAnthropicKey();
   if (!apiKey) {
+    apiKey = await fetchSharedAnthropicKey();
+    usingSharedKey = !!apiKey;
+  }
+  if (!apiKey) {
     const entered = prompt(
-      'Enter your Anthropic API key to process surveys with Claude AI.\n\n' +
+      'No org-shared API key found on Drive.\n\n' +
+      'Enter an Anthropic API key to process surveys with Claude AI.\n' +
       'The key will be stored in this browser\'s localStorage only.\n' +
       'Get one at console.anthropic.com → API Keys.',
       'sk-ant-...'
@@ -1385,7 +1457,14 @@ async function processSurveyWithClaude(rebuild) {
     await uploadSurveyWorkbookToDrive(parsed);
   } catch (e) {
     if (/401|invalid.*key|auth/i.test(e.message)) {
-      toast('API key rejected — update it via ☰ → Set Anthropic API Key.', 'error');
+      if (usingSharedKey) {
+        // Shared key may have been rotated — drop the session cache so the
+        // next attempt refetches from Drive.
+        SHARED_ANTHROPIC_KEY_CACHE = null;
+        toast('Org-shared API key rejected — ask the key owner to re-share it (☰ → Share Key Org-Wide), or set a personal key.', 'error');
+      } else {
+        toast('API key rejected — update it via ☰ → Set Anthropic API Key.', 'error');
+      }
     } else {
       toast('Survey processing failed: ' + e.message, 'error');
     }
@@ -3674,6 +3753,10 @@ function bindShell() {
       updateAnthropicKeyStatus();
       toast('API key saved', 'success');
     }
+    closeDrawer();
+  });
+  $('#btn-share-anthropic-key').addEventListener('click', () => {
+    shareAnthropicKeyOrgWide();
     closeDrawer();
   });
   updateDriveStatus();
