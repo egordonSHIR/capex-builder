@@ -2693,8 +2693,8 @@ const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS}
 // checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
 // between the status-% block and # Qty so it lines up roughly with the
 // non-Interior Options column.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 52px 52px 52px 86px 60px 76px 70px 82px';
-const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:6px;padding:6px 10px`;
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 42px 42px 42px 78px 48px 76px 58px 72px';
+const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:4px;padding:6px 8px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
 // its first sub-section). Reads `STATE.unitMix` via getUnitStatusCounts(); when
@@ -2704,20 +2704,20 @@ function renderInteriorStatusHeader() {
   const missingBg = '#fee2e2'; // light red
   const fineBg = '#f8fafc';
   const cellBg = counts.empty ? missingBg : fineBg;
-  const headerStyle = DETAIL_GRID_BASE_INTERIOR + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-bottom:1px solid #cbd5e1';
+  const headerStyle = DETAIL_GRID_BASE_INTERIOR + ';font-weight:700;font-size:10px;color:#475569;text-transform:uppercase;background:#f8fafc;border-bottom:1px solid #cbd5e1';
   return el('div', { class: 'interior-status-header', style: headerStyle, 'data-interior-header': '' },
     el('div', {}, 'Item'),
     el('div', { 'data-status-cell': 'orig', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
       el('div', { style: 'font-size:10px;color:#475569' }, 'Orig.'),
-      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.orig))
+      el('div', { style: 'font-size:12px;font-weight:700;color:#0f172a' }, String(counts.orig))
     ),
     el('div', { 'data-status-cell': 'part', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
       el('div', { style: 'font-size:10px;color:#475569' }, 'Part.'),
-      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.part))
+      el('div', { style: 'font-size:12px;font-weight:700;color:#0f172a' }, String(counts.part))
     ),
     el('div', { 'data-status-cell': 'reno', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
       el('div', { style: 'font-size:10px;color:#475569' }, 'Reno'),
-      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.reno))
+      el('div', { style: 'font-size:12px;font-weight:700;color:#0f172a' }, String(counts.reno))
     ),
     el('div', {}, 'Options'),
     el('div', { style: 'text-align:right' }, '# Qty'),

@@ -547,6 +547,21 @@ main {
   .capex-row.detail-row .total { grid-column: 1 / -1; text-align: left; }
 }
 
+/* Interior Details rows (renderInteriorDetailItem): the 9-col grid is tight, so
+   shrink the field type and drop the number-spinner arrows that waste width in
+   the narrow %/Qty inputs. Scoped to .detail-item-interior so non-Interior rows
+   are untouched. !important because the row's controls are inline-styled from JS
+   (and renderDetailItem is a near-mirror, so editing those strings would hit
+   non-Interior rows too). Grid widths/gap live in DETAIL_GRID_COLS_INTERIOR. */
+.detail-item-interior input[type=number]::-webkit-inner-spin-button,
+.detail-item-interior input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.detail-item-interior input[type=number] { -moz-appearance: textfield; }
+.detail-item-interior input,
+.detail-item-interior select { font-size: 11px !important; padding-left: 3px !important; padding-right: 3px !important; }
+.detail-item-interior select[data-finish-select] { font-size: 12px !important; }  /* Options/Finish: 12px still fits "Hardwood" in the 78px column */
+.detail-item-interior > div:first-child > div { font-size: 12px !important; }      /* item name */
+.detail-item-interior > div[data-total] { font-size: 12px !important; }            /* $ Amt */
+
 /* Colored CAPEX group sections (Questionnaire + Details) */
 .group-section > .group-header { letter-spacing: 0.5px; }
 .group-section > .group-body { padding: 8px; background: #f8fafc; }
