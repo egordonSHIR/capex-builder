@@ -1518,7 +1518,21 @@ window.SCHEMA = {
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17110: CIP Interior - Flooring Vinyl (5 Yrs)",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Reno Unit",
+            "options": [
+              {
+                "finish": "Hardwood",
+                "default_cost": 500.0
+              },
+              {
+                "finish": "Vinyl Plank",
+                "default_cost": 150.0
+              },
+              {
+                "finish": "Polished Concrete",
+                "default_cost": 50.0
+              }
+            ]
           },
           {
             "name": "Flooring Leveller",
@@ -1539,7 +1553,17 @@ window.SCHEMA = {
             "default_cost_per_item": 250.0,
             "notes": null,
             "gl_account": "17175: CIP Interior - Lighting Fixtures (7 Yrs)",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Reno Unit",
+            "options": [
+              {
+                "finish": "Brushed Nickel",
+                "default_cost": 250.0
+              },
+              {
+                "finish": "Plastic",
+                "default_cost": 100.0
+              }
+            ]
           },
           {
             "name": "Bathroom Mirrors",
@@ -1560,14 +1584,38 @@ window.SCHEMA = {
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17125: CIP Interior - Appliances (5 Yrs)",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Reno Unit",
+            "options": [
+              {
+                "finish": "White",
+                "default_cost": 650.0
+              },
+              {
+                "finish": "Black",
+                "default_cost": 1000.0
+              },
+              {
+                "finish": "Stainless Steel",
+                "default_cost": 1500.0
+              }
+            ]
           },
           {
             "name": "Plumbing Fixtures",
             "default_cost_per_item": 250.0,
             "notes": null,
             "gl_account": "17130: CIP Interior - Plumbing Fixtures (7 Yrs)",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Reno Unit",
+            "options": [
+              {
+                "finish": "Brushed Nickel",
+                "default_cost": 250.0
+              },
+              {
+                "finish": "Plastic",
+                "default_cost": 100.0
+              }
+            ]
           },
           {
             "name": "Kitchen Countertop",
