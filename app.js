@@ -4399,7 +4399,18 @@ function driveRequestToken({ silent = false } = {}) {
 
 async function driveAuthHeader() {
   let tok = getDriveToken();
-  if (!tok) tok = await driveRequestToken({ silent: false });
+  if (!tok) {
+    // Try silent refresh first so we don't pop the Google account chooser
+    // on every background call (close-property → releaseEditorLock,
+    // refreshHomeIndex, syncTick, etc.). GIS will reuse the previously-
+    // authorized account when possible. Only fall back to the interactive
+    // chooser if silent fails (e.g. consent expired, account revoked).
+    try {
+      tok = await driveRequestToken({ silent: true });
+    } catch {
+      tok = await driveRequestToken({ silent: false });
+    }
+  }
   return 'Bearer ' + tok;
 }
 
@@ -4425,6 +4436,9 @@ async function driveFetch(url, opts = {}) {
   const auth = await driveAuthHeader();
   let r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: auth } });
   if (r.status === 401) {
+    // Token was good locally but Google rejected it (rotated / revoked /
+    // server-side expired). Try a silent refresh BEFORE the non-silent path,
+    // otherwise every 401 surfaces the Google account chooser to the user.
     clearDriveToken();
     const auth2 = await driveAuthHeader();
     r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: auth2 } });
@@ -5034,8 +5048,13 @@ async function syncTick() {
 }
 
 // Release the editor lock when leaving a property. Best-effort.
+// Skip silently when there's no Drive token — same gate as syncTick. Without
+// this, the manifest call would force driveAuthHeader to request a token,
+// which (until the silent-first refactor) was popping the Google account
+// chooser every time the user exited a property.
 async function releaseEditorLock() {
   if (!STATE) return;
+  if (!getDriveToken()) return;
   try {
     await upsertManifestEntry(buildManifestEntry({ asEditor: false }));
   } catch (e) {
