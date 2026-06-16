@@ -616,6 +616,25 @@ function syncUnitMixSumsToPhase1() {
   const overall  = Math.round(mfRsf + commRsf + commonSf);
   const overallInp = document.querySelector('[data-key="overall_rsf"]');
   if (overallInp) overallInp.value = overall || '';
+
+  // If the Details tab is open and shows Interior rows, recompute their qty and
+  // refresh the inline status-totals header — unit-mix counts drive both.
+  if (typeof refreshInteriorStatusHeader === 'function') {
+    refreshInteriorStatusHeader();
+    const counts = getUnitStatusCounts();
+    document.querySelectorAll('.detail-item-interior').forEach(wrap => {
+      const key = wrap.dataset.ckkey;
+      if (!key) return;
+      const [gi, si, ii] = key.split('.').map(Number);
+      if ([gi, si, ii].some(isNaN)) return;
+      recomputeInteriorRowQty(gi, si, ii, counts);
+      const qtyInp = wrap.querySelectorAll('input[type="number"]')[3]; // 3 pcts then qty
+      if (qtyInp) qtyInp.value = (Number(getP3(gi, si, ii).qty) || 0) || '';
+      renderDetailTotals(wrap, gi, si, ii);
+    });
+    const summaryNode = document.querySelector('.summary-totals');
+    if (summaryNode) updateDetailSummary(summaryNode);
+  }
 }
 
 function renderUnitMix() {
@@ -2485,7 +2504,36 @@ function renderPhase2() {
 const UNIT_TYPES = ['Each', 'SF', 'LF', 'SY', 'CY', 'LS', 'Unit', 'Allowance', 'Hour', 'Day', '%'];
 
 function getP3(gi, si, ii) {
-  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '' };
+  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '' };
+}
+
+function isInteriorGroup(gi) {
+  return !!(SCHEMA.phase3[gi] && SCHEMA.phase3[gi].name === 'Interior');
+}
+
+function getUnitStatusCounts() {
+  const rows = (STATE && Array.isArray(STATE.unitMix)) ? STATE.unitMix : [];
+  let orig = 0, part = 0, reno = 0;
+  for (const r of rows) {
+    const c = Number(r.count) || 0;
+    if (!c) continue;
+    const s = String(r.status || '').toLowerCase();
+    if (s.includes('unreno') || s.startsWith('orig')) orig += c;
+    else if (s.startsWith('part')) part += c;
+    else if (s.includes('reno')) reno += c;
+  }
+  return { orig, part, reno, empty: (orig + part + reno) === 0 };
+}
+
+function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
+  const v = getP3(gi, si, ii);
+  const c = countsOpt || getUnitStatusCounts();
+  const po = Number(v.pct_orig) || 0;
+  const pp = Number(v.pct_part) || 0;
+  const pr = Number(v.pct_reno) || 0;
+  const qty = Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
+  if ((Number(v.qty) || 0) !== qty) setP3(gi, si, ii, { qty });
+  return qty;
 }
 function setP3(gi, si, ii, patch) {
   const k = ckKey(gi, si, ii);
@@ -2605,6 +2653,58 @@ function refreshAllPctGroupSelects() {
 // line-item row so columns line up cleanly.
 const DETAIL_GRID_COLS = 'minmax(0,1fr) 44px 64px 78px 72px 84px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
+// Interior group has 3 extra status-% columns (Orig./Part./Reno.) replacing the
+// =MF checkbox column; # Qty is computed from the %s × Unit Mix status totals.
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 52px 52px 52px 60px 76px 70px 82px';
+const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:6px;padding:6px 10px`;
+
+// Status-totals + column header row rendered inside the Interior group (above
+// its first sub-section). Reads `STATE.unitMix` via getUnitStatusCounts(); when
+// empty, the count cells get a light-red bg to flag that unit mix is missing.
+function renderInteriorStatusHeader() {
+  const counts = getUnitStatusCounts();
+  const missingBg = '#fee2e2'; // light red
+  const fineBg = '#f8fafc';
+  const cellBg = counts.empty ? missingBg : fineBg;
+  const headerStyle = DETAIL_GRID_BASE_INTERIOR + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-bottom:1px solid #cbd5e1';
+  return el('div', { class: 'interior-status-header', style: headerStyle, 'data-interior-header': '' },
+    el('div', {}, 'Item'),
+    el('div', { 'data-status-cell': 'orig', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
+      el('div', { style: 'font-size:10px;color:#475569' }, 'Orig.'),
+      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.orig))
+    ),
+    el('div', { 'data-status-cell': 'part', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
+      el('div', { style: 'font-size:10px;color:#475569' }, 'Part.'),
+      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.part))
+    ),
+    el('div', { 'data-status-cell': 'reno', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
+      el('div', { style: 'font-size:10px;color:#475569' }, 'Reno'),
+      el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.reno))
+    ),
+    el('div', { style: 'text-align:right' }, '# Qty'),
+    el('div', {}, 'Qty Type'),
+    el('div', { style: 'text-align:right' }, '$/Qty'),
+    el('div', { style: 'text-align:right' }, '$ Amt'),
+  );
+}
+
+// Live-refresh the Interior status header counts in place (called when unit
+// mix changes while the Details tab is open) without re-rendering the page.
+function refreshInteriorStatusHeader() {
+  const hdr = document.querySelector('[data-interior-header]');
+  if (!hdr) return;
+  const counts = getUnitStatusCounts();
+  const missingBg = '#fee2e2';
+  const fineBg = '#f8fafc';
+  const cellBg = counts.empty ? missingBg : fineBg;
+  ['orig', 'part', 'reno'].forEach(k => {
+    const cell = hdr.querySelector(`[data-status-cell="${k}"]`);
+    if (!cell) return;
+    cell.style.background = cellBg;
+    const valEl = cell.children[1];
+    if (valEl) valEl.textContent = String(counts[k]);
+  });
+}
 
 function renderPhase3() {
   const root = el('div');
@@ -2647,6 +2747,7 @@ function renderPhase3() {
 
   SCHEMA.phase3.forEach((group, gi) => {
     if (!group.sections.length) return;
+    const isInterior = group.name === 'Interior';
     const groupBody = el('div', { class: 'section-body group-body' });
     let groupHasChecked = false;
     // Derive sub-section + row tints from the group banner color. Sub-section
@@ -2666,7 +2767,11 @@ function renderPhase3() {
       groupHasChecked = true;
       const secBody = el('div', { class: 'section-body' });
       checkedItems.forEach(({ item, ii }) => {
-        secBody.appendChild(renderDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg }));
+        secBody.appendChild(
+          isInterior
+            ? renderInteriorDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg })
+            : renderDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg })
+        );
       });
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
@@ -2682,7 +2787,9 @@ function renderPhase3() {
       groupBody.appendChild(secNode);
     });
     if (!groupHasChecked) return;
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name), groupBody);
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name));
+    if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
+    groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
   });
   // CAPEX Groups manager — user-defined buckets used by any % line item.
@@ -2858,6 +2965,104 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   return itemWrap;
 }
+// Interior-group line-item row. Same total/$Amt machinery as renderDetailItem,
+// but the =MF column is replaced by three % inputs (Orig./Part./Reno) and the
+// # Qty cell is read-only and auto-computed via recomputeInteriorRowQty().
+function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
+  const v = getP3(gi, si, ii);
+  // Ensure qty is in sync with current pct values + unit-mix counts before first render.
+  const counts = getUnitStatusCounts();
+  recomputeInteriorRowQty(gi, si, ii, counts);
+  const total = getDetailItemTotal(gi, si, ii);
+  const rowIdleBg = (tints && tints.rowIdleBg) || '';
+  const rowPricedBg = (tints && tints.rowPricedBg) || '#f0fdf4';
+
+  const itemWrap = el('div', {
+    class: 'detail-item-wrap detail-item-interior',
+    style: DETAIL_GRID_BASE_INTERIOR + ';border-bottom:1px solid #e5e7eb;background:' + (total > 0 ? rowPricedBg : rowIdleBg)
+  });
+  itemWrap.dataset.ckkey = ckKey(gi, si, ii);
+  itemWrap.dataset.bgIdle = rowIdleBg;
+  itemWrap.dataset.bgPriced = rowPricedBg;
+  itemWrap.dataset.interior = '1';
+
+  // Col 1: item name
+  itemWrap.appendChild(el('div', { style: 'min-width:0;overflow:hidden' },
+    el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name)
+  ));
+
+  // Cols 2-4: pct_orig / pct_part / pct_reno inputs
+  const qtyInp = el('input', {
+    type: 'number', min: 0, step: 1,
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box;background:#f1f5f9'
+  });
+  qtyInp.readOnly = true;
+  qtyInp.title = 'Auto-computed: Σ (% × matching unit-status total), rounded';
+  const refreshQtyDisplay = () => {
+    const cur = getP3(gi, si, ii);
+    qtyInp.value = (Number(cur.qty) || 0) || '';
+  };
+  function mkPctInput(field) {
+    const inp = el('input', {
+      type: 'number', min: 0, max: 100, step: 'any',
+      placeholder: '%',
+      style: 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box'
+    });
+    inp.value = v[field] !== '' && v[field] !== undefined && v[field] !== null ? v[field] : '';
+    inp.addEventListener('input', () => {
+      const raw = inp.value;
+      setP3(gi, si, ii, { [field]: raw === '' ? '' : Number(raw) });
+      recomputeInteriorRowQty(gi, si, ii);
+      refreshQtyDisplay();
+      recomputePctRowsAndSummary(summaryNode);
+    });
+    return inp;
+  }
+  itemWrap.appendChild(mkPctInput('pct_orig'));
+  itemWrap.appendChild(mkPctInput('pct_part'));
+  itemWrap.appendChild(mkPctInput('pct_reno'));
+
+  // Col 5: # Qty (read-only computed)
+  refreshQtyDisplay();
+  itemWrap.appendChild(qtyInp);
+
+  // Col 6: Qty Type
+  const effectiveUT = v.unit_type || item.default_qty_type || '';
+  const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
+  utSel.appendChild(el('option', { value: '' }, '—'));
+  UNIT_TYPES.forEach(u => {
+    const o = el('option', { value: u }, u);
+    if (effectiveUT === u) o.selected = true;
+    utSel.appendChild(o);
+  });
+  utSel.addEventListener('change', () => {
+    setP3(gi, si, ii, { unit_type: utSel.value });
+    recomputePctRowsAndSummary(summaryNode);
+  });
+  itemWrap.appendChild(utSel);
+
+  // Col 7: $/Qty (manual override; default rate shown as light-gray placeholder)
+  const costInp = el('input', {
+    type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
+  });
+  costInp.setAttribute('data-cost-input', '');
+  costInp.value = v.unit_cost !== '' ? v.unit_cost : '';
+  costInp.addEventListener('input', () => {
+    setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
+    recomputePctRowsAndSummary(summaryNode);
+  });
+  itemWrap.appendChild(costInp);
+
+  // Col 8: $ Amt
+  itemWrap.appendChild(el('div', {
+    'data-total': true,
+    style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a'
+  }, fmtMoney(total)));
+
+  return itemWrap;
+}
+
 function renderDetailTotals(itemWrap, gi, si, ii) {
   // Centralized via getDetailItemTotal so % rows compute correctly here too.
   const total = getDetailItemTotal(gi, si, ii);
