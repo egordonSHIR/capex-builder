@@ -111,7 +111,7 @@ const DEFAULT_PROPERTY = () => ({
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
   unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
   checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
-  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id}
+  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id, finish}
   // User-defined CAPEX Groups: buckets of line items used as the base for any
   // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
   capexGroups: [],
@@ -2507,7 +2507,39 @@ function renderPhase2() {
 const UNIT_TYPES = ['MF Unit', 'Building', 'Unit', 'Reno Unit', 'Each', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Device', 'Int. Hall'];
 
 function getP3(gi, si, ii) {
-  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '' };
+  return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '', finish: '' };
+}
+
+// Look up the $/Qty for a (item, finish) pair on the schema-attached options
+// list. Returns null when the item has no options or the finish isn't found
+// (stale-finish case — keep the row's last unit_cost frozen, see callers).
+function getFinishRate(item, finish) {
+  if (!item || !Array.isArray(item.options) || !finish) return null;
+  const o = item.options.find(opt => (opt && opt.finish === finish));
+  if (!o) return null;
+  const n = Number(o.default_cost);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Effective $/Qty for a Details row.
+//   1. If the row has a unit_cost set, that wins (user override is sticky).
+//   2. Else if the row has a Finish and the item still defines that option,
+//      use the Options-tab rate.
+//   3. Else 0 (no rate).
+// Used by both getDetailItemTotal and getCapexGroupTotal so % rows see the
+// same number as the visible row.
+function getEffectiveUnitCost(gi, si, ii) {
+  const v = getP3(gi, si, ii);
+  if (v.unit_cost !== '' && v.unit_cost !== null && v.unit_cost !== undefined) {
+    const n = Number(v.unit_cost);
+    if (Number.isFinite(n)) return n;
+  }
+  if (v.finish) {
+    const item = (SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si] && SCHEMA.phase3[gi].sections[si].items[ii]) || null;
+    const r = getFinishRate(item, v.finish);
+    if (r != null) return r;
+  }
+  return 0;
 }
 
 function isInteriorGroup(gi) {
@@ -2588,7 +2620,7 @@ function getCapexGroupTotal(groupId) {
     if (!isChecked(gi, si, ii)) continue;
     const v = STATE.phase3[key];
     if (!v || v.unit_type === '%') continue;
-    total += (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+    total += (Number(v.qty) || 0) * getEffectiveUnitCost(gi, si, ii);
   }
   return total;
 }
@@ -2599,7 +2631,7 @@ function getDetailItemTotal(gi, si, ii) {
   if (v.unit_type === '%') {
     return (qty / 100) * getCapexGroupTotal(v.pct_group_id);
   }
-  return qty * (Number(v.unit_cost) || 0);
+  return qty * getEffectiveUnitCost(gi, si, ii);
 }
 // Look up the schema item for a ckKey (used by the CAPEX Groups UI to render
 // item names + filter the Add Item dropdown).
@@ -2651,14 +2683,17 @@ function refreshAllPctGroupSelects() {
   });
 }
 
-// Shared 6-col grid for the Details page: item name | =MF checkbox | # Qty |
-// Qty Type | $/Qty | $ Amt. Used by both the sticky column header and each
-// line-item row so columns line up cleanly.
-const DETAIL_GRID_COLS = 'minmax(0,1fr) 44px 64px 78px 72px 84px';
+// Shared 7-col grid for the Details page: item name | =MF checkbox | Options |
+// # Qty | Qty Type | $/Qty | $ Amt. Options is the Finish picker — dropdown if
+// the item has any options defined in the schema; gray-disabled cell otherwise.
+// Used by both the sticky column header and each line-item row so columns line up.
+const DETAIL_GRID_COLS = 'minmax(0,1fr) 44px 86px 64px 78px 72px 84px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
-// Interior group has 3 extra status-% columns (Orig./Part./Reno.) replacing the
-// =MF checkbox column; # Qty is computed from the %s × Unit Mix status totals.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 52px 52px 52px 60px 76px 70px 82px';
+// Interior group: 9 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
+// checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
+// between the status-% block and # Qty so it lines up roughly with the
+// non-Interior Options column.
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 52px 52px 52px 86px 60px 76px 70px 82px';
 const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:6px;padding:6px 10px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
@@ -2684,6 +2719,7 @@ function renderInteriorStatusHeader() {
       el('div', { style: 'font-size:10px;color:#475569' }, 'Reno'),
       el('div', { style: 'font-size:13px;font-weight:700;color:#0f172a' }, String(counts.reno))
     ),
+    el('div', {}, 'Options'),
     el('div', { style: 'text-align:right' }, '# Qty'),
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
@@ -2734,6 +2770,7 @@ function renderPhase3() {
   },
     el('div', {}, 'Item'),
     el('div', { style: 'text-align:center' }, '=MF'),
+    el('div', {}, 'Options'),
     el('div', { style: 'text-align:right' }, '# Qty'),
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
@@ -2798,6 +2835,57 @@ function renderPhase3() {
   // CAPEX Groups manager — user-defined buckets used by any % line item.
   root.appendChild(renderCapexGroupsSection(summary));
   return root;
+}
+
+// Render the Options/Finish cell for a Details row. Returns a node that
+// occupies one grid cell. For items with at least one entry on the Options
+// tab, a <select> dropdown of finishes is rendered. Picking a finish writes
+// `finish` to state and CLEARS `unit_cost` (so the Options-tab rate takes
+// over via getEffectiveUnitCost). The user's subsequent typed override in
+// $/Qty re-populates `unit_cost`, which then wins (sticky override).
+// For items without options, a gray-disabled empty cell is shown.
+// Stale-finish handling: if v.finish names a finish that's no longer on
+// item.options, the saved name is included as a disabled "(removed) — X"
+// option so the row keeps its visible state until the user picks something
+// new (the row's last unit_cost stays frozen via getEffectiveUnitCost).
+function renderOptionsCell(gi, si, ii, item, onChange) {
+  const v = getP3(gi, si, ii);
+  const opts = Array.isArray(item.options) ? item.options : [];
+  if (!opts.length && !v.finish) {
+    return el('div', {
+      style: 'min-height:22px;background:#e5e7eb;border-radius:4px',
+      title: 'No finish options defined for this item',
+    });
+  }
+  const sel = el('select', {
+    style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box',
+    'data-finish-select': '',
+  });
+  sel.appendChild(el('option', { value: '' }, '—'));
+  const seen = new Set();
+  opts.forEach(o => {
+    if (!o || !o.finish) return;
+    seen.add(o.finish);
+    const opt = el('option', { value: o.finish }, o.finish);
+    if (v.finish === o.finish) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // Stale finish (e.g. removed from the Options tab after a roundtrip): keep
+  // the saved value visible as a disabled option so the user notices and
+  // re-picks. Last unit_cost stays frozen via getEffectiveUnitCost.
+  if (v.finish && !seen.has(v.finish)) {
+    const opt = el('option', { value: v.finish }, `(removed) — ${v.finish}`);
+    opt.selected = true;
+    opt.disabled = true;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', () => {
+    // Picking a finish clears any prior typed override so the Options-tab
+    // rate takes effect. If the user wants to override, they type in $/Qty.
+    setP3(gi, si, ii, { finish: sel.value, unit_cost: '' });
+    if (typeof onChange === 'function') onChange(sel.value);
+  });
+  return sel;
 }
 
 function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
@@ -2870,7 +2958,20 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   });
   itemWrap.appendChild(el('div', { style: 'text-align:center' }, mfCb));
 
-  // Col 3: # Qty (interpreted as the percentage value when unit_type === '%')
+  // Col 3: Options/Finish picker. When the user picks a finish, the row's
+  // unit_cost is cleared so the Options-tab rate flows through; we then push
+  // the new effective rate into costInp as the visible value. The user can
+  // still type to override (sticky).
+  const optionsCell = renderOptionsCell(gi, si, ii, item, () => {
+    const eff = getEffectiveUnitCost(gi, si, ii);
+    if (costInp) {
+      costInp.value = eff ? eff : '';
+    }
+    recomputePctRowsAndSummary(summaryNode);
+  });
+  itemWrap.appendChild(optionsCell);
+
+  // Col 4: # Qty (interpreted as the percentage value when unit_type === '%')
   itemWrap.appendChild(qtyInp);
 
   // Col 4: Qty Type
@@ -2893,13 +2994,23 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   });
   itemWrap.appendChild(utSel);
 
-  // Col 5: $/Qty — becomes a read-only display (group total ÷ 100) when type === '%'.
+  // Col 6: $/Qty — becomes a read-only display (group total ÷ 100) when type === '%'.
+  // When a Finish is picked and no override is typed yet, the input displays
+  // the Options-tab rate as its value (still editable — typing makes it a
+  // sticky override that survives later Finish changes).
   const costInp = el('input', {
     type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
-  costInp.value = v.unit_cost !== '' ? v.unit_cost : '';
+  if (v.unit_cost !== '' && v.unit_cost !== null && v.unit_cost !== undefined) {
+    costInp.value = v.unit_cost;
+  } else if (v.finish) {
+    const eff = getEffectiveUnitCost(gi, si, ii);
+    costInp.value = eff ? eff : '';
+  } else {
+    costInp.value = '';
+  }
   costInp.addEventListener('input', () => {
     if (costInp.readOnly) return;
     setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
@@ -2961,7 +3072,14 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       costInp.readOnly = false;
       costInp.style.background = '';
       costInp.title = '';
-      costInp.value = cur.unit_cost !== '' ? cur.unit_cost : '';
+      if (cur.unit_cost !== '' && cur.unit_cost !== null && cur.unit_cost !== undefined) {
+        costInp.value = cur.unit_cost;
+      } else if (cur.finish) {
+        const eff = getEffectiveUnitCost(gi, si, ii);
+        costInp.value = eff ? eff : '';
+      } else {
+        costInp.value = '';
+      }
     }
   }
   syncTypeRelatedUI();
@@ -3046,7 +3164,16 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   itemWrap.appendChild(mkPctInput('pct_part'));
   itemWrap.appendChild(mkPctInput('pct_reno'));
 
-  // Col 5: # Qty (read-only computed)
+  // Col 5: Options/Finish picker (same semantics as non-Interior — see
+  // renderOptionsCell). Picking a finish clears any user override so the
+  // Options-tab rate flows through; the $/Qty input is then refreshed.
+  itemWrap.appendChild(renderOptionsCell(gi, si, ii, item, () => {
+    const eff = getEffectiveUnitCost(gi, si, ii);
+    if (costInp) costInp.value = eff ? eff : '';
+    recomputePctRowsAndSummary(summaryNode);
+  }));
+
+  // Col 6: # Qty (read-only computed)
   refreshQtyDisplay();
   itemWrap.appendChild(qtyInp);
 
@@ -3065,13 +3192,21 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   });
   itemWrap.appendChild(utSel);
 
-  // Col 7: $/Qty (manual override; default rate shown as light-gray placeholder)
+  // Col 8: $/Qty. When a Finish is picked and no override is typed yet, the
+  // input displays the Options-tab rate; typing makes it a sticky override.
   const costInp = el('input', {
     type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
-  costInp.value = v.unit_cost !== '' ? v.unit_cost : '';
+  if (v.unit_cost !== '' && v.unit_cost !== null && v.unit_cost !== undefined) {
+    costInp.value = v.unit_cost;
+  } else if (v.finish) {
+    const eff = getEffectiveUnitCost(gi, si, ii);
+    costInp.value = eff ? eff : '';
+  } else {
+    costInp.value = '';
+  }
   costInp.addEventListener('input', () => {
     setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
     recomputePctRowsAndSummary(summaryNode);
@@ -3270,8 +3405,10 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
   } else {
     grp.itemKeys.forEach((key, idx) => {
       const it = getSchemaItemByKey(key);
-      const v = STATE.phase3[key] || {};
-      const itemTotal = (Number(v.qty) || 0) * (Number(v.unit_cost) || 0);
+      const parts = key.split('.').map(Number);
+      const itemTotal = (parts.length === 3 && !parts.some(isNaN))
+        ? getDetailItemTotal(parts[0], parts[1], parts[2])
+        : 0;
       const row = el('div', {
         style: 'display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px'
       });
@@ -3401,9 +3538,13 @@ async function exportXlsx() {
   const stylePct = (cell) => { cell.numFmt = '0%'; };
 
   // ===== Main "Capex Budget" sheet =====
+  // Columns: A=Item, B=# Items, C=$/Item, D=Finish, E/F/G=%Orig/Part/Reno,
+  // H=Total, I=Notes, J=GL Account. Finish is display-only — sourced from
+  // STATE.phase3[key].finish when prefill lands; emits blank in the current
+  // template-only export.
   const ws = workbook.addWorksheet('Capex Budget', { views: [{ state: 'frozen', xSplit: 0, ySplit: 7 }] });
   ws.columns = [
-    { width: 52 }, { width: 10 }, { width: 13 },
+    { width: 52 }, { width: 10 }, { width: 13 }, { width: 16 },
     { width: 11 }, { width: 11 }, { width: 11 },
     { width: 15 }, { width: 30 }, { width: 42 },
   ];
@@ -3413,14 +3554,14 @@ async function exportXlsx() {
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
+  ws.mergeCells(`A${titleRow.number}:J${titleRow.number}`);
 
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
   const unitsRow = ws.addRow(['# Units:', units]); unitsRow.getCell(1).font = { bold: true };
   const yrRow = ws.addRow(['Year Built:', STATE.phase1.year_built || '']); yrRow.getCell(1).font = { bold: true };
   ws.addRow([]);
 
-  const colHeaderRow = ws.addRow(['', '# Items', '$/Item', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
+  const colHeaderRow = ws.addRow(['', '# Items', '$/Item', 'Finish', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
   colHeaderRow.font = { bold: true };
   colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
   colHeaderRow.eachCell((c) => {
@@ -3439,35 +3580,35 @@ async function exportXlsx() {
     const isInterior = group.name === 'Interior';
 
     // Group header (total will be SUM of all items in the group)
-    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '']);
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '']);
     gh.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
     gh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
     gh.height = 20;
     gh.alignment = { vertical: 'middle' };
-    styleCurrency(gh.getCell(7));
+    styleCurrency(gh.getCell(8));
 
     let firstItemRowInGroup = null;
     let lastItemRowInGroup = null;
 
     group.sections.forEach((sec) => {
       if (!sec.items.length) return;
-      const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '']);
+      const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '', '']);
       sr.font = { bold: true, italic: true };
       sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
 
       const sectionFirstRow = sr.number + 1; // first item row is next
       sec.items.forEach((it) => {
         const r = ws.addRow([
-          '      ' + it.name, '', '', '', '', '',
-          '', // total filled by formula below
+          '      ' + it.name, '', '', '', '', '', '',
+          '', // total (col H) filled by formula below
           '', it.gl_account || '',
         ]);
         // Live total formula: =B{n}*C{n}
-        r.getCell(7).value = { formula: `B${r.number}*C${r.number}`, result: 0 };
+        r.getCell(8).value = { formula: `B${r.number}*C${r.number}`, result: 0 };
         styleCurrency(r.getCell(3));
-        styleCurrency(r.getCell(7));
-        stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
-        r.getCell(7).font = { bold: true };
+        styleCurrency(r.getCell(8));
+        stylePct(r.getCell(5)); stylePct(r.getCell(6)); stylePct(r.getCell(7));
+        r.getCell(8).font = { bold: true };
         r.eachCell({ includeEmpty: false }, (c) => { c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } }; });
 
         if (firstItemRowInGroup === null) firstItemRowInGroup = r.number;
@@ -3475,53 +3616,54 @@ async function exportXlsx() {
       });
       const sectionLastRow = lastItemRowInGroup;
       // Update section header total cell to SUM its items
-      sr.getCell(7).value = { formula: `SUM(G${sectionFirstRow}:G${sectionLastRow})`, result: 0 };
-      styleCurrency(sr.getCell(7));
+      sr.getCell(8).value = { formula: `SUM(H${sectionFirstRow}:H${sectionLastRow})`, result: 0 };
+      styleCurrency(sr.getCell(8));
     });
 
     // Group subtotal row spans all items in the group
-    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '']);
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '']);
     subr.font = { bold: true };
     subr.eachCell({ includeEmpty: true }, (c) => { c.border = { top: { style: 'thin', color: { argb: NAVY } } }; });
     if (firstItemRowInGroup !== null) {
-      subr.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
+      subr.getCell(8).value = { formula: `SUM(H${firstItemRowInGroup}:H${lastItemRowInGroup})`, result: 0 };
       // Group header total = same range
-      gh.getCell(7).value = { formula: `SUM(G${firstItemRowInGroup}:G${lastItemRowInGroup})`, result: 0 };
-      groupSubtotalAddrs.push(`G${subr.number}`);
+      gh.getCell(8).value = { formula: `SUM(H${firstItemRowInGroup}:H${lastItemRowInGroup})`, result: 0 };
+      groupSubtotalAddrs.push(`H${subr.number}`);
     }
-    styleCurrency(subr.getCell(7));
+    styleCurrency(subr.getCell(8));
     ws.addRow([]);
   });
 
-  // Final totals (live formulas)
+  // Final totals (live formulas) — Total column shifted from G to H to make
+  // room for the Finish column at D.
   ws.addRow([]);
-  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', '', '', '']);
+  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', '', '', '', '']);
   stRow.font = { bold: true };
-  styleCurrency(stRow.getCell(7));
+  styleCurrency(stRow.getCell(8));
   if (groupSubtotalAddrs.length) {
-    stRow.getCell(7).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
+    stRow.getCell(8).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
   }
 
-  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', '', '', '']);
-  styleCurrency(contRow.getCell(7));
-  contRow.getCell(7).value = { formula: `G${stRow.number}*${contPct}`, result: 0 };
+  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', '', '', '', '']);
+  styleCurrency(contRow.getCell(8));
+  contRow.getCell(8).value = { formula: `H${stRow.number}*${contPct}`, result: 0 };
 
-  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', '', '', '']);
-  styleCurrency(feeRow.getCell(7));
-  feeRow.getCell(7).value = { formula: `G${stRow.number}*${feePct}`, result: 0 };
+  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', '', '', '', '']);
+  styleCurrency(feeRow.getCell(8));
+  feeRow.getCell(8).value = { formula: `H${stRow.number}*${feePct}`, result: 0 };
 
-  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', '', '', '']);
+  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', '', '', '', '']);
   grandRow.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
   grandRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   grandRow.height = 22;
-  styleCurrency(grandRow.getCell(7));
-  grandRow.getCell(7).value = { formula: `G${stRow.number}+G${contRow.number}+G${feeRow.number}`, result: 0 };
+  styleCurrency(grandRow.getCell(8));
+  grandRow.getCell(8).value = { formula: `H${stRow.number}+H${contRow.number}+H${feeRow.number}`, result: 0 };
 
   if (units > 0) {
-    const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', '', '', '']);
+    const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', '', '', '', '']);
     puRow.font = { italic: true, bold: true };
-    styleCurrency(puRow.getCell(7));
-    puRow.getCell(7).value = { formula: `G${grandRow.number}/${units}`, result: 0 };
+    styleCurrency(puRow.getCell(8));
+    puRow.getCell(8).value = { formula: `H${grandRow.number}/${units}`, result: 0 };
   }
 
   if (STATE.phase4.notes) {
