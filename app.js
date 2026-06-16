@@ -3006,15 +3006,36 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
     qtyInp.value = (Number(cur.qty) || 0) || '';
   };
   function mkPctInput(field) {
+    const baseStyle = 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box';
+    const errStyle = baseStyle + ';border:1px solid #dc2626;background:#fef2f2;color:#dc2626';
     const inp = el('input', {
-      type: 'number', min: 0, max: 100, step: 'any',
+      type: 'number', min: 1, max: 100, step: 'any',
       placeholder: '%',
-      style: 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box'
+      style: baseStyle
     });
     inp.value = v[field] !== '' && v[field] !== undefined && v[field] !== null ? v[field] : '';
+    const clearError = () => { inp.style = baseStyle; inp.setCustomValidity(''); };
+    const showError = () => {
+      inp.style = errStyle;
+      inp.setCustomValidity('Please enter a number between 1 and 100.');
+      toast('Please enter a number between 1 and 100', 'error');
+    };
     inp.addEventListener('input', () => {
       const raw = inp.value;
-      setP3(gi, si, ii, { [field]: raw === '' ? '' : Number(raw) });
+      if (raw === '') {
+        clearError();
+        setP3(gi, si, ii, { [field]: '' });
+      } else {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 1 || n > 100) {
+          showError();
+          // Don't persist an invalid value — row qty stays computed from the
+          // last valid set of %s. User can correct and the row updates.
+          return;
+        }
+        clearError();
+        setP3(gi, si, ii, { [field]: n });
+      }
       recomputeInteriorRowQty(gi, si, ii);
       refreshQtyDisplay();
       recomputePctRowsAndSummary(summaryNode);
