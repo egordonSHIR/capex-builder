@@ -2693,7 +2693,7 @@ const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS}
 // checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
 // between the status-% block and # Qty so it lines up roughly with the
 // non-Interior Options column.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 42px 42px 42px 78px 48px 76px 58px 72px';
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px';
 const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:4px;padding:6px 8px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
