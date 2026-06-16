@@ -2501,7 +2501,10 @@ function renderPhase2() {
 // '%' is a special type: the row's $/Qty becomes a read-only display of
 // (selected CAPEX Group total) / 100, and the row's $ Amt = (qty / 100) ×
 // group total. A sub-row appears below the line item to pick the group.
-const UNIT_TYPES = ['Each', 'SF', 'LF', 'SY', 'CY', 'LS', 'Unit', 'Allowance', 'Hour', 'Day', '%'];
+// Source of truth: LISTS!A3:A<n> in Capex_Builder_Line_Items_Control.xlsx.
+// Keep in sync with that workbook's QTY_TYPES list. '%' triggers special % logic
+// (see getDetailItemTotal / renderDetailItem); all others are display-only.
+const UNIT_TYPES = ['MF Unit', 'Building', 'Unit', 'Reno Unit', 'Each', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Device', 'Int. Hall'];
 
 function getP3(gi, si, ii) {
   return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '' };
