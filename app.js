@@ -3275,7 +3275,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
   // native picker; on desktop it opens an inline list. Options auto-filter to
   // checked items not already in the group and exclude % rows (anti-recursion).
   const addSel = el('select', {
-    style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:6px 10px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;cursor:pointer',
+    style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:6px 10px;background:#1d2d47;color:#fff;border:none;border-radius:4px;cursor:pointer',
   });
   function rebuildAddOptions() {
     addSel.innerHTML = '';
@@ -3473,7 +3473,7 @@ function renderPhase4() {
 
   // Big Export button
   root.appendChild(el('button', {
-    style: 'width:100%;padding:18px;background:#1e3a8a;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
+    style: 'width:100%;padding:18px;background:#1d2d47;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
     onClick: exportXlsx
   }, '⬇  Export to Excel'));
 
@@ -3860,7 +3860,7 @@ function renderHome() {
       meBits.appendChild(el('span', { style: 'color:#64748b' }, CURRENT_USER.email));
     }
     meBits.appendChild(el('button', {
-      style: 'background:none;border:none;color:#1e3a8a;font-size:12px;cursor:pointer;font-weight:600;padding:0',
+      style: 'background:none;border:none;color:#1d2d47;font-size:12px;cursor:pointer;font-weight:600;padding:0',
       onClick: () => refreshHomeIndex(),
     }, '🔄 Refresh'));
     statusBar.appendChild(meBits);
