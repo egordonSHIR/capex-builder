@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1140">
+  <rect width="1440" height="1140" fill="#1e2d4e"/>
+  <g fill="none" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+    <!-- gray shadow truss -->
+    <g stroke="#7d8a9c">
+      <path d="M 380 540 L 740 200 L 1100 540 Z"/>
+      <line x1="740" y1="200" x2="740" y2="540"/>
+      <path d="M 380 540 L 560 380 L 740 540"/>
+    </g>
+    <!-- cream main truss -->
+    <g stroke="#f5f0e0">
+      <path d="M 340 500 L 700 160 L 1060 500 Z"/>
+      <line x1="700" y1="160" x2="700" y2="500"/>
+      <path d="M 340 500 L 520 340 L 700 500"/>
+    </g>
+  </g>
+  <!-- SHIR wordmark -->
+  <text x="720" y="950" text-anchor="middle"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-weight="900" font-size="320" fill="#f5f0e0"
+        letter-spacing="8">SHIR</text>
+</svg>

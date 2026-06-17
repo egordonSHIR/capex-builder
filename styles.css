@@ -36,13 +36,9 @@ html, body {
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .logo {
-  background: white;
-  color: var(--primary);
-  font-weight: 800;
-  font-size: 11px;
-  padding: 3px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
+  height: 34px;
+  width: auto;
+  display: block;
 }
 .title { font-weight: 600; font-size: 17px; }
 .header-actions { display: flex; gap: 8px; }

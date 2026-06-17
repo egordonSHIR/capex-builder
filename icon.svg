@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="92" fill="#1e2d4e"/>
+  <g fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 16)">
+    <!-- gray shadow truss (offset slightly down-right) -->
+    <g stroke="#7d8a9c">
+      <path d="M 132 348 L 268 188 L 404 348 Z"/>
+      <line x1="268" y1="188" x2="268" y2="348"/>
+      <path d="M 132 348 L 200 268 L 268 348"/>
+    </g>
+    <!-- cream main truss -->
+    <g stroke="#f5f0e0">
+      <path d="M 116 332 L 252 172 L 388 332 Z"/>
+      <line x1="252" y1="172" x2="252" y2="332"/>
+      <path d="M 116 332 L 184 252 L 252 332"/>
+    </g>
+  </g>
+</svg>
