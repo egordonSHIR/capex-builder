@@ -1391,59 +1391,12 @@ async function findSurveyPdfInDrive() {
 // Call the Anthropic Messages API with the survey PDF as a base64 document block.
 // Returns a parsed object matching the shape expected by applySurveyParsedData().
 async function callClaudeWithSurveyPdf(apiKey, pdfBase64, filename) {
-  const system = `You are a real estate survey analyst. Extract physical site specs from the survey PDF and return a JSON object. Return ONLY the raw JSON — no markdown fences, no explanation.
-
-JSON schema:
-{
-  "flat": {
-    "parking_regular": number|null,
-    "parking_spots_hc": number|null,
-    "parking_spots_existing": number|null,
-    "land_sf": number|null,
-    "land_acres": number|null,
-    "site_perimeter_lf": number|null,
-    "fencing_notes": "string or n/a",
-    "gates_notes": "string or n/a",
-    "parking_lot_sf": number|null,
-    "num_buildings": number|null,
-    "total_footprint_sf": number|null,
-    "total_roof_sf": number|null,
-    "total_facade_sf": number|null,
-    "landscaping_sf": number|null
-  },
-  "buildings": [
-    {
-      "label": "string",
-      "footprint_sf": number|null,
-      "stories": number|null,
-      "height_ft": number|null,
-      "roof_pitch": "e.g. 4:12 or flat",
-      "roof_sf": number|null,
-      "facade_sf": number|null
-    }
-  ],
-  "meta": {
-    "property_name": "string",
-    "survey_date": "YYYY-MM-DD",
-    "address": "string",
-    "scale_paper": "e.g. 1 inch = 30 feet",
-    "ft_per_pixel": number|null
-  },
-  "notes": "any cross-reference notes as a single string",
-  "discrepancies": ["array of discrepancy strings"]
-}
-
-Rules:
-- Use null (not 0, not empty string) for any value you cannot determine.
-- fencing_notes / gates_notes: use "n/a" if the survey shows none.
-- parking_spots_existing = regular + HC total.
-- total_footprint_sf = sum of all buildings footprint_sf.
-- total_roof_sf = sum of all buildings roof_sf.
-- total_facade_sf = sum of all buildings facade_sf.
-- landscaping_sf ≈ land_sf − total_footprint_sf − parking_lot_sf.
-- roof_sf per building = footprint_sf multiplied by pitch factor: flat=1.02, 3:12=1.031, 4:12=1.054, 5:12=1.083, 6:12=1.118, 8:12=1.202.
-- List each building separately in the buildings array.
-- Extract the graphic scale bar or stated paper scale to populate meta fields.`;
+  // Survey-extraction system prompt lives in survey_extraction_prompt.md
+  // (parent folder, next to capex_schema.json) and is injected into schema.js
+  // by build_schema.py as window.SURVEY_EXTRACTION_PROMPT. To tune the
+  // extraction, edit the .md → python build_schema.py → push.
+  const system = window.SURVEY_EXTRACTION_PROMPT;
+  if (!system) throw new Error('SURVEY_EXTRACTION_PROMPT missing — rebuild schema.js (python build_schema.py)');
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
