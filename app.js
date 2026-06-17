@@ -3000,7 +3000,6 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const costInp = el('input', {
     type: 'number', min: 0, step: 'any',
     placeholder: defaultRate,
-    title: defaultRate !== '' ? `default rate ${fmtMoney(defaultRate)} · type to override` : '',
     class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
@@ -3200,7 +3199,6 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   const costInp = el('input', {
     type: 'number', min: 0, step: 'any',
     placeholder: defaultRate,
-    title: defaultRate !== '' ? `default rate ${fmtMoney(defaultRate)} · type to override` : '',
     class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
