@@ -878,7 +878,7 @@ window.SCHEMA = {
         ]
       },
       {
-        "name": "OUTSIDE CONTRACTOR PERMITS",
+        "name": "OTHER PERMITS",
         "items": [
           {
             "name": "Demolition Permit",
@@ -1471,7 +1471,7 @@ window.SCHEMA = {
         ]
       },
       {
-        "name": "DRYWALL - Materials & Installation",
+        "name": "DRYWALL",
         "items": [
           {
             "name": "Materials",
@@ -2029,7 +2029,7 @@ window.SCHEMA = {
     ]
   },
   {
-    "name": "Amenities/Common Areas",
+    "name": "Amenities",
     "sections": [
       {
         "name": "General",

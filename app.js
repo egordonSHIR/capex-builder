@@ -2379,7 +2379,7 @@ const GROUP_COLORS = {
   'Building Work': '#B2BCCB',
   'Interior': '#A64D79',
   'Exterior': '#3477B2',
-  'Amenities/Common Areas': '#242852',
+  'Amenities': '#242852',
   'Commercial Tenant Costs': '#FFCC66',
 };
 // Pick readable text color (dark on light fills, white on dark fills).
