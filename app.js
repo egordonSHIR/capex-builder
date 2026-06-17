@@ -881,7 +881,7 @@ function renderSurveyBlock() {
       }, st.pdf ? '📄 survey ✓' : '📄 no survey'));
       statusHolder.appendChild(el('span', {
         style: chipStyle(!!st.report),
-        title: st.report ? `Breakdown workbook on file: ${st.report.name}` : 'No SurveyBreakdownSpecs workbook in 7. Title_Survey/Reports — run 🛰 Process Survey',
+        title: st.report ? `Breakdown workbook on file: ${st.report.name}` : 'No SurveyBreakdownSpecs workbook in 7. Title_Survey or its Reports subfolder — run 🛰 Process Survey',
       }, st.report ? '📐 processed ✓' : '📐 not processed'));
     };
     const loadChips = (force) => {
@@ -1228,7 +1228,7 @@ async function importSurveyFromDrive(rebuild) {
     toast('Searching for survey report in Drive…');
     // Locate matching workbooks in 7. Title_Survey/Reports/ (newest first).
     const matches = await _listSurveyReportCandidates();
-    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/Reports/ — run 🛰 Process Survey or the skill first.', 'error'); return; }
+    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/ (or its Reports/ subfolder) — run 🛰 Process Survey or the skill first.', 'error'); return; }
     const dateOf = (name) => {
       const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
       return m ? m[1] : '';
@@ -1330,12 +1330,24 @@ async function _listSurveyReportCandidates() {
   if (!ts) return [];
   const tsSubs = await listSubfolders(ts.id);
   const reports = tsSubs.find(f => /^reports?$/i.test(f.name));
-  if (!reports) return [];
-  const files = await driveListFilesInFolder(reports.id);
-  const matches = files.filter(f =>
-    /\.xlsx?$/i.test(f.name) &&
-    /survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))
-  );
+  // Scan both Reports/ (preferred destination) and 7. Title_Survey/ itself, so
+  // workbooks placed at the parent level (e.g. by the external SHIR skill) are
+  // still picked up. Dedupe by file id.
+  const folderIds = [];
+  if (reports) folderIds.push(reports.id);
+  folderIds.push(ts.id);
+  const fileListsArr = await Promise.all(folderIds.map(id => driveListFilesInFolder(id)));
+  const seen = new Set();
+  const matches = [];
+  for (const files of fileListsArr) {
+    for (const f of files) {
+      if (seen.has(f.id)) continue;
+      if (!/\.xlsx?$/i.test(f.name)) continue;
+      if (!/survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))) continue;
+      seen.add(f.id);
+      matches.push(f);
+    }
+  }
   const dateOf = (name) => {
     const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
     return m ? m[1] : '';
