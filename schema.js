@@ -862,14 +862,14 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Exterior Designer - Service Fee",
+            "name": "Exterior Designer - Fee",
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17004 - Design",
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Interior Designer - Service fee",
+            "name": "Interior Designer - Fee",
             "default_cost_per_item": 45000.0,
             "notes": null,
             "gl_account": "17004 - Design",
@@ -895,14 +895,14 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Pool Permit Design",
+            "name": "Pool Plans",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17700: CIP Architectural",
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Signage Design (after AOD)",
+            "name": "Signage Plans",
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17560: CIP Signage (5 Yrs)",
@@ -921,7 +921,7 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Temporary Trade Permits",
+            "name": "Trade Permits",
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17910: CIP License / Permits",
@@ -940,7 +940,7 @@ window.SCHEMA = {
         "name": "GENERAL CONDITIONS",
         "items": [
           {
-            "name": "Appliance/Furniture Removal",
+            "name": "Furniture Removal",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17805: CIP Common Area FF&E",
@@ -975,7 +975,7 @@ window.SCHEMA = {
             "default_qty_type": "Month"
           },
           {
-            "name": "Construction Office Setup",
+            "name": "Constr. Office Setup",
             "default_cost_per_item": 15000.0,
             "notes": "on-site office, furniture, internet, etc.",
             "gl_account": "17940: CIP General Conditions",
@@ -1039,7 +1039,7 @@ window.SCHEMA = {
             "default_qty_type": "Building"
           },
           {
-            "name": "Concrete Pads for Dumpsters",
+            "name": "Pads for Dumpsters",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17570: CIP Trash/Dumpster",
@@ -1084,28 +1084,28 @@ window.SCHEMA = {
             "default_qty_type": "Linear Ft"
           },
           {
-            "name": "New Domestic Water Service",
+            "name": "New Water",
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17583: CIP Base - Plumbing - Water",
             "default_qty_type": "Unit"
           },
           {
-            "name": "Domestic Water Service (Extension)",
+            "name": "Water Extension",
             "default_cost_per_item": 150.0,
             "notes": null,
             "gl_account": "17583: CIP Base - Plumbing - Water",
             "default_qty_type": "Linear Ft"
           },
           {
-            "name": "New Wastewater Service",
+            "name": "New Wastewater",
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17585: CIP Sewer Drains/Pipes (15 Yrs)",
             "default_qty_type": "Unit"
           },
           {
-            "name": "Wastewater Service (Extension)",
+            "name": "Wastewater Extension",
             "default_cost_per_item": 150.0,
             "notes": null,
             "gl_account": "17585: CIP Sewer Drains/Pipes (15 Yrs)",
@@ -1117,21 +1117,21 @@ window.SCHEMA = {
         "name": "FIRE PROTECTION",
         "items": [
           {
-            "name": "Sprinkler - Riser to ROW - Underground",
+            "name": "Sprinkler - Hookup To Riser",
             "default_cost_per_item": 150.0,
             "notes": null,
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
             "default_qty_type": "Linear Ft"
           },
           {
-            "name": "Sprinkler - ROW Work",
+            "name": "Sprinkler - Utility Hookup",
             "default_cost_per_item": 50000.0,
             "notes": "Tap Plan",
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
             "default_qty_type": "Unit"
           },
           {
-            "name": "Sprinkler - Baseboard Vault Heater",
+            "name": "Sprinkler - Vault Heater",
             "default_cost_per_item": 2500.0,
             "notes": "if needed",
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
@@ -1143,21 +1143,21 @@ window.SCHEMA = {
         "name": "ELECTRICAL",
         "items": [
           {
-            "name": "Underground Electrical - Dig",
+            "name": "Underground Electrical",
             "default_qty_type": "Linear Ft",
             "default_cost_per_item": 150.0,
             "gl_account": "17371: CIP Base - Electrical",
             "notes": "Street to Transformer (Utility Co)"
           },
           {
-            "name": "New Transformer",
+            "name": "Transformer",
             "default_cost_per_item": 100000.0,
             "notes": null,
             "gl_account": "17371: CIP Base - Electrical",
             "default_qty_type": "Unit"
           },
           {
-            "name": "New Transformer Pad + Install",
+            "name": "Transformer Pad",
             "default_cost_per_item": 30000.0,
             "notes": "+ Pad & Bollards",
             "gl_account": "17371: CIP Base - Electrical",
@@ -1176,7 +1176,7 @@ window.SCHEMA = {
         "name": "PARKING LOT",
         "items": [
           {
-            "name": "Overlay (Asphalt)",
+            "name": "Overlay - Asphalt",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17535: CIP Parking Lot - Asphalt (15 Yrs)",
@@ -1228,21 +1228,21 @@ window.SCHEMA = {
         "name": "ELECTRICAL",
         "items": [
           {
-            "name": "Installing Meter Banks",
+            "name": "New Meter Banks",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
             "default_qty_type": "Unit"
           },
           {
-            "name": "Electric Submeters (Materials)",
+            "name": "Electric Submeters Materials",
             "default_cost_per_item": 100.0,
             "notes": "owned by Utility Co",
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
             "default_qty_type": "MF Unit"
           },
           {
-            "name": "Meter Installation (Labor)",
+            "name": "Electric Submeters Labor",
             "default_cost_per_item": 100.0,
             "notes": "done by Utility Co",
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
@@ -1268,7 +1268,7 @@ window.SCHEMA = {
             "notes": null
           },
           {
-            "name": "Sprinkler - Baseboard Heater",
+            "name": "Sprinkler - Heater",
             "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
@@ -1282,7 +1282,7 @@ window.SCHEMA = {
             "notes": null
           },
           {
-            "name": "Sprinkler - Fire Assembly Install",
+            "name": "Sprinkler - Fire Assembly",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
@@ -1327,14 +1327,7 @@ window.SCHEMA = {
             "default_qty_type": "Building"
           },
           {
-            "name": "Framing Labor + Material",
-            "default_cost_per_item": 5000.0,
-            "notes": null,
-            "gl_account": "17390: CIP Building - Framing",
-            "default_qty_type": "Allowance"
-          },
-          {
-            "name": "Additional Unit Conversions - Demised Walls",
+            "name": "Demise Add'l Units",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17390: CIP Building - Framing",
@@ -1346,14 +1339,14 @@ window.SCHEMA = {
         "name": "INTERIOR CORRIDORS",
         "items": [
           {
-            "name": "Interior Hallways Reno",
+            "name": "Hallways Reno",
             "default_cost_per_item": 5000.0,
             "notes": "Carpet, Paint, Fixtures, Doors",
             "gl_account": "17800: CIP Common Hallways & Stairwells",
             "default_qty_type": "Int. Hall"
           },
           {
-            "name": "Furniture, Artwork",
+            "name": "Hallways Art",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17800: CIP Common Hallways & Stairwells",
@@ -1370,7 +1363,7 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "MATERIALS IMPORT TAX/SHIPPING",
+            "name": "MATERIALS IMPORT TAX",
             "default_cost_per_item": 20.0,
             "notes": null,
             "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
@@ -1410,14 +1403,14 @@ window.SCHEMA = {
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "Mechanical Rough-In Labor",
+            "name": "Mech. Rough-In Labor",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17151: CIP Interior - Mechanical Rough-In",
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "Mechanical Framing",
+            "name": "Mech. Rough-In Materials",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17151: CIP Interior - Mechanical Rough-In",
@@ -1429,14 +1422,7 @@ window.SCHEMA = {
         "name": "ELECTRICAL ROUGH-INS",
         "items": [
           {
-            "name": "Breaker Panels",
-            "default_cost_per_item": 200.0,
-            "notes": null,
-            "gl_account": "17202: CIP Interior - Electrical Rough-In",
-            "default_qty_type": "Reno Unit"
-          },
-          {
-            "name": "In-Unit Wiring",
+            "name": "Electrical Rough-in Materials",
             "default_cost_per_item": 250.0,
             "notes": "includes add'l outlets",
             "gl_account": "17202: CIP Interior - Electrical Rough-In",
@@ -1480,13 +1466,6 @@ window.SCHEMA = {
             "default_cost_per_item": 500.0,
             "notes": "Upper Floor Units (not ground #)",
             "gl_account": "17133: CIP Interior - Plumbing Rough-In",
-            "default_qty_type": "Reno Unit"
-          },
-          {
-            "name": "INSULATION",
-            "default_cost_per_item": 100.0,
-            "notes": null,
-            "gl_account": "17189: CIP Interior - Insulation",
             "default_qty_type": "Reno Unit"
           }
         ]
@@ -1542,7 +1521,7 @@ window.SCHEMA = {
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "Smoke & CO2 Alarm Fixtures",
+            "name": "Smoke & CO2 Alarms",
             "default_cost_per_item": 100.0,
             "notes": null,
             "gl_account": "17177: CIP Interior - Smoke/CO2 Alarms Fixtures (5 Yrs)",
@@ -1573,7 +1552,7 @@ window.SCHEMA = {
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "Tub/Shower Surround",
+            "name": "Tub Surround",
             "default_cost_per_item": 400.0,
             "notes": null,
             "gl_account": "17180: CIP Interior - Tubs/Shower Surround",
@@ -1695,7 +1674,7 @@ window.SCHEMA = {
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "General Renovation Labor",
+            "name": "Renovation Labor",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17101: CIP Interior - Renovation Labor",
@@ -1712,7 +1691,7 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "TRASH-DUMPSTERS",
+            "name": "DUMPSTERS",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17570: CIP Trash/Dumpster",
@@ -1733,7 +1712,7 @@ window.SCHEMA = {
             "default_qty_type": "Device"
           },
           {
-            "name": "EXTERIOR/COMMON DOORS",
+            "name": "EXTERIOR DOORS",
             "default_cost_per_item": 1000.0,
             "notes": "for replacement",
             "gl_account": "17396: CIP Exterior - Common Doors",
@@ -1819,7 +1798,7 @@ window.SCHEMA = {
         "name": "PER UNIT EXTERIOR",
         "items": [
           {
-            "name": "Exterior Lighting (Per Unit)",
+            "name": "Exterior Lighting (/Unit)",
             "default_cost_per_item": null,
             "notes": null,
             "gl_account": "17480: CIP Exterior - Lighting Per Unit  (5 Yrs)"
@@ -1854,7 +1833,13 @@ window.SCHEMA = {
         "name": "ELECTRICAL - EXTERIOR",
         "items": [
           {
-            "name": "Egress lighting and exit signs",
+            "name": "Egress Lighting",
+            "default_cost_per_item": 5.0,
+            "notes": null,
+            "gl_account": "17499: CIP Exterior - Lighting"
+          },
+          {
+            "name": "Exit Signs",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17499: CIP Exterior - Lighting"
@@ -1866,7 +1851,7 @@ window.SCHEMA = {
             "gl_account": "17499: CIP Exterior - Lighting"
           },
           {
-            "name": "Electrical for Landscaping, Pool, Security cameras, and Courtyard",
+            "name": "Electrical for Exterior Items",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17375: CIP Electrical Exterior (15 Yrs)"
@@ -1887,12 +1872,6 @@ window.SCHEMA = {
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17550: CIP Roofing"
-          },
-          {
-            "name": "Draft Stop Installation",
-            "default_cost_per_item": 5000.0,
-            "notes": "Pitched Roof Only",
-            "gl_account": "17550: CIP Roofing"
           }
         ]
       },
@@ -1906,7 +1885,7 @@ window.SCHEMA = {
             "gl_account": "17325: CIP Exterior - Railings"
           },
           {
-            "name": "Sandblasting - Labor",
+            "name": "Sandblasting",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings"
@@ -2017,7 +1996,7 @@ window.SCHEMA = {
             "gl_account": "17400: CIP Fa\u00e7ade"
           },
           {
-            "name": "Store Front/Curtain Walls",
+            "name": "Store Front",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17403: CIP Exterior - Store Front - Curtain Walls"
@@ -2178,7 +2157,7 @@ window.SCHEMA = {
         "name": "POOL",
         "items": [
           {
-            "name": "Pool Insert/Decking",
+            "name": "Pool Decking",
             "default_cost_per_item": 35000.0,
             "notes": null,
             "gl_account": "17657: CIP Common - Pool Decking"
@@ -2190,7 +2169,7 @@ window.SCHEMA = {
             "gl_account": "17675: CIP Pool - Machinery"
           },
           {
-            "name": "Tile",
+            "name": "Coping Tile",
             "default_cost_per_item": 35000.0,
             "notes": null,
             "gl_account": "17670: CIP Pool - Surface & Shell"
@@ -2202,13 +2181,13 @@ window.SCHEMA = {
             "gl_account": "17655: CIP Pool - Furniture (7 Yrs)"
           },
           {
-            "name": "Concrete in Courtyard - retaining wall",
+            "name": "Retaining Wall",
             "default_cost_per_item": 35000.0,
             "notes": null,
             "gl_account": "17300: CIP Retaining Wall (15 Yrs)"
           },
           {
-            "name": "footers/columns in courtyard",
+            "name": "Footers",
             "default_cost_per_item": 35000.0,
             "notes": null,
             "gl_account": "17300: CIP Retaining Wall (15 Yrs)"
@@ -2273,7 +2252,7 @@ window.SCHEMA = {
             "gl_account": "17645: CIP Clubhouse - Sound System (5 Yrs)"
           },
           {
-            "name": "Leasing Center Tech Equipment",
+            "name": "Tech Equipment",
             "default_cost_per_item": 6000.0,
             "notes": null,
             "gl_account": "17955: CIP Office/Computer Equipment (5 Yrs)"
