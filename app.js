@@ -2528,10 +2528,14 @@ function getEffectiveUnitCost(gi, si, ii) {
     const n = Number(v.unit_cost);
     if (Number.isFinite(n)) return n;
   }
-  if (v.finish) {
-    const item = (SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si] && SCHEMA.phase3[gi].sections[si].items[ii]) || null;
+  const item = (SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si] && SCHEMA.phase3[gi].sections[si].items[ii]) || null;
+  if (v.finish && item) {
     const r = getFinishRate(item, v.finish);
     if (r != null) return r;
+  }
+  if (item && item.default_cost_per_item != null && item.default_cost_per_item !== '') {
+    const n = Number(item.default_cost_per_item);
+    if (Number.isFinite(n)) return n;
   }
   return 0;
 }
@@ -2992,8 +2996,12 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // When a Finish is picked and no override is typed yet, the input displays
   // the Options-tab rate as its value (still editable — typing makes it a
   // sticky override that survives later Finish changes).
+  const defaultRate = (item.default_cost_per_item != null && item.default_cost_per_item !== '') ? item.default_cost_per_item : '';
   const costInp = el('input', {
-    type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
+    type: 'number', min: 0, step: 'any',
+    placeholder: defaultRate,
+    title: defaultRate !== '' ? `default rate ${fmtMoney(defaultRate)} · type to override` : '',
+    class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
@@ -3188,8 +3196,12 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   // Col 8: $/Qty. When a Finish is picked and no override is typed yet, the
   // input displays the Options-tab rate; typing makes it a sticky override.
+  const defaultRate = (item.default_cost_per_item != null && item.default_cost_per_item !== '') ? item.default_cost_per_item : '';
   const costInp = el('input', {
-    type: 'number', min: 0, step: 'any', placeholder: item.default_cost_per_item ?? '',
+    type: 'number', min: 0, step: 'any',
+    placeholder: defaultRate,
+    title: defaultRate !== '' ? `default rate ${fmtMoney(defaultRate)} · type to override` : '',
+    class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
