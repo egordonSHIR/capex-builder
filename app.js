@@ -858,7 +858,7 @@ function renderSurveyBlock() {
 
     // Survey status chips, inline with the action buttons: does a survey PDF
     // exist in the deal folder, and does a processed SurveyBreakdownSpecs
-    // workbook exist in 7. Title_Survey/Reports/? Checked via Drive (cached
+    // workbook exist in 7. Title_Survey/? Checked via Drive (cached
     // per property); click the chips to re-check.
     const chipStyle = (on) =>
       'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 10px;border-radius:999px;align-self:center;cursor:pointer;' +
@@ -881,7 +881,7 @@ function renderSurveyBlock() {
       }, st.pdf ? '📄 survey ✓' : '📄 no survey'));
       statusHolder.appendChild(el('span', {
         style: chipStyle(!!st.report),
-        title: st.report ? `Breakdown workbook on file: ${st.report.name}` : 'No SurveyBreakdownSpecs workbook in 7. Title_Survey or its Reports subfolder — run 🛰 Process Survey',
+        title: st.report ? `Breakdown workbook on file: ${st.report.name}` : 'No SurveyBreakdownSpecs workbook in 7. Title_Survey — run 🛰 Process Survey',
       }, st.report ? '📐 processed ✓' : '📐 not processed'));
     };
     const loadChips = (force) => {
@@ -920,7 +920,7 @@ function renderSurveyBlock() {
       el('strong', {}, 'Populating these fields: '),
       'click ', el('strong', {}, '📥 Import Survey'), ' to load the latest ',
       el('em', {}, '*_SurveyBreakdownSpecs_*.xlsx'),
-      ' from the deal folder: ', el('em', {}, '7. Title_Survey/Reports/'),
+      ' from the deal folder: ', el('em', {}, '7. Title_Survey/'),
       ' folder, or ', el('strong', {}, '⬆ Upload XLSX'),
       ' to pick a file manually. Each import overwrites the flat fields below ',
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
@@ -1219,16 +1219,16 @@ async function importSurveyFromFile(file, rebuild) {
 }
 
 // Find and import the latest *_SurveyBreakdownSpecs_*.xlsx from this deal
-// 7. Title_Survey/Reports/ folder (with legacy SurveyLayoutSpecs fallback).
+// 7. Title_Survey/ folder (with legacy SurveyLayoutSpecs fallback).
 async function importSurveyFromDrive(rebuild) {
   if (!STATE) return;
   if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { toast('Connect Google Drive first', 'error'); return; }
   try {
     toast('Searching for survey report in Drive…');
-    // Locate matching workbooks in 7. Title_Survey/Reports/ (newest first).
+    // Locate matching workbooks in 7. Title_Survey/ (newest first).
     const matches = await _listSurveyReportCandidates();
-    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/ (or its Reports/ subfolder) — run 🛰 Process Survey or the skill first.', 'error'); return; }
+    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/ — run 🛰 Process Survey or the skill first.', 'error'); return; }
     const dateOf = (name) => {
       const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
       return m ? m[1] : '';
@@ -1320,34 +1320,19 @@ async function _listSurveyPdfCandidates() {
   return candidates;
 }
 
-// List *_SurveyBreakdownSpecs_*.xlsx candidates in 7. Title_Survey/Reports/,
-// newest first by filename date then modifiedTime (no user prompts).
+// List *_SurveyBreakdownSpecs_*.xlsx candidates in 7. Title_Survey/, newest
+// first by filename date then modifiedTime (no user prompts).
 async function _listSurveyReportCandidates() {
   if (!STATE || !STATE.drive.folderId) return [];
   const subs = await listSubfolders(STATE.drive.folderId);
   const ts = subs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
           || subs.find(f => /title[\s_\-]*survey/i.test(f.name));
   if (!ts) return [];
-  const tsSubs = await listSubfolders(ts.id);
-  const reports = tsSubs.find(f => /^reports?$/i.test(f.name));
-  // Scan both Reports/ (preferred destination) and 7. Title_Survey/ itself, so
-  // workbooks placed at the parent level (e.g. by the external SHIR skill) are
-  // still picked up. Dedupe by file id.
-  const folderIds = [];
-  if (reports) folderIds.push(reports.id);
-  folderIds.push(ts.id);
-  const fileListsArr = await Promise.all(folderIds.map(id => driveListFilesInFolder(id)));
-  const seen = new Set();
-  const matches = [];
-  for (const files of fileListsArr) {
-    for (const f of files) {
-      if (seen.has(f.id)) continue;
-      if (!/\.xlsx?$/i.test(f.name)) continue;
-      if (!/survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))) continue;
-      seen.add(f.id);
-      matches.push(f);
-    }
-  }
+  const files = await driveListFilesInFolder(ts.id);
+  const matches = files.filter(f =>
+    /\.xlsx?$/i.test(f.name) &&
+    /survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))
+  );
   const dateOf = (name) => {
     const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
     return m ? m[1] : '';
@@ -1557,7 +1542,7 @@ async function processSurveyWithClaude(rebuild) {
     renderShell();
     toast(`Survey processed by AI — ${summary}`, 'success');
 
-    // Final leg: regenerate the SHIR workbook into 7. Title_Survey/Reports/ so
+    // Final leg: regenerate the SHIR workbook into 7. Title_Survey/ so
     // the deal folder carries the standard artifact and 📥 Import Survey works
     // for every teammate/device. Re-render after — the upload invalidates the
     // survey-status cache, so the chips flip to "processed ✓".
@@ -1692,9 +1677,9 @@ async function generateSurveyBreakdownXlsx(parsed) {
   return { blob, filename };
 }
 
-// Upload the regenerated survey workbook to <deal>/7. Title_Survey/Reports/
-// (folders created if missing). Falls back to a local download if the Drive
-// upload fails so the artifact isn't lost.
+// Upload the regenerated survey workbook to <deal>/7. Title_Survey/ (folder
+// created if missing). Falls back to a local download if the Drive upload
+// fails so the artifact isn't lost.
 async function uploadSurveyWorkbookToDrive(parsed) {
   let wbOut = null;
   try {
@@ -1704,13 +1689,10 @@ async function uploadSurveyWorkbookToDrive(parsed) {
     const ts = subs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
             || subs.find(f => /title[\s_\-]*survey/i.test(f.name));
     const tsId = ts ? ts.id : await driveEnsureSubfolder(STATE.drive.folderId, '7. Title_Survey');
-    const tsSubs = await listSubfolders(tsId);
-    const reports = tsSubs.find(f => /^reports?$/i.test(f.name));
-    const reportsId = reports ? reports.id : await driveEnsureSubfolder(tsId, 'Reports');
-    await driveUploadBinary(reportsId, wbOut.filename, wbOut.blob,
+    await driveUploadBinary(tsId, wbOut.filename, wbOut.blob,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     delete SURVEY_STATUS_CACHE[STATE.id];   // breakdown file just changed — re-check chips on next render
-    toast(`Saved ${wbOut.filename} to 7. Title_Survey/Reports/`, 'success');
+    toast(`Saved ${wbOut.filename} to 7. Title_Survey/`, 'success');
   } catch (e) {
     console.error('uploadSurveyWorkbookToDrive:', e);
     if (wbOut) {
