@@ -803,7 +803,7 @@ window.SCHEMA = {
         ]
       },
       {
-        "name": "DESIGN TEAM CONTRACTS",
+        "name": "PLAN DESIGN",
         "items": [
           {
             "name": "3D Scanning",
@@ -954,7 +954,7 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Mock-Up Unit Labor and Conversion",
+            "name": "Mock-Up Unit",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17101: CIP Interior - Renovation Labor",
