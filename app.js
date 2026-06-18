@@ -661,6 +661,15 @@ function renderUnitMix() {
             + (totalSF ? ` · ${totalSF.toLocaleString()} total sf` : '')
         : 'No unit types yet — add one below or import from the proforma.'));
 
+    // Property-wide, count-weighted averages — these drive the Avg Sqft / Avg # BRs /
+    // Avg # BAs sizing Qty Types on the Interior Details rows.
+    const avgs = getUnitMixAverages();
+    if (!avgs.empty) {
+      body.appendChild(el('div', { class: 'small', style: 'padding:0 16px 10px;color:#1d2d47;font-weight:600' },
+        `Avg / unit — ${Math.round(avgs.avgSqft).toLocaleString()} sqft · `
+          + `${avgs.avgBeds.toFixed(1)} BR · ${avgs.avgBaths.toFixed(1)} BA`));
+    }
+
     const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', style: 'display:none' });
     fileInput.addEventListener('change', (e) => {
       const f = e.target.files[0];
@@ -2451,7 +2460,11 @@ function renderPhase2() {
 // Source of truth: LISTS!A3:A<n> in Capex_Builder_Line_Items_Control.xlsx.
 // Keep in sync with that workbook's QTY_TYPES list. '%' triggers special % logic
 // (see getDetailItemTotal / renderDetailItem); all others are display-only.
-const UNIT_TYPES = ['MF Unit', 'Building', 'Unit', 'Reno Unit', 'Each', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Device', 'Int. Hall'];
+const UNIT_TYPES = ['MF Unit', 'Building', 'Unit', 'Reno Unit', 'Each', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Device', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
+// Interior "sizing" Qty Types: when an Interior row uses one of these, its
+// auto-computed # Qty (units being renovated) is multiplied by the matching
+// property-wide average from the Unit Mix. See avgSizingForUnitType().
+const AVG_QTY_TYPES = ['Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
 
 function getP3(gi, si, ii) {
   return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '', finish: '' };
@@ -2511,13 +2524,50 @@ function getUnitStatusCounts() {
   return { orig, part, reno, empty: (orig + part + reno) === 0 };
 }
 
+// Property-wide, count-weighted averages from the Unit Mix. Used both for the
+// summary line at the top of the Unit Mix section and as the sizing multiplier
+// for Interior rows whose Qty Type is one of AVG_QTY_TYPES.
+function getUnitMixAverages() {
+  const rows = (STATE && Array.isArray(STATE.unitMix)) ? STATE.unitMix : [];
+  let totalCount = 0, sqftSum = 0, bedsSum = 0, bathsSum = 0;
+  for (const r of rows) {
+    const c = Number(r.count) || 0;
+    if (!c) continue;
+    totalCount += c;
+    sqftSum  += c * (Number(r.sqft)  || 0);
+    bedsSum  += c * (Number(r.beds)  || 0);
+    bathsSum += c * (Number(r.baths) || 0);
+  }
+  if (!totalCount) return { avgSqft: 0, avgBeds: 0, avgBaths: 0, empty: true };
+  return {
+    avgSqft:  sqftSum  / totalCount,
+    avgBeds:  bedsSum  / totalCount,
+    avgBaths: bathsSum / totalCount,
+    empty: false,
+  };
+}
+// Maps an Avg-* Qty Type to its property-wide average; returns null for any
+// non-sizing Qty Type so callers can tell "no sizing applies" from "sizing of 0".
+function avgSizingForUnitType(ut, avgsOpt) {
+  if (!AVG_QTY_TYPES.includes(ut)) return null;
+  const a = avgsOpt || getUnitMixAverages();
+  if (ut === 'Avg Sqft')  return a.avgSqft;
+  if (ut === 'Avg # BRs') return a.avgBeds;
+  if (ut === 'Avg # BAs') return a.avgBaths;
+  return null;
+}
+
 function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
   const v = getP3(gi, si, ii);
   const c = countsOpt || getUnitStatusCounts();
   const po = Number(v.pct_orig) || 0;
   const pp = Number(v.pct_part) || 0;
   const pr = Number(v.pct_reno) || 0;
-  const qty = Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
+  let qty = Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
+  // Avg-* Qty Types scale the unit count by the matching property-wide average
+  // (sqft / beds / baths) so e.g. Flooring priced $/sqft computes against total sqft.
+  const sizing = avgSizingForUnitType(v.unit_type);
+  if (sizing != null) qty = Math.round(qty * sizing);
   if ((Number(v.qty) || 0) !== qty) setP3(gi, si, ii, { qty });
   return qty;
 }
@@ -3072,10 +3122,14 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box;background:#f1f5f9'
   });
   qtyInp.readOnly = true;
-  qtyInp.title = 'Auto-computed: Σ (% × matching unit-status total), rounded';
   const refreshQtyDisplay = () => {
     const cur = getP3(gi, si, ii);
     qtyInp.value = (Number(cur.qty) || 0) || '';
+    const sizing = avgSizingForUnitType(cur.unit_type);
+    qtyInp.title = sizing != null
+      ? `Auto-computed: Σ (% × unit-status total) × avg ${cur.unit_type.replace(/^Avg /, '')} `
+        + `(${sizing < 10 ? sizing.toFixed(1) : Math.round(sizing).toLocaleString()}), rounded`
+      : 'Auto-computed: Σ (% × matching unit-status total), rounded';
   };
   function mkPctInput(field) {
     const baseStyle = 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box';
@@ -3142,6 +3196,9 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   });
   utSel.addEventListener('change', () => {
     setP3(gi, si, ii, { unit_type: utSel.value });
+    // Switching to/from an Avg-* sizing type changes the auto-computed # Qty.
+    recomputeInteriorRowQty(gi, si, ii);
+    refreshQtyDisplay();
     recomputePctRowsAndSummary(summaryNode);
   });
   itemWrap.appendChild(utSel);
