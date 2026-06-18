@@ -1308,7 +1308,7 @@ window.SCHEMA = {
             "default_qty_type": "Device"
           },
           {
-            "name": "Shift Shutoff Valves",
+            "name": "Shutoff Valves",
             "default_cost_per_item": 100.0,
             "notes": null,
             "gl_account": "17587: CIP Building - Plumbing",
@@ -1339,11 +1339,18 @@ window.SCHEMA = {
         "name": "INTERIOR CORRIDORS",
         "items": [
           {
-            "name": "Hallways Reno",
+            "name": "Hallways Reno (non-floors)",
             "default_cost_per_item": 5000.0,
             "notes": "Carpet, Paint, Fixtures, Doors",
             "gl_account": "17800: CIP Common Hallways & Stairwells",
             "default_qty_type": "Int. Hall"
+          },
+          {
+            "name": "Hallway Floors",
+            "default_cost_per_item": 5000.0,
+            "notes": null,
+            "gl_account": "17800: CIP Common Hallways & Stairwells",
+            "default_qty_type": "Sqft"
           },
           {
             "name": "Hallways Art",
@@ -1462,7 +1469,7 @@ window.SCHEMA = {
             "default_qty_type": "Reno Unit"
           },
           {
-            "name": "HVAC Condensate Drainage Lines",
+            "name": "HVAC Condensate Lines",
             "default_cost_per_item": 500.0,
             "notes": "Upper Floor Units (not ground #)",
             "gl_account": "17133: CIP Interior - Plumbing Rough-In",
@@ -1478,14 +1485,14 @@ window.SCHEMA = {
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17190: CIP Interior - Drywall",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Sqft"
           },
           {
             "name": "Labor",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17190: CIP Interior - Drywall",
-            "default_qty_type": "Reno Unit"
+            "default_qty_type": "Sqft"
           }
         ]
       },
