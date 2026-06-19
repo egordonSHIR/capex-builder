@@ -84,6 +84,12 @@ window.SCHEMA = {
         "pattern": "[0-9]{5}"
       },
       {
+        "key": "maps_link",
+        "type": "maps_link",
+        "label": "\ud83d\udccd View on Google Maps",
+        "addr_expr": "mailing_address ? [mailing_address, city, state, zip].filter(Boolean).join(', ') : ''"
+      },
+      {
         "key": "property_type",
         "label": "Property Type",
         "type": "select",

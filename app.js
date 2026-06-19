@@ -296,6 +296,17 @@ function renderField(field, value, onChange) {
     div.textContent = '';
     return div;
   }
+  // 'maps_link' fields: a Google Maps hyperlink built live from the address.
+  // Hidden until refreshSection finds a non-empty address (see field.addr_expr).
+  if (field.type === 'maps_link') {
+    const div = el('div', { class: 'field maps-link-field', style: 'display:none' });
+    div.setAttribute('data-key', field.key);
+    div.appendChild(el('a', {
+      class: 'maps-link', target: '_blank', rel: 'noopener noreferrer',
+      style: 'display:inline-flex;align-items:center;gap:6px;color:var(--primary);font-weight:600;font-size:14px;text-decoration:none;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface)'
+    }, field.label || '📍 View on Google Maps'));
+    return div;
+  }
   // 'multiselect' fields: checkbox group, value is an array of selected option strings.
   if (field.type === 'multiselect') {
     const wrap = el('div', { class: 'field' });
@@ -365,6 +376,19 @@ function refreshSection(sec, body, bag) {
     if (ff.type === 'info') {
       const node = body.querySelector(`[data-key="${ff.key}"]`);
       if (node) node.textContent = String(computeField(ff.expr, eb) ?? '');
+    } else if (ff.type === 'maps_link') {
+      const node = body.querySelector(`[data-key="${ff.key}"]`);
+      const a = node && node.querySelector('a');
+      if (node && a) {
+        const addr = String(computeField(ff.addr_expr, eb) ?? '').trim();
+        if (addr) {
+          a.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr);
+          a.title = 'Open ' + addr + ' in Google Maps';
+          node.style.display = '';
+        } else {
+          node.style.display = 'none';
+        }
+      }
     } else if (ff.computed) {
       const cv = computeField(ff.computed, eb);
       bag[ff.key] = cv;
