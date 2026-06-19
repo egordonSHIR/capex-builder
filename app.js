@@ -4256,9 +4256,36 @@ function renderHome() {
     return;
   }
 
+  main.appendChild(renderHomeLegend());
   const list = el('div', { class: 'home-list' });
   entries.forEach(({ local, remote }) => list.appendChild(renderPropertyCard(local, remote)));
   main.appendChild(list);
+}
+
+// Collapsible legend explaining the per-property status icons + badges. Mirrors
+// the symbols set in renderPropertyCard; keep the two in sync.
+function renderHomeLegend() {
+  const d = el('details', { class: 'home-legend',
+    style: 'margin:0 0 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden' });
+  d.appendChild(el('summary', {
+    style: 'padding:9px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;user-select:none'
+  }, 'ⓘ  What do the icons mean?'));
+  const body = el('div', { style: 'padding:2px 12px 10px;font-size:12px;color:#475569' });
+  const row = (icon, color, text) => {
+    const r = el('div', { style: 'display:flex;align-items:flex-start;gap:9px;padding:3px 0;line-height:1.35' });
+    r.appendChild(el('span', { style: `flex:0 0 18px;text-align:center;color:${color || 'inherit'};font-weight:700` }, icon));
+    r.appendChild(el('span', {}, text));
+    return r;
+  };
+  body.appendChild(row('●', 'var(--success)', 'Synced to Drive — your work is saved to the deal folder'));
+  body.appendChild(row('○', '#d97706', 'Unsaved local edits — auto-syncs to Drive within ~1 min'));
+  body.appendChild(row('⊘', '#94a3b8', 'No Drive deal folder linked yet'));
+  body.appendChild(row('☁', '#1e3a8a', 'In the org index but not on this device — tap the card to load it from Drive'));
+  body.appendChild(row('⋮', '#64748b', 'Property menu — rename, link/change Drive folder, delete'));
+  body.appendChild(row('📐', '#166534', '“survey” = survey processed (gray “no survey” = not yet)'));
+  body.appendChild(row('🏠', '#166534', '“unit mix (N)” = N unit types imported (gray “no unit mix” = none)'));
+  d.appendChild(body);
+  return d;
 }
 
 // Render one property card. Either `local` or `remote` (or both) may be set.
@@ -4358,10 +4385,47 @@ function relativeTime(iso) {
   return d.toLocaleDateString();
 }
 
+// Find an existing property (on this device OR in the org index) that would
+// duplicate the given name or deal folder. Returns {id,name,where,by} or null.
+// Used to block accidental duplicate property records (a recurring problem —
+// e.g. two "AUS TX - Crestwood" entries pointing at the same deal folder).
+function findExistingProperty({ name, folderId, excludeId } = {}) {
+  const wantName = name ? normalizeName(name) : '';
+  const test = (id, nm, fId, where) => {
+    if (excludeId && id === excludeId) return null;
+    if (wantName && nm && normalizeName(nm) === wantName) return { id, name: nm, where, by: 'name' };
+    if (folderId && fId && fId === folderId) return { id, name: nm, where, by: 'folder' };
+    return null;
+  };
+  for (const p of Object.values(STORE.properties)) {
+    const hit = test(p.id, p.name, p.drive && p.drive.folderId, 'on this device');
+    if (hit) return hit;
+  }
+  const props = (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties))
+    ? MANIFEST_CACHE.data.properties : [];
+  for (const e of props) {
+    const hit = test(e.id, e.name, e.dealFolderId, 'in the org index');
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function promptNewProperty() {
   const name = prompt('Property name?');
   if (name === null) return;
-  const p = createProperty(name);
+  const trimmed = (name || '').trim();
+  if (!trimmed) { toast('Enter a property name', 'error'); return; }
+  // Block duplicates: a property with the same name already exists locally or org-wide.
+  const dup = findExistingProperty({ name: trimmed });
+  if (dup) {
+    alert(
+      `⚠️ A property named "${dup.name}" already exists (${dup.where}).\n\n` +
+      `To avoid duplicate records, open the existing one from the list instead of creating a new property.\n\n` +
+      `If this really is a different deal, give it a distinct name (e.g. add the address, unit count, or phase).`
+    );
+    return;
+  }
+  const p = createProperty(trimmed);
   openProperty(p.id);
   // Right after creation, ask how to link the Drive deal folder.
   promptLinkDriveDuringSetup(p);
@@ -4455,6 +4519,12 @@ function promptLinkFolder(p, after) {
   }
   const id = extractFolderId(trimmed);
   if (!id) { toast('Could not parse folder ID', 'error'); return; }
+  // Block linking a folder already tied to another property (= duplicate deal).
+  const dupF = findExistingProperty({ folderId: id, excludeId: p.id });
+  if (dupF && !confirm(
+    `⚠️ "${dupF.name}" (${dupF.where}) is already linked to this exact Drive folder.\n\n` +
+    `Linking it here too creates a duplicate deal record. Link anyway?`
+  )) return;
   p.drive.folderId = id;
   p.drive.fileId = '';        // reset; will be discovered on next push/pull
   p.drive.capexFolderId = ''; // reset cached nested folder id
@@ -4986,6 +5056,13 @@ async function autoLinkDealFolder({ silent = false } = {}) {
       chosen = top5[idx - 1];
     }
 
+    // Guard against duplicate deals: if another property already links this
+    // folder, skip silently on the auto-pass, or confirm on a manual search.
+    const dupF = findExistingProperty({ folderId: chosen.id, excludeId: STATE.id });
+    if (dupF) {
+      if (silent) { console.warn('auto-link skipped: folder already linked by', dupF.name); return false; }
+      if (!confirm(`⚠️ "${dupF.name}" is already linked to "${chosen.name}".\n\nLink it to this property too (creates a duplicate deal)?`)) return false;
+    }
     STATE.drive.folderId = chosen.id;
     STATE.drive.fileId = '';
     STATE.drive.capexFolderId = '';
