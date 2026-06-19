@@ -98,6 +98,173 @@ async function shareAnthropicKeyOrgWide() {
   }
 }
 
+// ---------- Asana integration: write the Capex Builder link to the deal task ----------
+// When a property is linked to a Google Drive deal folder, set the "Capex Builder
+// Link" (text) custom field on the deal's PIPELINE task to the property's unique
+// URL. Auth mirrors the Anthropic key: personal localStorage token → org-shared
+// `asana_pat` in capex_builder_config.json (Drive, company-domain access only).
+const ASANA_TOKEN_STORAGE = 'capex_asana_token_v1';
+const ASANA_API = 'https://app.asana.com/api/1.0';
+const ASANA_PIPELINE_PROJECT = '701270220756366';    // "PIPELINE" project (active deals)
+const ASANA_CAPEX_LINK_FIELD = '1215879558403626';   // "Capex Builder Link" (text) custom field
+const CAPEX_BUILDER_BASE_URL = 'https://capex-builder.pages.dev/';  // canonical host for shareable links
+let SHARED_ASANA_TOKEN_CACHE = null;  // null = not fetched; '' = fetched, none found
+
+function getAsanaToken() { return localStorage.getItem(ASANA_TOKEN_STORAGE) || ''; }
+function setAsanaToken(k) {
+  if (k) localStorage.setItem(ASANA_TOKEN_STORAGE, k.trim());
+  else localStorage.removeItem(ASANA_TOKEN_STORAGE);
+}
+function updateAsanaTokenStatus() {
+  const s = $('#asana-token-status');
+  if (!s) return;
+  const k = getAsanaToken();
+  if (k) s.textContent = 'Personal token set (' + k.slice(0, 10) + '…)';
+  else if (SHARED_ASANA_TOKEN_CACHE) s.textContent = 'Using org-shared token (Drive)';
+  else s.textContent = 'No personal token — org-shared token used if available';
+}
+async function fetchSharedAsanaToken(force) {
+  if (!force && SHARED_ASANA_TOKEN_CACHE !== null) return SHARED_ASANA_TOKEN_CACHE;
+  try {
+    const res = await driveDownloadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME);
+    SHARED_ASANA_TOKEN_CACHE = (res && res.data && typeof res.data.asana_pat === 'string')
+      ? res.data.asana_pat.trim() : '';
+  } catch (e) {
+    console.warn('fetchSharedAsanaToken:', e);
+    SHARED_ASANA_TOKEN_CACHE = '';
+  }
+  updateAsanaTokenStatus();
+  return SHARED_ASANA_TOKEN_CACHE;
+}
+async function resolveAsanaToken() {
+  const personal = getAsanaToken();
+  if (personal) return personal;
+  return await fetchSharedAsanaToken();
+}
+async function shareAsanaTokenOrgWide() {
+  const k = getAsanaToken();
+  if (!k) { alert('No Asana token stored in this browser yet.\n\nClick "Set Asana Token" first, then share it org-wide.'); return; }
+  if (!confirm(
+    'Share your Asana Personal Access Token org-wide?\n\n' +
+    'It will be stored in the shared Capex Builder sync folder on Drive (company-domain access only). ' +
+    'The app will then auto-write each property\'s Capex Builder link to its Asana deal task on behalf of your account.'
+  )) return;
+  try {
+    let existing = {};
+    try {
+      const res = await driveDownloadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME);
+      if (res && res.data && typeof res.data === 'object') existing = res.data;
+    } catch {}
+    existing.asana_pat = k;
+    existing.asana_pat_shared_by = (CURRENT_USER && CURRENT_USER.email) || '';
+    existing.asana_pat_shared_at = new Date().toISOString();
+    await driveUploadJson(SYNC_FOLDER_ID, SHARED_CONFIG_FILENAME, existing);
+    const check = await fetchSharedAsanaToken(true);
+    if (check === k) alert('✅ Asana token shared org-wide and verified in the sync folder. Teammates\' apps will now write Capex Builder links to Asana automatically.');
+    else alert('⚠️ Upload completed but verification read back a different value — try again, or check capex_builder_config.json in the sync folder.');
+    updateAsanaTokenStatus();
+  } catch (e) {
+    console.error('shareAsanaTokenOrgWide:', e);
+    alert('❌ Could not share token: ' + e.message);
+  }
+}
+
+// Low-level Asana REST call (browser → Asana API with a Bearer PAT; Asana supports CORS).
+async function asanaFetch(path, { method = 'GET', token, body } = {}) {
+  const res = await fetch(ASANA_API + path, {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) {
+    const msg = (json && json.errors && json.errors[0] && json.errors[0].message) || ('Asana HTTP ' + res.status);
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return json;
+}
+
+function capexBuilderUrlForProperty(p) {
+  return CAPEX_BUILDER_BASE_URL + '#/p/' + encodeURIComponent(p.id);
+}
+function _normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+
+// Score PIPELINE tasks against a property name. Returns candidates sorted best-first.
+async function findAsanaCandidates(token, propName) {
+  const data = await asanaFetch(
+    `/projects/${ASANA_PIPELINE_PROJECT}/tasks?opt_fields=name&limit=100`, { token });
+  const tasks = (data && data.data) || [];
+  const target = _normName(propName);
+  const targetTokens = target.split(' ').filter(w => w.length > 2);
+  return tasks.map(t => {
+    const n = _normName(t.name);
+    let score = 0;
+    if (n && n === target) score = 100;
+    else if (n && target && (n.includes(target) || target.includes(n))) score = 80;
+    else if (targetTokens.length) score = (targetTokens.filter(w => n.includes(w)).length / targetTokens.length) * 60;
+    return { gid: t.gid, name: t.name, score };
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+}
+
+// Ensure the property is matched to a PIPELINE task, then PUT the Capex Builder
+// URL into its "Capex Builder Link" field. Best-effort. interactive=false (silent
+// auto-link) only links on an EXACT name match and never prompts.
+async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = {}) {
+  p = p || STATE;
+  if (!p) return;
+  let token = await resolveAsanaToken();
+  if (!token) {
+    if (!interactive) return;   // no token + non-interactive: skip quietly
+    const entered = prompt('To write Capex Builder links to Asana, paste an Asana Personal Access Token\n(asana.com → My Settings → Apps → Developer → Personal access tokens).\n\nTip: share it org-wide afterward via ☰ → Asana → Share Token.');
+    if (!entered || !entered.trim()) return;
+    setAsanaToken(entered.trim()); updateAsanaTokenStatus();
+    token = entered.trim();
+  }
+  p.asana = p.asana || {};
+  const propName = p.name || (p.phase1 && p.phase1.prop_name) || '';
+  try {
+    let taskGid = p.asana.taskGid;
+    if (!taskGid) {
+      const candidates = await findAsanaCandidates(token, propName);
+      if (!candidates.length) { if (interactive) toast('No PIPELINE task matched "' + propName + '" — link via ☰ → Asana', 'error'); return; }
+      const best = candidates[0];
+      if (!interactive) {
+        if (best.score >= 100) taskGid = best.gid;   // only auto-link on an exact name match
+        else return;                                 // ambiguous — wait for an interactive run
+      } else if (best.score >= 100 || (candidates.length === 1 && best.score >= 60)) {
+        if (!confirm('Link this property to Asana deal task:\n\n  "' + best.name + '"\n\nand set its Capex Builder Link?')) return;
+        taskGid = best.gid;
+      } else {
+        const top = candidates.slice(0, 8);
+        const pick = prompt('Which Asana deal task is "' + propName + '"? Enter a number (or Cancel):\n\n' +
+          top.map((c, i) => (i + 1) + '. ' + c.name).join('\n'));
+        const idx = parseInt(pick, 10);
+        if (!idx || idx < 1 || idx > top.length) return;
+        taskGid = top[idx - 1].gid;
+      }
+      p.asana.taskGid = taskGid; saveState();
+    }
+    const url = capexBuilderUrlForProperty(p);
+    await asanaFetch(`/tasks/${taskGid}`, {
+      method: 'PUT', token,
+      body: { data: { custom_fields: { [ASANA_CAPEX_LINK_FIELD]: url } } },
+    });
+    p.asana.linkPushedAt = new Date().toISOString();
+    p.asana.linkPushedUrl = url;
+    saveState();
+    if (!silent) toast('Capex Builder link written to Asana ✓', 'success');
+  } catch (e) {
+    console.warn('syncCapexLinkToAsana:', e);
+    if (e.status === 401) { SHARED_ASANA_TOKEN_CACHE = null; if (getAsanaToken()) { setAsanaToken(''); updateAsanaTokenStatus(); } }
+    if (interactive) toast('Asana update failed: ' + e.message, 'error');
+  }
+}
+
 function newPropertyId() {
   return 'p_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
 }
@@ -4243,6 +4410,8 @@ function promptLinkFolder(p, after) {
   saveState();
   if (after) after();
   toast('Drive folder linked', 'success');
+  // Folder linked -> write this property's Capex Builder link to its Asana deal task.
+  syncCapexLinkToAsana(p, { interactive: true });
 }
 
 function updateSyncBar() {
@@ -4397,9 +4566,36 @@ function bindShell() {
     shareAnthropicKeyOrgWide();
     closeDrawer();
   });
+  $('#btn-set-asana-token').addEventListener('click', () => {
+    const cur = getAsanaToken();
+    const entered = prompt(
+      'Asana Personal Access Token (stored in localStorage only).\n' +
+      'Leave blank to clear.\n\n' +
+      'Get one at asana.com → My Settings → Apps → Developer → Personal access tokens.',
+      cur || ''
+    );
+    if (entered === null) return;
+    const trimmed = entered.trim();
+    setAsanaToken(trimmed);
+    updateAsanaTokenStatus();
+    toast(trimmed ? 'Asana token saved' : 'Asana token cleared', trimmed ? 'success' : '');
+    closeDrawer();
+  });
+  $('#btn-share-asana-token').addEventListener('click', () => {
+    shareAsanaTokenOrgWide();
+    closeDrawer();
+  });
+  $('#btn-link-asana').addEventListener('click', () => {
+    if (!STATE) { toast('Open a property first', 'error'); return; }
+    if (!STATE.drive.folderId &&
+        !confirm('This property has no Drive folder linked yet. Write its Capex Builder link to Asana anyway?')) return;
+    syncCapexLinkToAsana(STATE, { interactive: true });
+    closeDrawer();
+  });
   updateDriveStatus();
   updateOptionsStatus();
   updateAnthropicKeyStatus();
+  updateAsanaTokenStatus();
 }
 
 function updateOptionsStatus() {
@@ -4747,6 +4943,10 @@ async function autoLinkDealFolder({ silent = false } = {}) {
     try { await resolveCapexFolder(); } catch (e) { console.warn('resolveCapexFolder after auto-link failed', e); }
     renderShell();
     toast(`Linked: ${chosen.name}`, 'success');
+    // Folder linked -> write the Capex Builder link to Asana. Silent auto-link
+    // (leaving Basics) only writes on an EXACT name match + never prompts; a
+    // manual "Find Drive Folder" run (silent=false) confirms/picks the task.
+    syncCapexLinkToAsana(STATE, { interactive: !silent });
     return true;
   } catch (e) {
     if (!silent) toast('Search failed: ' + e.message, 'error');
