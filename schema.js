@@ -242,12 +242,7 @@ window.SCHEMA = {
         "label": "# Private Yards",
         "type": "number",
         "min": 0
-      }
-    ]
-  },
-  {
-    "section": "Survey Site Specs",
-    "fields": [
+      },
       {
         "key": "parking_spots_hc",
         "label": "# Accessible (HC) Parking Stalls",

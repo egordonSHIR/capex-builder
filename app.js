@@ -572,12 +572,14 @@ function renderPhase1() {
   }
 
   // Inject the survey block (action buttons + per-building breakdown) at the
-  // TOP of the "Survey Site Specs" schema section body, so the section reads
-  // buttons-first, then the flat fields those buttons populate.
+  // TOP of the "Building & Site" section body (merged 2026-06-19 with the former
+  // "Survey Site Specs" section). The matcher also accepts the legacy survey
+  // section name so an older cached schema still wires up during a deploy.
   let surveyHost = null;
   for (const sec of sections) {
     const hdr = sec.querySelector('.section-header span');
-    if (hdr && /^survey([\s\-]*derived)?[\s\-]*site specs$/i.test(hdr.textContent.trim())) {
+    const t = hdr ? hdr.textContent.trim() : '';
+    if (/^building\s*&\s*site$/i.test(t) || /^survey([\s\-]*derived)?[\s\-]*site specs$/i.test(t)) {
       surveyHost = sec.querySelector('.section-body');
       break;
     }
