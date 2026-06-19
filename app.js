@@ -201,6 +201,7 @@ function openProperty(id) {
   // Kick off the auto-sync loop for this property — pushes dirty changes,
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
+  setHash(propertyHash(id));   // reflect the open property in the URL (#/p/<id>)
 }
 function closeProperty() {
   // Stop auto-sync and release our editor lock so teammates do not see a stale
@@ -215,6 +216,7 @@ function closeProperty() {
   renderShell();
   // Refresh the home screen with the latest manifest snapshot.
   if (typeof refreshHomeIndex === 'function') refreshHomeIndex().catch(() => {});
+  setHash('#/');   // back to the home URL
 }
 function deleteProperty(id) {
   delete STORE.properties[id];
@@ -222,6 +224,7 @@ function deleteProperty(id) {
     STORE.currentPropertyId = null;
     STATE = null;
     CURRENT_VIEW = 'home';
+    setHash('#/');   // deleted the open property -> drop to the home URL
   }
   saveState();
   // Best-effort: remove from the org manifest too. If a teammate still has
@@ -229,6 +232,66 @@ function deleteProperty(id) {
   // which is what we want (delete = drop my local copy, not org-wide remove).
   if (typeof removeManifestEntry === 'function' && getDriveToken()) {
     removeManifestEntry(id).catch((e) => console.warn('removeManifestEntry failed', e));
+  }
+}
+
+// ---------- Hash routing: a unique, shareable URL per property (#/p/<id>) ----------
+// Opening a property reflects it in location.hash; loading (or back/forward to)
+// a #/p/<id> URL opens that property — locally if present, otherwise pulled from
+// the org manifest via Drive. Home is "#/". No router lib; just hashchange.
+let _pendingDeepLinkId = null;  // a #/p/<id> we can't resolve yet (waiting on the manifest)
+
+function propertyHash(id) { return id ? '#/p/' + encodeURIComponent(id) : '#/'; }
+function parseHashPropertyId() {
+  const m = (location.hash || '').match(/^#\/p\/(.+)$/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function setHash(h) {
+  // Skip a redundant history entry / hashchange when nothing actually changes.
+  const cur = location.hash || '';
+  if (cur === h || (h === '#/' && cur === '')) return;
+  location.hash = h;
+}
+function manifestEntryById(id) {
+  const props = (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties))
+    ? MANIFEST_CACHE.data.properties : [];
+  return props.find(e => e && e.id === id) || null;
+}
+function tryOpenPendingDeepLink() {
+  if (!_pendingDeepLinkId) return;
+  const id = _pendingDeepLinkId;
+  if (STORE.properties[id]) { _pendingDeepLinkId = null; openProperty(id); return; }
+  const entry = manifestEntryById(id);
+  if (entry) { _pendingDeepLinkId = null; openRemoteProperty(entry); return; }
+  // Manifest has loaded but the id isn't local or in the org index — give up so
+  // we don't retry on every future refresh.
+  if (MANIFEST_CACHE && MANIFEST_CACHE.data) {
+    _pendingDeepLinkId = null;
+    toast('That property link isn’t available on this account', 'error');
+  }
+}
+// Drive the view from the URL (browser back/forward, edited address bar, opened link).
+function routeFromHash() {
+  const id = parseHashPropertyId();
+  if (id) {
+    if (STATE && STATE.id === id && CURRENT_VIEW === 'property') return;  // already showing it
+    if (STORE.properties[id]) { _pendingDeepLinkId = null; openProperty(id); return; }
+    const entry = manifestEntryById(id);
+    if (entry) { _pendingDeepLinkId = null; openRemoteProperty(entry); return; }
+    // Unknown id: remember it, soft-drop to home WITHOUT rewriting the hash (so
+    // the shareable link stays in the bar), and let the manifest refresh open it.
+    _pendingDeepLinkId = id;
+    if (STATE) {
+      if (typeof stopAutoSync === 'function') stopAutoSync();
+      if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
+    }
+    STORE.currentPropertyId = null; STATE = null; saveState();
+    CURRENT_VIEW = 'home'; renderShell();
+    if (getDriveToken()) refreshHomeIndex().catch(() => {});
+    else tryOpenPendingDeepLink();
+  } else {
+    _pendingDeepLinkId = null;
+    if (STATE || CURRENT_VIEW !== 'home') closeProperty();
   }
 }
 
@@ -5034,6 +5097,7 @@ async function openRemoteProperty(entry) {
     CURRENT_VIEW = 'property';
     renderShell();
     startAutoSync();
+    setHash(propertyHash(p.id));   // reflect the opened remote property in the URL
     toast('Opened from Drive', 'success');
   } catch (e) {
     toast('Open failed: ' + e.message, 'error');
@@ -5145,13 +5209,38 @@ async function refreshHomeIndex() {
     // leaving the label stuck even though the manifest had loaded fine.
     HOME_INDEX_LOADING = false;
     if (CURRENT_VIEW === 'home') renderHome();
+    // A #/p/<id> deep link to a property not on this device opens once the
+    // org manifest is available.
+    if (_pendingDeepLinkId) tryOpenPendingDeepLink();
   }
 }
 
 // ---------- Init ----------
 document.addEventListener('DOMContentLoaded', () => {
   bindShell();
-  renderShell();
+  // Unique-URL routing: react to back/forward + opened links.
+  window.addEventListener('hashchange', routeFromHash);
+  // Initial route. A #/p/<id> deep link wins over the localStorage last-open.
+  const _hashId = parseHashPropertyId();
+  if (_hashId && STORE.properties[_hashId]) {
+    STORE.currentPropertyId = _hashId;
+    STATE = STORE.properties[_hashId];
+    CURRENT_PHASE = 1;
+    CURRENT_VIEW = 'property';
+    saveState();
+    renderShell();
+    setHash(propertyHash(_hashId));
+  } else if (_hashId) {
+    // Deep link to a property not on this device yet — show home; it opens once
+    // the org manifest loads (tryOpenPendingDeepLink). Keep the URL intact.
+    _pendingDeepLinkId = _hashId;
+    STATE = null; STORE.currentPropertyId = null; CURRENT_VIEW = 'home';
+    renderShell();
+  } else {
+    // No deep link: render the localStorage last-open default and mirror it in the URL.
+    renderShell();
+    if (CURRENT_VIEW === 'property' && STATE) setHash(propertyHash(STATE.id));
+  }
   // Try to silently refresh the Drive token on load so push/pull just works.
   if (GOOGLE_CLIENT_ID && !getDriveToken()) {
     driveRequestToken({ silent: true })
