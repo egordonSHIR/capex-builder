@@ -3807,6 +3807,7 @@ function renderShell() {
   $('#phase-tabs').classList.toggle('hidden', !inProp);
   $('#btn-back').classList.toggle('hidden', !inProp);
   $('#btn-save').classList.toggle('hidden', !inProp);
+  $('#btn-save-float').classList.toggle('hidden', !inProp);
   // Header Push/Pull buttons are now hidden by default — auto-sync handles
   // routine pushes every minute. Manual force-sync remains available via the
   // ☰ drawer (#btn-push-drawer / #btn-pull-drawer).
@@ -4234,7 +4235,9 @@ function bindShell() {
     }
   }));
   $('#btn-back').addEventListener('click', () => closeProperty());
-  $('#btn-save').addEventListener('click', () => { saveState(); toast('Saved on this device (use ⬆ Push to save to Drive)', 'success'); updateSyncBar(); });
+  const doManualSave = () => { saveState(); toast('Saved on this device (use ⬆ Push to save to Drive)', 'success'); updateSyncBar(); };
+  $('#btn-save').addEventListener('click', doManualSave);
+  $('#btn-save-float').addEventListener('click', doManualSave);
   $('#btn-menu').addEventListener('click', () => $('#menu-drawer').classList.remove('hidden'));
   $('.drawer-close').addEventListener('click', () => $('#menu-drawer').classList.add('hidden'));
 

@@ -603,6 +603,34 @@ main {
   background: #f8fafc; border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
 }
 
+/* Floating Save button (#btn-save-float): fixed top-right under the nav, follows
+   the viewport as you scroll, floats above page content. Below the drawer (z-100)
+   and toast (z-200) so those still overlay it. Mirrors the header save action. */
+.save-fab {
+  position: fixed;
+  top: 110px;
+  right: 16px;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.28);
+  -webkit-tap-highlight-color: transparent;
+}
+.save-fab:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.34); }
+.save-fab:active { background: #16233a; transform: translateY(1px); }
+@media (max-width: 520px) {
+  .save-fab { top: 104px; right: 12px; padding: 9px 14px; font-size: 13px; }
+}
+
 /* Details $/Qty input: schema default_cost_per_item shows as gray-italic
    placeholder, signaling "this is the suggested default — type to override".
    The math fallback to default_cost_per_item lives in getEffectiveUnitCost. */
