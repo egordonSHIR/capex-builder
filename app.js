@@ -105,7 +105,9 @@ async function shareAnthropicKeyOrgWide() {
 // `asana_pat` in capex_builder_config.json (Drive, company-domain access only).
 const ASANA_TOKEN_STORAGE = 'capex_asana_token_v1';
 const ASANA_API = 'https://app.asana.com/api/1.0';
-const ASANA_PIPELINE_PROJECT = '701270220756366';    // "PIPELINE" project (active deals)
+const ASANA_PIPELINE_PROJECT = '701270220756366';    // "PIPELINE" (value-add / standard deals)
+const ASANA_EXSTAY_PROJECT = '1214742025664401';     // "ExStay Conv. Pipeline" (hotel→MF conversions)
+const ASANA_DEAL_PROJECTS = [ASANA_PIPELINE_PROJECT, ASANA_EXSTAY_PROJECT];  // searched for the deal task
 const ASANA_CAPEX_LINK_FIELD = '1215879558403626';   // "Capex Builder Link" (text) custom field
 const CAPEX_BUILDER_BASE_URL = 'https://capex-builder.pages.dev/';  // canonical host for shareable links
 let SHARED_ASANA_TOKEN_CACHE = null;  // null = not fetched; '' = fetched, none found
@@ -194,11 +196,18 @@ function capexBuilderUrlForProperty(p) {
 }
 function _normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 
-// Score PIPELINE tasks against a property name. Returns candidates sorted best-first.
+// Score deal tasks against a property name. Pulls from every deal project
+// (PIPELINE + ExStay Conv. Pipeline) and dedupes by gid. Returns candidates
+// sorted best-first. (Each project list is capped at 100 tasks.)
 async function findAsanaCandidates(token, propName) {
-  const data = await asanaFetch(
-    `/projects/${ASANA_PIPELINE_PROJECT}/tasks?opt_fields=name&limit=100`, { token });
-  const tasks = (data && data.data) || [];
+  const byGid = new Map();
+  for (const proj of ASANA_DEAL_PROJECTS) {
+    let data;
+    try { data = await asanaFetch(`/projects/${proj}/tasks?opt_fields=name&limit=100`, { token }); }
+    catch (e) { console.warn('findAsanaCandidates: project', proj, e); continue; }
+    for (const t of ((data && data.data) || [])) if (t && !byGid.has(t.gid)) byGid.set(t.gid, t);
+  }
+  const tasks = Array.from(byGid.values());
   const target = _normName(propName);
   const targetTokens = target.split(' ').filter(w => w.length > 2);
   return tasks.map(t => {
