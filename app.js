@@ -192,7 +192,7 @@ async function asanaFetch(path, { method = 'GET', token, body } = {}) {
 }
 
 function capexBuilderUrlForProperty(p) {
-  return CAPEX_BUILDER_BASE_URL + '#/p/' + encodeURIComponent(p.id);
+  return CAPEX_BUILDER_BASE_URL + propertyHash(p);   // #/prop/<slug> (canonical), else #/p/<id>
 }
 function _normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 
@@ -377,7 +377,7 @@ function openProperty(id) {
   // Kick off the auto-sync loop for this property — pushes dirty changes,
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
-  setHash(propertyHash(id));   // reflect the open property in the URL (#/p/<id>)
+  setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
 }
 function closeProperty() {
   // Stop auto-sync and release our editor lock so teammates do not see a stale
@@ -411,16 +411,39 @@ function deleteProperty(id) {
   }
 }
 
-// ---------- Hash routing: a unique, shareable URL per property (#/p/<id>) ----------
-// Opening a property reflects it in location.hash; loading (or back/forward to)
-// a #/p/<id> URL opens that property — locally if present, otherwise pulled from
-// the org manifest via Drive. Home is "#/". No router lib; just hashchange.
-let _pendingDeepLinkId = null;  // a #/p/<id> we can't resolve yet (waiting on the manifest)
+// ---------- Hash routing: a unique, shareable URL per property ----------
+// Canonical form is a readable slug derived from the property NAME:
+//   "AUS TX - Crestwood"  ->  #/prop/AUSTX_Crestwood
+// Legacy/permanent fallback is the internal id: #/p/<id> (never changes, so
+// older links + Asana links written before the slug change still resolve).
+// Opening a property reflects its slug in location.hash; loading (or back/forward
+// to) a #/prop/<slug> or #/p/<id> URL opens that property — local if present,
+// else pulled from the org manifest via Drive. Home is "#/". No router lib.
+let _pendingDeepLink = null;  // parsed hash we can't resolve yet (waiting on the manifest)
 
-function propertyHash(id) { return id ? '#/p/' + encodeURIComponent(id) : '#/'; }
-function parseHashPropertyId() {
-  const m = (location.hash || '').match(/^#\/p\/(.+)$/);
-  return m ? decodeURIComponent(m[1]) : null;
+// Slug from a property name: " - " separator -> "_", then strip spaces/punctuation.
+function propertySlug(name) {
+  const s = String(name == null ? '' : name)
+    .trim()
+    .replace(/\s*-\s*/g, '_')        // " - " (market / name separator) -> underscore
+    .replace(/\s+/g, '')             // drop remaining spaces
+    .replace(/[^A-Za-z0-9_]/g, '');  // keep only URL-safe chars
+  return s || 'property';
+}
+// Canonical hash for a property: slug if it has a name, else the id, else home.
+function propertyHash(p) {
+  if (p && p.name) return '#/prop/' + propertySlug(p.name);
+  if (p && p.id) return '#/p/' + encodeURIComponent(p.id);
+  return '#/';
+}
+// Parse the hash into {kind:'slug'|'id', value} or null (home).
+function parseHash() {
+  const h = location.hash || '';
+  let m = h.match(/^#\/prop\/(.+)$/);
+  if (m) return { kind: 'slug', value: decodeURIComponent(m[1]) };
+  m = h.match(/^#\/p\/(.+)$/);
+  if (m) return { kind: 'id', value: decodeURIComponent(m[1]) };
+  return null;
 }
 function setHash(h) {
   // Skip a redundant history entry / hashchange when nothing actually changes.
@@ -428,35 +451,54 @@ function setHash(h) {
   if (cur === h || (h === '#/' && cur === '')) return;
   location.hash = h;
 }
-function manifestEntryById(id) {
+function _matchesHash(parsed, name, id) {
+  if (!parsed) return false;
+  if (parsed.kind === 'id') return id === parsed.value;
+  return propertySlug(name).toLowerCase() === parsed.value.toLowerCase();
+}
+// Most-recently-updated LOCAL property matching the hash (slugs can collide).
+function findLocalPropertyByHash(parsed) {
+  if (!parsed) return null;
+  if (parsed.kind === 'id') return STORE.properties[parsed.value] || null;
+  const hits = Object.values(STORE.properties).filter(p => _matchesHash(parsed, p.name, p.id));
+  hits.sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')));
+  return hits[0] || null;
+}
+// Most-recently-modified MANIFEST entry matching the hash.
+function findManifestEntryByHash(parsed) {
   const props = (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties))
     ? MANIFEST_CACHE.data.properties : [];
-  return props.find(e => e && e.id === id) || null;
+  if (!parsed) return null;
+  if (parsed.kind === 'id') return props.find(e => e && e.id === parsed.value) || null;
+  const hits = props.filter(e => e && _matchesHash(parsed, e.name, e.id));
+  hits.sort((a, b) => String(b.lastModified || '').localeCompare(String(a.lastModified || '')));
+  return hits[0] || null;
 }
 function tryOpenPendingDeepLink() {
-  if (!_pendingDeepLinkId) return;
-  const id = _pendingDeepLinkId;
-  if (STORE.properties[id]) { _pendingDeepLinkId = null; openProperty(id); return; }
-  const entry = manifestEntryById(id);
-  if (entry) { _pendingDeepLinkId = null; openRemoteProperty(entry); return; }
-  // Manifest has loaded but the id isn't local or in the org index — give up so
-  // we don't retry on every future refresh.
+  if (!_pendingDeepLink) return;
+  const parsed = _pendingDeepLink;
+  const local = findLocalPropertyByHash(parsed);
+  if (local) { _pendingDeepLink = null; openProperty(local.id); return; }
+  const entry = findManifestEntryByHash(parsed);
+  if (entry) { _pendingDeepLink = null; openRemoteProperty(entry); return; }
+  // Manifest has loaded but nothing matches — give up so we don't retry forever.
   if (MANIFEST_CACHE && MANIFEST_CACHE.data) {
-    _pendingDeepLinkId = null;
+    _pendingDeepLink = null;
     toast('That property link isn’t available on this account', 'error');
   }
 }
 // Drive the view from the URL (browser back/forward, edited address bar, opened link).
 function routeFromHash() {
-  const id = parseHashPropertyId();
-  if (id) {
-    if (STATE && STATE.id === id && CURRENT_VIEW === 'property') return;  // already showing it
-    if (STORE.properties[id]) { _pendingDeepLinkId = null; openProperty(id); return; }
-    const entry = manifestEntryById(id);
-    if (entry) { _pendingDeepLinkId = null; openRemoteProperty(entry); return; }
-    // Unknown id: remember it, soft-drop to home WITHOUT rewriting the hash (so
-    // the shareable link stays in the bar), and let the manifest refresh open it.
-    _pendingDeepLinkId = id;
+  const parsed = parseHash();
+  if (parsed) {
+    if (STATE && CURRENT_VIEW === 'property' && _matchesHash(parsed, STATE.name, STATE.id)) return;  // already showing it
+    const local = findLocalPropertyByHash(parsed);
+    if (local) { _pendingDeepLink = null; openProperty(local.id); return; }
+    const entry = findManifestEntryByHash(parsed);
+    if (entry) { _pendingDeepLink = null; openRemoteProperty(entry); return; }
+    // Unknown: remember it, soft-drop to home WITHOUT rewriting the hash (so the
+    // shareable link stays in the bar), and let the manifest refresh open it.
+    _pendingDeepLink = parsed;
     if (STATE) {
       if (typeof stopAutoSync === 'function') stopAutoSync();
       if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
@@ -466,7 +508,7 @@ function routeFromHash() {
     if (getDriveToken()) refreshHomeIndex().catch(() => {});
     else tryOpenPendingDeepLink();
   } else {
-    _pendingDeepLinkId = null;
+    _pendingDeepLink = null;
     if (STATE || CURRENT_VIEW !== 'home') closeProperty();
   }
 }
@@ -5306,7 +5348,7 @@ async function openRemoteProperty(entry) {
     CURRENT_VIEW = 'property';
     renderShell();
     startAutoSync();
-    setHash(propertyHash(p.id));   // reflect the opened remote property in the URL
+    setHash(propertyHash(p));   // reflect the opened remote property in the URL
     toast('Opened from Drive', 'success');
   } catch (e) {
     toast('Open failed: ' + e.message, 'error');
@@ -5420,7 +5462,7 @@ async function refreshHomeIndex() {
     if (CURRENT_VIEW === 'home') renderHome();
     // A #/p/<id> deep link to a property not on this device opens once the
     // org manifest is available.
-    if (_pendingDeepLinkId) tryOpenPendingDeepLink();
+    if (_pendingDeepLink) tryOpenPendingDeepLink();
   }
 }
 
@@ -5429,26 +5471,28 @@ document.addEventListener('DOMContentLoaded', () => {
   bindShell();
   // Unique-URL routing: react to back/forward + opened links.
   window.addEventListener('hashchange', routeFromHash);
-  // Initial route. A #/p/<id> deep link wins over the localStorage last-open.
-  const _hashId = parseHashPropertyId();
-  if (_hashId && STORE.properties[_hashId]) {
-    STORE.currentPropertyId = _hashId;
-    STATE = STORE.properties[_hashId];
+  // Initial route. A #/prop/<slug> (or legacy #/p/<id>) deep link wins over the
+  // localStorage last-open.
+  const _parsed = parseHash();
+  const _localProp = findLocalPropertyByHash(_parsed);
+  if (_localProp) {
+    STORE.currentPropertyId = _localProp.id;
+    STATE = _localProp;
     CURRENT_PHASE = 1;
     CURRENT_VIEW = 'property';
     saveState();
     renderShell();
-    setHash(propertyHash(_hashId));
-  } else if (_hashId) {
+    setHash(propertyHash(STATE));
+  } else if (_parsed) {
     // Deep link to a property not on this device yet — show home; it opens once
     // the org manifest loads (tryOpenPendingDeepLink). Keep the URL intact.
-    _pendingDeepLinkId = _hashId;
+    _pendingDeepLink = _parsed;
     STATE = null; STORE.currentPropertyId = null; CURRENT_VIEW = 'home';
     renderShell();
   } else {
     // No deep link: render the localStorage last-open default and mirror it in the URL.
     renderShell();
-    if (CURRENT_VIEW === 'property' && STATE) setHash(propertyHash(STATE.id));
+    if (CURRENT_VIEW === 'property' && STATE) setHash(propertyHash(STATE));
   }
   // Try to silently refresh the Drive token on load so push/pull just works.
   if (GOOGLE_CLIENT_ID && !getDriveToken()) {
