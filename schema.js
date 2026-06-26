@@ -1318,6 +1318,13 @@ window.SCHEMA = {
             "notes": "done by Utility Co",
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
             "default_qty_type": "MF Unit"
+          },
+          {
+            "name": "Egress Lights",
+            "default_cost_per_item": 500.0,
+            "notes": "done by Utility Co",
+            "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
+            "default_qty_type": "Int. Hall"
           }
         ]
       },
@@ -1611,6 +1618,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17202: CIP Interior - Electrical Rough-In",
             "default_qty_type": "Reno Unit"
+          },
+          {
+            "name": "Electrical Panel (In-Unit)",
+            "default_cost_per_item": 500.0,
+            "notes": null,
+            "gl_account": "17202: CIP Interior - Electrical Rough-In",
+            "default_qty_type": "Reno Unit"
           }
         ]
       },
@@ -1890,6 +1904,13 @@ window.SCHEMA = {
             "default_cost_per_item": 2000.0,
             "notes": null,
             "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
+            "default_qty_type": "Reno Unit"
+          },
+          {
+            "name": "Balcony/Deck",
+            "default_cost_per_item": 500.0,
+            "notes": null,
+            "gl_account": "17600 - CIP Deck Renovations (7 Yrs)",
             "default_qty_type": "Reno Unit"
           },
           {
