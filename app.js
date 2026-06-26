@@ -577,6 +577,13 @@ function renderField(field, value, onChange) {
     div.textContent = '';
     return div;
   }
+  // 'divider' fields: a horizontal rule that visually splits a section into
+  // sub-groups (no input, no value). Used in Basics > Building & Site.
+  if (field.type === 'divider') {
+    const d = el('div', { class: 'field-divider' });
+    if (field.key) d.setAttribute('data-key', field.key);
+    return d;
+  }
   // 'maps_link' fields: a Google Maps hyperlink built live from the address.
   // Hidden until refreshSection finds a non-empty address (see field.addr_expr).
   if (field.type === 'maps_link') {
@@ -4028,7 +4035,7 @@ async function exportXlsx() {
       sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
       w.mergeCells(`A${sr.number}:B${sr.number}`);
       sec.fields.forEach((f) => {
-        if (f.type === 'info') return;
+        if (f.type === 'info' || f.type === 'divider') return;
         const v = state[f.key];
         const displayVal = Array.isArray(v) ? v.join(', ') : (v ?? '');
         w.addRow([f.label, displayVal]);

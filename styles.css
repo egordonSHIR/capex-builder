@@ -120,6 +120,13 @@ main {
   border-bottom: 1px solid #f1f5f9;
 }
 .field:last-child { border-bottom: none; }
+/* In-section sub-group divider (Basics > Building & Site). A stronger line than
+   the per-field hairline border, used to split a section into visual groups. */
+.field-divider {
+  height: 0;
+  margin: 10px 16px;
+  border-bottom: 2px solid var(--primary-light);
+}
 .field label {
   font-size: 13px;
   font-weight: 500;

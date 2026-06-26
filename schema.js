@@ -186,9 +186,99 @@ window.SCHEMA = {
       },
       {
         "key": "vertical_floors",
-        "label": "# Vertical Floors (Per Building)",
+        "label": "# Vertical Floors (Per Bldg)",
         "type": "number",
         "min": 0
+      },
+      {
+        "type": "divider",
+        "key": "bs_div_1"
+      },
+      {
+        "key": "total_site_area_sf",
+        "label": "Total Site Area Sqft",
+        "type": "number",
+        "min": 0,
+        "decimals": 0,
+        "hint": "Total parcel / site area"
+      },
+      {
+        "key": "parking_lot_sf",
+        "label": "Parking Lot Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Paved area curb-to-curb (stalls + drives)"
+      },
+      {
+        "key": "total_footprint_sf",
+        "label": "Total All Buildings Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Sum across all buildings"
+      },
+      {
+        "key": "sidewalks_other_paved_sf",
+        "label": "Sidewalks / Other Paved Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Walks, pads, dumpster aprons"
+      },
+      {
+        "key": "landscaping_sf",
+        "label": "Landscaping / Pervious Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Residual = land \u2212 bldg \u2212 parking \u2212 sidewalks; override if known"
+      },
+      {
+        "type": "divider",
+        "key": "bs_div_2"
+      },
+      {
+        "key": "total_roof_sf",
+        "label": "Total All Roofs Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Pitch-adjusted (footprint \u00f7 cos(pitch))"
+      },
+      {
+        "key": "total_facade_sf",
+        "label": "Total Facade Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Perimeter \u00d7 height, net of openings"
+      },
+      {
+        "type": "divider",
+        "key": "bs_div_3"
+      },
+      {
+        "key": "private_yard_existing",
+        "label": "# Private Yards",
+        "type": "number",
+        "min": 0
+      },
+      {
+        "key": "parking_spots_existing",
+        "label": "# Parking Spots",
+        "type": "number",
+        "min": 0
+      },
+      {
+        "key": "parking_spots_hc",
+        "label": "# Accessible (HC) Parking",
+        "type": "number",
+        "min": 0,
+        "hint": "Of total parking above"
+      },
+      {
+        "type": "divider",
+        "key": "bs_div_4"
+      },
+      {
+        "key": "landscaping_pct_info",
+        "type": "info",
+        "expr": "`Pervious cover: ${land_sf > 0 ? ((landscaping_sf||0)/land_sf*100).toFixed(1) : 0}% of site`"
       },
       {
         "key": "roofs_connected",
@@ -232,23 +322,8 @@ window.SCHEMA = {
         "show_if": "elevators_yn === 'Yes'"
       },
       {
-        "key": "parking_spots_existing",
-        "label": "# Parking Spots",
-        "type": "number",
-        "min": 0
-      },
-      {
-        "key": "private_yard_existing",
-        "label": "# Private Yards",
-        "type": "number",
-        "min": 0
-      },
-      {
-        "key": "parking_spots_hc",
-        "label": "# Accessible (HC) Parking Stalls",
-        "type": "number",
-        "min": 0,
-        "hint": "Of total parking above"
+        "type": "divider",
+        "key": "bs_div_5"
       },
       {
         "key": "site_perimeter_lf",
@@ -256,53 +331,6 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Linear Ft (sum of boundary segments)"
-      },
-      {
-        "key": "parking_lot_sf",
-        "label": "Parking Lot SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Paved area curb-to-curb (stalls + drives)"
-      },
-      {
-        "key": "total_footprint_sf",
-        "label": "Total Building Footprint SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Sum across all buildings"
-      },
-      {
-        "key": "total_roof_sf",
-        "label": "Total Roof SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Pitch-adjusted (footprint \u00f7 cos(pitch))"
-      },
-      {
-        "key": "total_facade_sf",
-        "label": "Total Facade SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Perimeter \u00d7 height, net of openings"
-      },
-      {
-        "key": "sidewalks_other_paved_sf",
-        "label": "Sidewalks / Other Paved SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Walks, pads, dumpster aprons"
-      },
-      {
-        "key": "landscaping_sf",
-        "label": "Landscaping / Pervious SF",
-        "type": "number",
-        "min": 0,
-        "hint": "Residual = land \u2212 bldg \u2212 parking \u2212 sidewalks; override if known"
-      },
-      {
-        "key": "landscaping_pct_info",
-        "type": "info",
-        "expr": "`Pervious cover: ${land_sf > 0 ? ((landscaping_sf||0)/land_sf*100).toFixed(1) : 0}% of site`"
       },
       {
         "key": "fencing_notes",
