@@ -795,7 +795,7 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "ZONING (LEGAL)",
+            "name": "Zoning",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17966: CIP Zoning",
@@ -903,7 +903,7 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Sprinkler Plans",
+            "name": "Fire Sprinkler Plans",
             "default_cost_per_item": null,
             "notes": null,
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
@@ -1011,7 +1011,7 @@ window.SCHEMA = {
             "default_qty_type": "Month"
           },
           {
-            "name": "Storage",
+            "name": "General Storage",
             "default_cost_per_item": 2500.0,
             "notes": "Mobile Minis",
             "gl_account": "17920: CIP Storage",
@@ -1219,7 +1219,7 @@ window.SCHEMA = {
         "name": "PARKING LOT",
         "items": [
           {
-            "name": "Overlay - Asphalt",
+            "name": "Asphalt Overlay",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17535: CIP Parking Lot - Asphalt (15 Yrs)",
@@ -1475,14 +1475,14 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "MATERIALS IMPORT TAX",
+            "name": "Materials ImportTax",
             "default_cost_per_item": 20.0,
             "notes": null,
             "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
             "default_qty_type": "%"
           },
           {
-            "name": "DEMO LABOR",
+            "name": "Interior Demo Labor",
             "default_cost_per_item": 250.0,
             "notes": null,
             "gl_account": "17101: CIP Interior - Renovation Labor",
@@ -1616,14 +1616,14 @@ window.SCHEMA = {
         "name": "DRYWALL",
         "items": [
           {
-            "name": "Materials",
+            "name": "Drywall Materials",
             "default_cost_per_item": 1.53,
             "notes": null,
             "gl_account": "17190: CIP Interior - Drywall",
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Labor",
+            "name": "Drywall Labor",
             "default_cost_per_item": 1.53,
             "notes": null,
             "gl_account": "17190: CIP Interior - Drywall",
@@ -1670,7 +1670,7 @@ window.SCHEMA = {
             "default_qty_type": "Avg # BRs"
           },
           {
-            "name": "Lighting Fixtures",
+            "name": "Interior Lighting Fixtures",
             "default_cost_per_item": null,
             "notes": null,
             "gl_account": "17175: CIP Interior - Lighting Fixtures (7 Yrs)",
@@ -1804,18 +1804,18 @@ window.SCHEMA = {
             ]
           },
           {
-            "name": "Trim & Molding",
-            "default_cost_per_item": 500.0,
-            "notes": null,
-            "gl_account": "17225: CIP Interior - Trim & Molding",
-            "default_qty_type": "Reno Unit"
-          },
-          {
             "name": "Door Repairs",
             "default_cost_per_item": 15.0,
             "notes": null,
             "gl_account": "17170: CIP Interior - Doors & Hardware",
             "default_qty_type": "Avg # BRs"
+          },
+          {
+            "name": "Trim & Molding",
+            "default_cost_per_item": 500.0,
+            "notes": null,
+            "gl_account": "17225: CIP Interior - Trim & Molding",
+            "default_qty_type": "Reno Unit"
           },
           {
             "name": "Blinds",
@@ -1825,14 +1825,14 @@ window.SCHEMA = {
             "default_qty_type": "Avg # BRs"
           },
           {
-            "name": "Paint",
+            "name": "Interior Paint",
             "default_cost_per_item": 0.5,
             "notes": null,
             "gl_account": "17160: CIP Interior - Paint",
             "default_qty_type": "Avg Sqft"
           },
           {
-            "name": "MISC Materials",
+            "name": "Int. Reno Misc. Materials",
             "default_cost_per_item": 100.0,
             "notes": null,
             "gl_account": "17220: CIP Interior - General Building Materials",
@@ -1853,6 +1853,32 @@ window.SCHEMA = {
             "default_qty_type": "Avg Sqft"
           }
         ]
+      },
+      {
+        "name": "PER UNIT INTERIOR",
+        "items": [
+          {
+            "name": "Private Yard",
+            "default_cost_per_item": 2000.0,
+            "notes": null,
+            "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
+            "default_qty_type": "Reno Unit"
+          },
+          {
+            "name": "W/D Hookup",
+            "default_cost_per_item": 1000.0,
+            "notes": null,
+            "gl_account": "17133 - CIP Interior - Plumbing Rough-In",
+            "default_qty_type": "Reno Unit"
+          },
+          {
+            "name": "W/D Machines",
+            "default_cost_per_item": 1000.0,
+            "notes": null,
+            "gl_account": "17125 - CIP Interior - Appliances (5 Yrs)",
+            "default_qty_type": "Reno Unit"
+          }
+        ]
       }
     ]
   },
@@ -1863,28 +1889,28 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "DUMPSTERS",
+            "name": "Dumpsters",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17570: CIP Trash/Dumpster",
             "default_qty_type": "Cubic Yard"
           },
           {
-            "name": "STAIRWAYS",
+            "name": "Stairways",
             "default_cost_per_item": 25.0,
             "notes": "Riser Fill In",
             "gl_account": "17330: CIP Exterior Stairs",
             "default_qty_type": "Sqft"
           },
           {
-            "name": "SECURITY CAMERAS",
+            "name": "Security Cameras",
             "default_cost_per_item": 100.0,
             "notes": "Permanent (leasing, storage, parking)",
             "gl_account": "17595: CIP Security Cameras",
             "default_qty_type": "Device"
           },
           {
-            "name": "EXTERIOR DOORS",
+            "name": "Exterior Doors",
             "default_cost_per_item": 1000.0,
             "notes": "for replacement",
             "gl_account": "17396: CIP Exterior - Common Doors",
@@ -1998,7 +2024,7 @@ window.SCHEMA = {
           },
           {
             "name": "Windows",
-            "default_cost_per_item": 150.0,
+            "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17425: CIP Exterior - Windows",
             "default_qty_type": "Avg # BRs"
@@ -2075,14 +2101,14 @@ window.SCHEMA = {
             "default_qty_type": "Linear Ft"
           },
           {
-            "name": "Sandblasting",
+            "name": "Railings - Sandblasting",
             "default_cost_per_item": 1.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Panels - Material",
+            "name": "Railings - Panels",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
@@ -2115,7 +2141,7 @@ window.SCHEMA = {
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Concrete Walks - Finish Coat",
+            "name": "Concrete Finish Coat",
             "default_cost_per_item": 10.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
@@ -2141,7 +2167,7 @@ window.SCHEMA = {
         "name": "SIDING",
         "items": [
           {
-            "name": "Sandblasting",
+            "name": "Siding - Sandblasting",
             "default_cost_per_item": 2.5,
             "notes": "Materials & Install",
             "gl_account": "17415: CIP Siding",
@@ -2155,7 +2181,7 @@ window.SCHEMA = {
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Siding",
+            "name": "Siding Materials",
             "default_cost_per_item": 10.0,
             "notes": "Materials & Install (w/ Paint)",
             "gl_account": "17420: CIP Siding (Vinyl) (5 Yrs)",
@@ -2231,63 +2257,63 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "LAUNDRY ROOM Build",
+            "name": "Laundry Room Build",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17830: CIP Laundry Room",
             "default_qty_type": "Each"
           },
           {
-            "name": "LAUNDRY Machines",
+            "name": "Laundry Machines",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17830: CIP Laundry Room",
             "default_qty_type": "Each"
           },
           {
-            "name": "COMMON BATHROOMS",
+            "name": "Common Bathrooms",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17690: CIP Common - Common Bathrooms",
             "default_qty_type": "Each"
           },
           {
-            "name": "DOG PARK BUILD",
+            "name": "Dog Park Build",
             "default_cost_per_item": 15000.0,
             "notes": null,
             "gl_account": "17620: CIP Dog Park (15 Yrs)",
             "default_qty_type": "Each"
           },
           {
-            "name": "DOG PARK EQUIPMENT",
+            "name": "Dog Park Equipment",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17620: CIP Dog Park (15 Yrs)",
             "default_qty_type": "Each"
           },
           {
-            "name": "FIRE PIT",
+            "name": "Fire Pit",
             "default_cost_per_item": 15000.0,
             "notes": null,
             "gl_account": "17615: CIP Fire Pit/BBQ",
             "default_qty_type": "Each"
           },
           {
-            "name": "SPORT COURT",
+            "name": "Sport Court",
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17650: CIP Playground (15 Yrs)",
             "default_qty_type": "Each"
           },
           {
-            "name": "PLAYGROUND",
+            "name": "Playground",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17650: CIP Playground (15 Yrs)",
             "default_qty_type": "Each"
           },
           {
-            "name": "OUTDOOR KITCHEN",
+            "name": "Outdoor Kitchen",
             "default_cost_per_item": 30000.0,
             "notes": null,
             "gl_account": "17660: CIP Pool - Grill/Kitchen (5 Yrs)",
@@ -2299,14 +2325,14 @@ window.SCHEMA = {
         "name": "GYM",
         "items": [
           {
-            "name": "GYM Build",
+            "name": "Gym Build",
             "default_cost_per_item": 30000.0,
             "notes": null,
             "gl_account": "17630: CIP Fitness Center Build Out",
             "default_qty_type": "Each"
           },
           {
-            "name": "GYM Equipment",
+            "name": "Gym Equipment",
             "default_cost_per_item": 30000.0,
             "notes": null,
             "gl_account": "17625: CIP Fitness Center - Equipment (7 Yrs)",
@@ -2344,35 +2370,35 @@ window.SCHEMA = {
         "name": "ELEVATOR",
         "items": [
           {
-            "name": "Demo",
+            "name": "Elevator Demo",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17385: CIP Elevator",
             "default_qty_type": "Each"
           },
           {
-            "name": "Hoistway",
+            "name": "Elevator Hoistway",
             "default_cost_per_item": 15000.0,
             "notes": null,
             "gl_account": "17385: CIP Elevator",
             "default_qty_type": "Each"
           },
           {
-            "name": "Cab",
+            "name": "Elevator Cab",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17385: CIP Elevator",
             "default_qty_type": "Each"
           },
           {
-            "name": "Machinery",
+            "name": "Elevator Machinery",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17385: CIP Elevator",
             "default_qty_type": "Each"
           },
           {
-            "name": "Sump Pump",
+            "name": "Elevator Pit Sump Pump",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17385: CIP Elevator",
@@ -2421,7 +2447,7 @@ window.SCHEMA = {
         ]
       },
       {
-        "name": "CLUBHOUSE/LOBBY",
+        "name": "CLUBHOUSE",
         "items": [
           {
             "name": "Clubhouse Demo",
@@ -2459,28 +2485,28 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
-            "name": "Drywall",
+            "name": "Clubhouse Drywall",
             "default_cost_per_item": 15000.0,
             "notes": "Materials & Labor",
             "gl_account": "17635: CIP Leasing Center Build Out",
             "default_qty_type": "Each"
           },
           {
-            "name": "Finishes",
+            "name": "Clubhouse Finishes",
             "default_cost_per_item": 25000.0,
             "notes": "Materials & Labor",
             "gl_account": "17635: CIP Leasing Center Build Out",
             "default_qty_type": "Each"
           },
           {
-            "name": "Interior Designer - FF&E",
+            "name": "Clubhouse FF&E",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17805: CIP Common Area FF&E",
             "default_qty_type": "Each"
           },
           {
-            "name": "Sound System",
+            "name": "Clubhouse Sound System",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17645: CIP Clubhouse - Sound System (5 Yrs)",
