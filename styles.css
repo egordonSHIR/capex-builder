@@ -599,6 +599,24 @@ main {
 @media (max-width: 560px) {
   .unit-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Unit Mix rows: all 6 fields (Type/#Units/Beds/Baths/SqFt/Status) on one line,
+   no collapse. Narrow viewports scroll horizontally rather than wrap, so the
+   row always stays a single line. */
+.unit-row-flat {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 10px; margin: 6px 16px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  overflow-x: auto;
+}
+.unit-row-flat .field { padding: 0; border: none; flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.unit-row-flat .field label { font-size: 10px; color: #64748b; white-space: nowrap; }
+.unit-row-flat .field input, .unit-row-flat .field select { font-size: 13px; padding: 6px 8px; }
+.unit-row-flat .field-type { flex: 1 1 160px; min-width: 140px; }
+.unit-row-flat .field-num { width: 64px; }
+.unit-row-flat .field-num input { width: 100%; box-sizing: border-box; }
+.unit-row-flat .field-status { flex: 0 0 130px; }
+.unit-row-flat .unit-remove { flex: 0 0 auto; align-self: center; }
 .um-btn {
   padding: 10px 14px; border: 1px solid var(--primary);
   background: var(--primary); color: #fff; border-radius: 6px;

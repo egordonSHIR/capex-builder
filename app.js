@@ -534,6 +534,19 @@ function fmtMoney(n) {
   if (!isFinite(n)) return '$0';
   return '$' + Math.round(n).toLocaleString();
 }
+// Comma-format a Budget-tab qty/cost <input>'s displayed value. `v` is a plain
+// number, or '' to display blank (callers already decide falsy-vs-blank before
+// calling this) — used wherever these inputs are set programmatically outside
+// the input/blur listeners that strip+reformat live.
+function setNumVal(inp, v) {
+  if (!inp) return;
+  inp.value = (v === '' || v === null || v === undefined) ? '' : formatNumberWithCommas(v);
+}
+// Strip commas + parse a Budget-tab qty/cost <input>'s current value to a number ('' if blank).
+function numVal(inp) {
+  const s = inp.value.replace(/,/g, '');
+  return s === '' ? '' : Number(s);
+}
 function toast(msg, type = '') {
   const t = $('#toast');
   t.textContent = msg;
@@ -749,6 +762,46 @@ function refreshSection(sec, body, bag) {
     const show = !!computeField(grp.getAttribute('data-show-if'), eb);
     grp.style.display = show ? '' : 'none';
   });
+
+  // Section-complete checkmark — toggle in the header, to the left of the chevron.
+  const section = body.parentElement;
+  const check = section && section.querySelector('.section-check');
+  if (check) check.style.display = isSectionComplete(sec, bag) ? '' : 'none';
+  updateBasicsTabCheck();
+}
+
+// A field "counts" toward completion if it's a real input (not info/divider/maps_link),
+// isn't purely auto-derived (computed), and is currently relevant (show_if true or absent).
+function isFieldFilled(f, bag) {
+  if (f.type === 'info' || f.type === 'divider' || f.type === 'maps_link') return true;
+  if (f.computed) return true;
+  const v = bag[f.key];
+  if (f.type === 'multiselect') return Array.isArray(v) && v.length > 0;
+  return v !== '' && v !== null && v !== undefined;
+}
+function isSectionComplete(sec, bag) {
+  const eb = getEvalBag(bag);
+  return sec.fields.every(f => {
+    if (f.show_if && !computeField(f.show_if, eb)) return true; // not currently applicable
+    return isFieldFilled(f, bag);
+  });
+}
+function isBasicsAllComplete() {
+  if (!STATE) return false;
+  const p1ok = (SCHEMA.phase1 || []).every(sec => isSectionComplete(sec, STATE.phase1));
+  const p2ok = (SCHEMA.phase2 || []).every(sec => isSectionComplete(sec, STATE.phase2));
+  return p1ok && p2ok;
+}
+// Green checkmark on the "1. Basics" nav tab once every section on the tab is complete.
+function updateBasicsTabCheck() {
+  const tabBtn = document.querySelector('.tab[data-phase="1"]');
+  if (!tabBtn) return;
+  let mark = tabBtn.querySelector('.tab-check');
+  if (STATE && isBasicsAllComplete()) {
+    if (!mark) tabBtn.appendChild(el('span', { class: 'tab-check', style: 'color:#16a34a;margin-left:6px;font-weight:700' }, '✓'));
+  } else if (mark) {
+    mark.remove();
+  }
 }
 
 // Pastel per-section color scheme for the Basics tab. Each section header gets a
@@ -873,7 +926,10 @@ function renderSchemaForm(sections, bag, onUpdate) {
         }
       },
         el('span', {}, sec.section),
-        el('span', { class: 'chev' }, '▼')
+        el('span', { style: 'display:flex;align-items:center;gap:8px' },
+          el('span', { class: 'section-check', style: 'color:#16a34a;font-weight:700;display:none' }, '✓'),
+          el('span', { class: 'chev' }, '▼')
+        )
       ),
       body
     );
@@ -1017,8 +1073,8 @@ function syncUnitMixSumsToPhase1() {
       const [gi, si, ii] = key.split('.').map(Number);
       if ([gi, si, ii].some(isNaN)) return;
       recomputeInteriorRowQty(gi, si, ii, counts);
-      const qtyInp = wrap.querySelectorAll('input[type="number"]')[3]; // 3 pcts then qty
-      if (qtyInp) qtyInp.value = (Number(getP3(gi, si, ii).qty) || 0) || '';
+      const qtyInp = wrap.querySelector('[data-qty-input]');
+      if (qtyInp) setNumVal(qtyInp, (Number(getP3(gi, si, ii).qty) || 0) || '');
       renderDetailTotals(wrap, gi, si, ii);
     });
     const summaryNode = document.querySelector('.summary-totals');
@@ -1101,78 +1157,40 @@ function renderUnitMix() {
   return section;
 }
 
+// Each unit type is a single-line row: Type, # Units, Beds, Baths, SqFt, Status, ✕.
+// No collapse/expand — all 6 fields are always visible and directly editable.
 function renderUnitRow(r, i, rebuild) {
-  const wrap = el('div', { class: 'unit-row' });
-  wrap.style.cssText = 'border:1px solid #e5e7eb;border-radius:8px;margin:6px 16px;background:#fff;overflow:hidden';
+  const wrap = el('div', { class: 'unit-row-flat' });
 
-  // Collapsed summary bar — shows type · count · sqft only. Click to expand.
-  const summaryBar = el('div', {
-    style: 'display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;background:#f8fafc',
-    onClick: () => {
-      const isOpen = wrap.classList.toggle('expanded');
-      details.style.display = isOpen ? 'block' : 'none';
-      chev.textContent = isOpen ? '▼' : '▶';
-    },
-  });
-  const chev = el('span', { style: 'color:#64748b;font-size:11px;width:12px' }, '▶');
-  const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-    r.type || '(unnamed)');
-  const metaText = (rr) => {
-    const bb = (rr.beds !== '' && rr.beds != null && rr.baths !== '' && rr.baths != null)
-      ? `${rr.beds}×${rr.baths} · ` : '';
-    return `${bb}${rr.count || 0} units${rr.sqft ? ' · ' + rr.sqft + ' sf' : ''}`;
-  };
-  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' }, metaText(r));
-  summaryBar.appendChild(chev);
-  summaryBar.appendChild(nameSpan);
-  summaryBar.appendChild(metaSpan);
-  wrap.appendChild(summaryBar);
-
-  // Expanded form — hidden by default.
-  const details = el('div', { style: 'display:none;padding:10px 12px;border-top:1px solid #e5e7eb' });
-  wrap.appendChild(details);
+  const fieldWrap = (label, input, extraClass) => el('div', { class: 'field' + (extraClass ? ' ' + extraClass : '') },
+    el('label', {}, label), input);
 
   const typeInput = el('input', { type: 'text', placeholder: 'Unit type (e.g. 1BR / 1BA – Plan A)' });
   typeInput.value = r.type || '';
-  typeInput.addEventListener('input', () => {
-    updateUnitRow(i, { type: typeInput.value });
-    nameSpan.textContent = typeInput.value || '(unnamed)';
+  typeInput.addEventListener('input', () => updateUnitRow(i, { type: typeInput.value }));
+  wrap.appendChild(fieldWrap('Type', typeInput, 'field-type'));
+
+  const numField = (label, key) => fieldWrap(label,
+    makeNumberInput(r[key], (v) => { updateUnitRow(i, { [key]: v }); r[key] = v; }, { min: 0 }),
+    'field-num');
+  wrap.appendChild(numField('# Units', 'count'));
+  wrap.appendChild(numField('Beds', 'beds'));
+  wrap.appendChild(numField('Baths', 'baths'));
+  wrap.appendChild(numField('SqFt', 'sqft'));
+
+  const statusSel = el('select');
+  statusSel.appendChild(el('option', { value: '' }, '—'));
+  UNIT_STATUS.forEach(o => {
+    const op = el('option', { value: o }, o);
+    if (r.status === o) op.selected = true;
+    statusSel.appendChild(op);
   });
-  details.appendChild(el('div', { class: 'unit-row-top' },
-    typeInput,
-    el('button', { class: 'unit-remove', title: 'Remove unit type',
-      onClick: (e) => { e.stopPropagation(); removeUnitRow(i); rebuild(); } }, '✕')
-  ));
+  statusSel.addEventListener('change', () => updateUnitRow(i, { status: statusSel.value }));
+  wrap.appendChild(fieldWrap('Status', statusSel, 'field-status'));
 
-  const updateMeta = () => { metaSpan.textContent = metaText(r); };
+  wrap.appendChild(el('button', { class: 'unit-remove', title: 'Remove unit type',
+    onClick: () => { removeUnitRow(i); rebuild(); } }, '✕'));
 
-  const numField = (label, key) => el('div', { class: 'field' },
-    el('label', {}, label),
-    makeNumberInput(r[key], (v) => { updateUnitRow(i, { [key]: v }); r[key] = v; updateMeta(); }, { min: 0 })
-  );
-
-  const statusField = el('div', { class: 'field' },
-    el('label', {}, 'Status'),
-    (() => {
-      const s = el('select');
-      s.appendChild(el('option', { value: '' }, '—'));
-      UNIT_STATUS.forEach(o => {
-        const op = el('option', { value: o }, o);
-        if (r.status === o) op.selected = true;
-        s.appendChild(op);
-      });
-      s.addEventListener('change', () => updateUnitRow(i, { status: s.value }));
-      return s;
-    })()
-  );
-
-  details.appendChild(el('div', { class: 'unit-grid' },
-    numField('# Units', 'count'),
-    numField('Beds', 'beds'),
-    numField('Baths', 'baths'),
-    numField('SqFt', 'sqft'),
-    statusField
-  ));
   return wrap;
 }
 
@@ -3027,7 +3045,7 @@ function recomputePctRowsAndSummary(summaryNode) {
     if (v.unit_type === '%') {
       const grpTotal = getCapexGroupTotal(v.pct_group_id);
       const costInp = wrap.querySelector('[data-cost-input]');
-      if (costInp) costInp.value = grpTotal ? (grpTotal / 100).toFixed(2) : '';
+      if (costInp) setNumVal(costInp, grpTotal ? Number((grpTotal / 100).toFixed(2)) : '');
       const grpTotEl = wrap.querySelector('[data-pct-grouptotal]');
       if (grpTotEl) grpTotEl.textContent = grpTotal ? `(group: ${fmtMoney(grpTotal)})` : '';
     }
@@ -3296,16 +3314,17 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // Inputs are declared up front so the =MF and type-change handlers can flip
   // qty/cost readonly state.
   const qtyInp = el('input', {
-    type: 'number', min: 0, step: 'any',
+    type: 'text', inputmode: 'decimal',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
-  qtyInp.value = v.qty;
+  setNumVal(qtyInp, v.qty);
   if (v.mf_linked) { qtyInp.readOnly = true; qtyInp.style.background = '#f1f5f9'; }
   qtyInp.addEventListener('input', () => {
     if (qtyInp.readOnly) return;
-    setP3(gi, si, ii, { qty: qtyInp.value === '' ? '' : Number(qtyInp.value) });
+    setP3(gi, si, ii, { qty: numVal(qtyInp) });
     recomputePctRowsAndSummary(summaryNode);
   });
+  qtyInp.addEventListener('blur', () => setNumVal(qtyInp, numVal(qtyInp)));
 
   // Col 2: =MF Units checkbox
   const mfCb = el('input', { type: 'checkbox', style: 'width:16px;height:16px;cursor:pointer' });
@@ -3316,7 +3335,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     if (linked) {
       const mf = Number(STATE.phase1.mf_units) || 0;
       setP3(gi, si, ii, { mf_linked: true, qty: mf });
-      qtyInp.value = mf || '';
+      setNumVal(qtyInp, mf || '');
       qtyInp.readOnly = true;
       qtyInp.style.background = '#f1f5f9';
     } else {
@@ -3335,7 +3354,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const optionsCell = renderOptionsCell(gi, si, ii, item, () => {
     const eff = getEffectiveUnitCost(gi, si, ii);
     if (costInp) {
-      costInp.value = eff ? eff : '';
+      setNumVal(costInp, eff ? eff : '');
     }
     recomputePctRowsAndSummary(summaryNode);
   });
@@ -3370,25 +3389,26 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // sticky override that survives later Finish changes).
   const defaultRate = (item.default_cost_per_item != null && item.default_cost_per_item !== '') ? item.default_cost_per_item : '';
   const costInp = el('input', {
-    type: 'number', min: 0, step: 'any',
-    placeholder: defaultRate,
+    type: 'text', inputmode: 'decimal',
+    placeholder: defaultRate ? formatNumberWithCommas(defaultRate) : '',
     class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
   if (v.unit_cost !== '' && v.unit_cost !== null && v.unit_cost !== undefined) {
-    costInp.value = v.unit_cost;
+    setNumVal(costInp, v.unit_cost);
   } else if (v.finish) {
     const eff = getEffectiveUnitCost(gi, si, ii);
-    costInp.value = eff ? eff : '';
+    setNumVal(costInp, eff ? eff : '');
   } else {
     costInp.value = '';
   }
   costInp.addEventListener('input', () => {
     if (costInp.readOnly) return;
-    setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
+    setP3(gi, si, ii, { unit_cost: numVal(costInp) });
     recomputePctRowsAndSummary(summaryNode);
   });
+  costInp.addEventListener('blur', () => { if (!costInp.readOnly) setNumVal(costInp, numVal(costInp)); });
   itemWrap.appendChild(costInp);
 
   // Col 6: $ Amt (computed, read-only display — driven by getDetailItemTotal so
@@ -3435,7 +3455,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     if (cur.unit_type === '%') {
       subRow.style.display = 'flex';
       const grpTotal = getCapexGroupTotal(cur.pct_group_id);
-      costInp.value = grpTotal ? (grpTotal / 100).toFixed(2) : '';
+      setNumVal(costInp, grpTotal ? Number((grpTotal / 100).toFixed(2)) : '');
       costInp.readOnly = true;
       costInp.style.background = '#f1f5f9';
       costInp.title = 'Auto-computed: selected CAPEX Group total ÷ 100';
@@ -3446,10 +3466,10 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       costInp.style.background = '';
       costInp.title = '';
       if (cur.unit_cost !== '' && cur.unit_cost !== null && cur.unit_cost !== undefined) {
-        costInp.value = cur.unit_cost;
+        setNumVal(costInp, cur.unit_cost);
       } else if (cur.finish) {
         const eff = getEffectiveUnitCost(gi, si, ii);
-        costInp.value = eff ? eff : '';
+        setNumVal(costInp, eff ? eff : '');
       } else {
         costInp.value = '';
       }
@@ -3487,13 +3507,14 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   // Cols 2-4: pct_orig / pct_part / pct_reno inputs
   const qtyInp = el('input', {
-    type: 'number', min: 0, step: 1,
+    type: 'text', inputmode: 'numeric',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box;background:#f1f5f9'
   });
+  qtyInp.setAttribute('data-qty-input', '');
   qtyInp.readOnly = true;
   const refreshQtyDisplay = () => {
     const cur = getP3(gi, si, ii);
-    qtyInp.value = (Number(cur.qty) || 0) || '';
+    setNumVal(qtyInp, (Number(cur.qty) || 0) || '');
     const sizing = avgSizingForUnitType(cur.unit_type);
     qtyInp.title = sizing != null
       ? `Auto-computed: Σ (% × unit-status total) × avg ${cur.unit_type.replace(/^Avg /, '')} `
@@ -3546,7 +3567,7 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   // Options-tab rate flows through; the $/Qty input is then refreshed.
   itemWrap.appendChild(renderOptionsCell(gi, si, ii, item, () => {
     const eff = getEffectiveUnitCost(gi, si, ii);
-    if (costInp) costInp.value = eff ? eff : '';
+    if (costInp) setNumVal(costInp, eff ? eff : '');
     recomputePctRowsAndSummary(summaryNode);
   }));
 
@@ -3576,24 +3597,25 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   // input displays the Options-tab rate; typing makes it a sticky override.
   const defaultRate = (item.default_cost_per_item != null && item.default_cost_per_item !== '') ? item.default_cost_per_item : '';
   const costInp = el('input', {
-    type: 'number', min: 0, step: 'any',
-    placeholder: defaultRate,
+    type: 'text', inputmode: 'decimal',
+    placeholder: defaultRate ? formatNumberWithCommas(defaultRate) : '',
     class: 'detail-cost-input',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   costInp.setAttribute('data-cost-input', '');
   if (v.unit_cost !== '' && v.unit_cost !== null && v.unit_cost !== undefined) {
-    costInp.value = v.unit_cost;
+    setNumVal(costInp, v.unit_cost);
   } else if (v.finish) {
     const eff = getEffectiveUnitCost(gi, si, ii);
-    costInp.value = eff ? eff : '';
+    setNumVal(costInp, eff ? eff : '');
   } else {
     costInp.value = '';
   }
   costInp.addEventListener('input', () => {
-    setP3(gi, si, ii, { unit_cost: costInp.value === '' ? '' : Number(costInp.value) });
+    setP3(gi, si, ii, { unit_cost: numVal(costInp) });
     recomputePctRowsAndSummary(summaryNode);
   });
+  costInp.addEventListener('blur', () => setNumVal(costInp, numVal(costInp)));
   itemWrap.appendChild(costInp);
 
   // Col 8: $ Amt
@@ -3858,6 +3880,8 @@ const REVENUE_DRIVER_RULES = [
 const OPEX_REDUCER_RULES = [
   { match: (name) => name === 'Toilet', note: 'New Toilets — low-flow toilet replacements reduce water/sewer utility cost.' },
 ];
+// Empty for now — the user will specify what belongs here in a follow-up.
+const RED_FLAG_RULES = [];
 
 // Walks every checked Budget item and returns the de-duped notes whose rule matched.
 function collectBudgetFlags(rules) {
@@ -3907,11 +3931,21 @@ function renderPhase4() {
   root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', false));
 
   // Revenue Drivers — green; Opex Reducers — red. Populated from REVENUE_DRIVER_RULES /
-  // OPEX_REDUCER_RULES against whatever is checked on the Budget tab.
+  // OPEX_REDUCER_RULES against whatever is checked on the Budget tab. Collapsed by
+  // default unless there's something to show.
+  const revenueLines = collectBudgetFlags(REVENUE_DRIVER_RULES);
   root.appendChild(renderFlagSection('Revenue Drivers', '#15803d', '#f0fdf4',
-    collectBudgetFlags(REVENUE_DRIVER_RULES), 'No revenue-driving items currently selected on the Budget tab.', false));
+    revenueLines, 'No revenue-driving items currently selected on the Budget tab.', revenueLines.length === 0));
+  const opexLines = collectBudgetFlags(OPEX_REDUCER_RULES);
   root.appendChild(renderFlagSection('Opex Reducers', '#b91c1c', '#fef2f2',
-    collectBudgetFlags(OPEX_REDUCER_RULES), 'No opex-reducing items currently selected on the Budget tab.', false));
+    opexLines, 'No opex-reducing items currently selected on the Budget tab.', opexLines.length === 0));
+
+  // Red Flags / Considerations — gray, no rules wired up yet (placeholder for a future
+  // request). Stays gray regardless of content — unlike Revenue/Opex this isn't a
+  // green-good / red-bad signal, just a neutral running list.
+  const redFlagLines = collectBudgetFlags(RED_FLAG_RULES);
+  root.appendChild(renderFlagSection('Red Flags / Considerations', '#6b7280', '#f3f4f6',
+    redFlagLines, 'No red flags or considerations yet.', redFlagLines.length === 0));
 
   // Adjustments — these flow into the exported Excel as the contingency/mgmt-fee multipliers.
   // Stored in STATE as a decimal (0.10) but shown/typed as whole percentage points (10).
@@ -3928,18 +3962,6 @@ function renderPhase4() {
     )
   );
   root.appendChild(adj);
-
-  // Hint card
-  const hint = el('div', { class: 'summary-totals', style: 'background:#f0f9ff;border-color:#bfdbfe' },
-    el('div', { style: 'font-size:14px;color:#0f172a;line-height:1.5' },
-      el('strong', {}, 'Capex line items are entered in the exported Excel.'),
-      el('div', { style: 'margin-top:6px;color:#475569' },
-        'Tap Export below. You will get a workbook with three sheets: Property Basics, Physical, and a full Capex Budget template. ' +
-        'In the Capex Budget sheet, fill in # Items and $/Item for the relevant rows. Section subtotals, group totals, contingency, mgmt fee, and grand total all recalculate live in Excel.'
-      )
-    )
-  );
-  root.appendChild(hint);
 
   // Big Export button
   root.appendChild(el('button', {
@@ -4186,6 +4208,7 @@ function renderApp() {
   else view = renderPhase4();
   main.appendChild(view);
   $$('.tab').forEach(t => t.classList.toggle('active', Number(t.dataset.phase) === CURRENT_PHASE));
+  setTimeout(updateBasicsTabCheck, 0);
 }
 
 function renderShell() {
@@ -4685,7 +4708,7 @@ function bindShell() {
     renderApp();
     window.scrollTo(0, 0);
     // Leaving Phase 1 with a populated property name but no Drive folder linked yet?
-    // Auto-search across the 7 pipelines (once per property — manual button can re-run).
+    // Auto-search across the 5 pipelines (once per property — manual button can re-run).
     if (wasPhase === 1 && CURRENT_PHASE !== 1
         && STATE && !STATE.drive.folderId && !STATE.drive.autoSearchAttempted
         && STATE.phase1 && STATE.phase1.prop_name
@@ -5049,14 +5072,15 @@ async function resolveCapexFolder() {
 
 // ---------- Deal folder auto-discovery ----------
 // Pipeline parent folders that contain individual deal folders, in priority order.
+// Names/ids verified live against Google Drive 2026-06-30 — the old "Negotiating" /
+// "Inv Comm. Offer" / "Initial Offer" folders no longer exist (consolidated into
+// "1_PIPELINE (MAIN)"); the rest just picked up numeric prefixes.
 const DEAL_PIPELINE_FOLDERS = [
-  { name: 'Under Contract',                id: '1IrPlaRICRzdqN7SmG_ShDkSnCP0g7tHL' },
-  { name: 'Negotiating',                   id: '104S0wT09iDs3EWnZoWQrf7IWaw6zqsbd' },
-  { name: 'Inv Comm. Offer',               id: '1QcDvJE3JbtlzDTtkrJuFsA6qJrowlvJB' },
-  { name: 'Initial Offer',                 id: '1pCHdxhVXPx_PZ163Wj1YxK27FN5BeAWL' },
-  { name: 'Brokered Pipeline',             id: '1_t3k60rmSWJY3aXYAMIgn6SjFRE1tg-R' },
-  { name: 'ExStay Conv (Brokered) Pipeline', id: '1_IiLYMEtGMptdzS50hFXRFz9nK5JB7f9' },
-  { name: 'OFF Market Deals',              id: '1xCcCTPP2qLhUapPiQT1h2TQxnLL3nAdH' },
+  { name: '0_Under Contract',                  id: '1IrPlaRICRzdqN7SmG_ShDkSnCP0g7tHL' },
+  { name: '1_PIPELINE (MAIN)',                 id: '104S0wT09iDs3EWnZoWQrf7IWaw6zqsbd' },
+  { name: '4_Brokered Pipeline',                id: '1_t3k60rmSWJY3aXYAMIgn6SjFRE1tg-R' },
+  { name: '4_ExStay Conv (Brokered) Pipeline',  id: '1_IiLYMEtGMptdzS50hFXRFz9nK5JB7f9' },
+  { name: '4_PROSPECTS (OFF Mkt)',              id: '1xCcCTPP2qLhUapPiQT1h2TQxnLL3nAdH' },
 ];
 
 function normalizeName(s) {
@@ -5079,7 +5103,7 @@ async function listSubfolders(parentId) {
   return all;
 }
 
-// Search all 7 pipelines in parallel. Returns ranked candidates with score + pipeline name.
+// Search all 5 pipelines in parallel. Returns ranked candidates with score + pipeline name.
 async function searchDealFolder(propName, city, state) {
   const nProp = normalizeName(propName);
   if (!nProp) return [];
