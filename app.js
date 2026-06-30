@@ -2694,7 +2694,7 @@ function renderPhase2() {
   );
   root.appendChild(summary);
   root.appendChild(el('div', { class: 'muted small', style: 'margin:-8px 2px 14px' },
-    'Check every capex item this property needs. Selected items appear in the Details tab for pricing.'));
+    'Check every capex item this property needs. Selected items appear in the BUDGET $ tab for pricing.'));
 
   const refreshCount = () => {
     const n = root.querySelector('[data-checked-count]');
@@ -3727,7 +3727,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
   if (!grp.itemKeys || !grp.itemKeys.length) {
     itemsList.appendChild(el('div', { class: 'muted small', style: 'padding:8px 0;font-style:italic' },
       (grp.name || '').trim()
-        ? 'No items yet — use + Add Item to pick from your Details rows.'
+        ? 'No items yet — use + Add Item to pick from your BUDGET $ rows.'
         : 'Type a name above, then use + Add Item to pick rows.'
     ));
   } else {
@@ -4145,7 +4145,7 @@ function renderOnboardingCard() {
   steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
   steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
   steps.appendChild(el('li', {}, 'Leave Basics for the Questionnaire tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
-  steps.appendChild(el('li', {}, 'Check items on the Questionnaire, price them on Details, then sync to Drive (see below).'));
+  steps.appendChild(el('li', {}, 'Check items on the Questionnaire, price them on BUDGET $, then sync to Drive (see below).'));
   card.appendChild(steps);
 
   // Push / Pull explainer — the core save-and-retrieve workflow.
