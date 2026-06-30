@@ -1159,7 +1159,7 @@ window.SCHEMA = {
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17583: CIP Base - Plumbing - Water",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Water Extension",
@@ -1173,7 +1173,7 @@ window.SCHEMA = {
             "default_cost_per_item": 50000.0,
             "notes": null,
             "gl_account": "17585: CIP Sewer Drains/Pipes (15 Yrs)",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Wastewater Extension",
@@ -1199,14 +1199,14 @@ window.SCHEMA = {
             "default_cost_per_item": 50000.0,
             "notes": "Tap Plan",
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Sprinkler - Vault Heater",
             "default_cost_per_item": 2500.0,
             "notes": "if needed",
             "gl_account": "17917: CIP Base - Fire Protection - Sprinkler",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           }
         ]
       },
@@ -1225,14 +1225,14 @@ window.SCHEMA = {
             "default_cost_per_item": 100000.0,
             "notes": null,
             "gl_account": "17371: CIP Base - Electrical",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Transformer Pad",
             "default_cost_per_item": 30000.0,
             "notes": "+ Pad & Bollards",
             "gl_account": "17371: CIP Base - Electrical",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Meter Bank to Transformer",
@@ -1279,14 +1279,14 @@ window.SCHEMA = {
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17530: CIP Parking Lot",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Bike Racks",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17530: CIP Parking Lot",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           }
         ]
       }
@@ -1303,7 +1303,7 @@ window.SCHEMA = {
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Electric Submeters Materials",
@@ -1357,14 +1357,14 @@ window.SCHEMA = {
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Sprinkler - Heater",
             "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Sprinkler - Building Lines",
@@ -1443,7 +1443,7 @@ window.SCHEMA = {
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17390: CIP Building - Framing",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           }
         ]
       },
@@ -1963,7 +1963,7 @@ window.SCHEMA = {
             "default_cost_per_item": 1000.0,
             "notes": "for replacement",
             "gl_account": "17396: CIP Exterior - Common Doors",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           }
         ]
       },
@@ -1975,7 +1975,7 @@ window.SCHEMA = {
             "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "New Fence",
@@ -2008,7 +2008,7 @@ window.SCHEMA = {
             "default_cost_per_item": 50.0,
             "notes": null,
             "gl_account": "17560: CIP Signage (5 Yrs)",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Pilon Sign (Face)",
@@ -2055,14 +2055,14 @@ window.SCHEMA = {
             "default_cost_per_item": 100.0,
             "notes": null,
             "gl_account": "17480: CIP Exterior - Lighting Per Unit  (5 Yrs)",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Unit Door",
             "default_cost_per_item": 250.0,
             "notes": null,
             "gl_account": "17395: CIP Exterior - Doors Per Unit",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Solar Screen",
@@ -2585,7 +2585,7 @@ window.SCHEMA = {
             "default_cost_per_item": 50.0,
             "notes": null,
             "gl_account": "17505: CIP Mailbox",
-            "default_qty_type": "Unit"
+            "default_qty_type": "Each"
           },
           {
             "name": "Package Boxes",

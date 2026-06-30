@@ -2774,7 +2774,7 @@ function renderPhase2() {
 // Source of truth: LISTS!A3:A<n> in Capex_Builder_Line_Items_Control.xlsx.
 // Keep in sync with that workbook's QTY_TYPES list. '%' triggers special % logic
 // (see getDetailItemTotal / renderDetailItem); all others are display-only.
-const UNIT_TYPES = ['MF Unit', 'Building', 'Unit', 'Reno Unit', 'Each', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Device', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
+const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
 // Interior "sizing" Qty Types: when an Interior row uses one of these, its
 // auto-computed # Qty (units being renovated) is multiplied by the matching
 // property-wide average from the Unit Mix. See avgSizingForUnitType().
