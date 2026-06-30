@@ -121,9 +121,10 @@ window.SCHEMA = {
         "label": "Current Occupancy",
         "type": "number",
         "min": 0,
-        "max": 1,
-        "step": 0.01,
-        "hint": "Decimal (0.75 = 75%)"
+        "max": 100,
+        "step": 1,
+        "pctOf1": true,
+        "hint": "Whole number (75 = 75%)"
       },
       {
         "key": "mf_rsf",

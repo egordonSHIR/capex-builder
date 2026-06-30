@@ -569,6 +569,37 @@ function formatNumber(v, decimals) {
   return String(v);
 }
 
+// Same as formatNumber, but with thousands separators — used for number-type
+// input display (Basics tab). `decimals` undefined => grouped integer display.
+function formatNumberWithCommas(v, decimals) {
+  if (v === '' || v === null || v === undefined || !isFinite(v)) return '';
+  const opts = decimals !== undefined
+    ? { minimumFractionDigits: decimals, maximumFractionDigits: decimals }
+    : { maximumFractionDigits: 6 };
+  return Number(v).toLocaleString('en-US', opts);
+}
+
+// Comma-formatted number <input> for the small standalone row editors (Unit Mix,
+// Survey per-building breakdown) that build their own fields outside renderField.
+// Native <input type=number> can't display commas, so this is a text input that
+// strips commas before calling onChange and reformats with commas on blur.
+function makeNumberInput(value, onChange, opts) {
+  opts = opts || {};
+  const inp = el('input', { type: 'text' });
+  inp.setAttribute('inputmode', opts.decimals ? 'decimal' : 'numeric');
+  if (opts.min !== undefined) inp.min = opts.min;
+  if (opts.step !== undefined) inp.step = opts.step;
+  inp.value = formatNumberWithCommas(value, opts.decimals);
+  const raw = () => inp.value.replace(/,/g, '');
+  inp.addEventListener('input', () => onChange(raw() === '' ? '' : Number(raw())));
+  inp.addEventListener('blur', () => {
+    if (inp.value === '') return;
+    const num = Number(raw());
+    if (isFinite(num)) inp.value = formatNumberWithCommas(num, opts.decimals);
+  });
+  return inp;
+}
+
 function renderField(field, value, onChange) {
   // 'info' fields: italic gray summary text, no input.
   if (field.type === 'info') {
@@ -633,7 +664,13 @@ function renderField(field, value, onChange) {
     input = el('textarea', { rows: 3 });
     input.value = value || '';
   } else {
-    input = el('input', { type: field.type || 'text' });
+    // Number fields render as text inputs so the display can carry thousands
+    // commas (a native <input type=number> rejects commas outright). The
+    // underlying value is still a plain number — commas are stripped before
+    // onChange and before any min/max/step bookkeeping.
+    const isNumber = field.type === 'number';
+    input = el('input', { type: isNumber ? 'text' : (field.type || 'text') });
+    if (isNumber) input.setAttribute('inputmode', field.decimals ? 'decimal' : 'numeric');
     if (field.pattern) input.pattern = field.pattern;
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
@@ -641,16 +678,20 @@ function renderField(field, value, onChange) {
     // Computed fields WITHOUT a partner are read-only (pure auto-calc).
     // Computed fields WITH a partner (e.g. land_sf <-> land_acres) remain editable.
     if (field.computed && !field.partner) input.readOnly = true;
-    const initial = field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
+    const initial = isNumber ? formatNumberWithCommas(value, field.decimals)
+      : field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
     input.value = initial;
   }
 
-  input.addEventListener('input', () => onChange(input.value));
-  input.addEventListener('change', () => onChange(input.value));
-  if (field.type === 'number' && field.decimals !== undefined) {
+  const isNumberInput = field.type === 'number';
+  const rawValue = () => isNumberInput ? input.value.replace(/,/g, '') : input.value;
+  input.addEventListener('input', () => onChange(rawValue()));
+  input.addEventListener('change', () => onChange(rawValue()));
+  if (isNumberInput) {
     input.addEventListener('blur', () => {
       if (input.value === '') return;
-      input.value = formatNumber(input.value, field.decimals);
+      const num = Number(rawValue());
+      if (isFinite(num)) input.value = formatNumberWithCommas(num, field.decimals);
     });
   }
   wrap.appendChild(input);
@@ -681,7 +722,7 @@ function refreshSection(sec, body, bag) {
       const cv = computeField(ff.computed, eb);
       bag[ff.key] = cv;
       const inp = body.querySelector(`[data-key="${ff.key}"]`);
-      if (inp) inp.value = ff.decimals !== undefined ? formatNumber(cv, ff.decimals) : (isFinite(cv) ? cv : '');
+      if (inp) inp.value = ff.type === 'number' ? formatNumberWithCommas(cv, ff.decimals) : (isFinite(cv) ? cv : '');
     }
     // Dynamic label: re-evaluate the field's label text from an expression.
     if (ff.dynamic_label) {
@@ -751,9 +792,12 @@ function renderSchemaForm(sections, bag, onUpdate) {
       if (f.type === 'info') value = '';
       else if (f.computed) { value = computeField(f.computed, getEvalBag(bag)); bag[f.key] = value; }
       else value = bag[f.key];
+      // pctOf1 fields are stored 0–1 (decimal) but shown/typed as whole percentage points.
+      if (f.pctOf1 && value !== '' && value !== null && value !== undefined) value = Number(value) * 100;
 
       const fieldNode = renderField(f, value, (v) => {
-        bag[f.key] = (f.type === 'multiselect') ? (Array.isArray(v) ? v : [])
+        bag[f.key] = (f.pctOf1) ? (v === '' ? '' : Number(v) / 100)
+                   : (f.type === 'multiselect') ? (Array.isArray(v) ? v : [])
                    : (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
         if (f.partner && bag[f.key] !== '') {
           const pv = computeField(f.partner.expr, getEvalBag(bag));
@@ -761,7 +805,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
           const pInp = body.querySelector(`[data-key="${f.partner.target}"]`);
           if (pInp) {
             const partnerField = sec.fields.find(x => x.key === f.partner.target);
-            pInp.value = (partnerField && partnerField.decimals !== undefined) ? formatNumber(pv, partnerField.decimals) : (isFinite(pv) ? pv : '');
+            pInp.value = (partnerField && partnerField.type === 'number') ? formatNumberWithCommas(pv, partnerField.decimals) : (isFinite(pv) ? pv : '');
           }
         }
         refreshSection(sec, body, bag);
@@ -950,7 +994,7 @@ function syncUnitMixSumsToPhase1() {
   // Reflect the new values in the visible inputs (no-op if Phase 1 is not on screen).
   const setVal = (key, val) => {
     const inp = document.querySelector(`[data-key="${key}"]`);
-    if (inp) inp.value = val ? val : '';
+    if (inp) inp.value = val ? formatNumberWithCommas(val) : '';
   };
   if (totalUnits > 0) setVal('mf_units', totalUnits);
   if (totalRSF > 0)   setVal('mf_rsf', totalRSF);
@@ -960,7 +1004,7 @@ function syncUnitMixSumsToPhase1() {
   const mfRsf    = Number(STATE.phase1.mf_rsf) || 0;
   const overall  = Math.round(mfRsf + commRsf + commonSf);
   const overallInp = document.querySelector('[data-key="overall_rsf"]');
-  if (overallInp) overallInp.value = overall || '';
+  if (overallInp) overallInp.value = overall ? formatNumberWithCommas(overall) : '';
 
   // If the Details tab is open and shows Interior rows, recompute their qty and
   // refresh the inline status-totals header — unit-mix counts drive both.
@@ -1104,17 +1148,7 @@ function renderUnitRow(r, i, rebuild) {
 
   const numField = (label, key) => el('div', { class: 'field' },
     el('label', {}, label),
-    (() => {
-      const inp = el('input', { type: 'number', min: 0, step: 'any' });
-      inp.value = r[key] ?? '';
-      inp.addEventListener('input', () => {
-        const v = inp.value === '' ? '' : Number(inp.value);
-        updateUnitRow(i, { [key]: v });
-        r[key] = v;
-        updateMeta();
-      });
-      return inp;
-    })()
+    makeNumberInput(r[key], (v) => { updateUnitRow(i, { [key]: v }); r[key] = v; updateMeta(); }, { min: 0 })
   );
 
   const statusField = el('div', { class: 'field' },
@@ -1330,17 +1364,7 @@ function renderSurveyBuildingRow(b, i, rebuild) {
   const updateMeta = () => { metaSpan.textContent = metaText(b); };
   const numField = (label, key, step) => el('div', { class: 'field' },
     el('label', {}, label),
-    (() => {
-      const inp = el('input', { type: 'number', min: 0, step: step || 'any' });
-      inp.value = b[key] ?? '';
-      inp.addEventListener('input', () => {
-        const v = inp.value === '' ? '' : Number(inp.value);
-        updateSurveyBuilding(i, { [key]: v });
-        b[key] = v;
-        updateMeta();
-      });
-      return inp;
-    })()
+    makeNumberInput(b[key], (v) => { updateSurveyBuilding(i, { [key]: v }); b[key] = v; updateMeta(); }, { min: 0, step })
   );
   const textField = (label, key, placeholder) => el('div', { class: 'field' },
     el('label', {}, label),
