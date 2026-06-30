@@ -3825,6 +3825,50 @@ function computeTotals() {
   return { subtotal, cont, fee, grand, perUnit, itemCount, byGroup };
 }
 
+// Items checked on the Budget tab that, if present, flag a Revenue Driver or
+// Opex Reducer note on Finalize. Extend these tables as new examples come up —
+// `match` tests the schema item's name; `note` is the line shown to the user.
+const REVENUE_DRIVER_RULES = [
+  { match: (name) => name === 'Private Yard', note: 'Private Yards — adding private yards can support a rent premium.' },
+];
+const OPEX_REDUCER_RULES = [
+  { match: (name) => name === 'Toilet', note: 'New Toilets — low-flow toilet replacements reduce water/sewer utility cost.' },
+];
+
+// Walks every checked Budget item and returns the de-duped notes whose rule matched.
+function collectBudgetFlags(rules) {
+  const notes = [];
+  SCHEMA.phase3.forEach((g, gi) => {
+    g.sections.forEach((s, si) => {
+      s.items.forEach((it, ii) => {
+        if (!isChecked(gi, si, ii)) return;
+        rules.forEach((rule) => {
+          if (rule.match(it.name) && !notes.includes(rule.note)) notes.push(rule.note);
+        });
+      });
+    });
+  });
+  return notes;
+}
+
+// Collapsible section with a colored header/background — used for Sanity Check,
+// Revenue Drivers, and Opex Reducers below.
+function renderFlagSection(title, color, bg, lines, emptyText, startCollapsed) {
+  const bgStyle = bg ? `background:${bg}` : '';
+  const wrap = el('section', { class: 'section' + (startCollapsed ? ' collapsed' : ''), style: bgStyle },
+    el('header', { class: 'section-header', style: `color:${color};${bgStyle}`, onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+      el('span', {}, title), el('span', { class: 'chev' }, '▼')),
+    el('div', { class: 'section-body', style: bgStyle })
+  );
+  const body = wrap.querySelector('.section-body');
+  if (lines.length) {
+    lines.forEach(w => body.appendChild(el('div', { class: 'field', style: `color:${color}` }, w)));
+  } else {
+    body.appendChild(el('div', { class: 'field', style: 'color:#64748b;font-style:italic' }, emptyText));
+  }
+  return wrap;
+}
+
 function renderPhase4() {
   const root = el('div');
 
@@ -3836,25 +3880,25 @@ function renderPhase4() {
   if (p2Filled === 0) warnings.push('Physical characteristics (Basics tab) appear empty.');
   if (countChecked() === 0) warnings.push('No capex items selected on the Questionnaire tab.');
 
-  if (warnings.length) {
-    const wrap = el('div', { class: 'section' },
-      el('header', { class: 'section-header', style: 'color:#dc2626' }, 'Sanity Check'),
-      el('div', { class: 'section-body' })
-    );
-    const body = wrap.querySelector('.section-body');
-    warnings.forEach(w => body.appendChild(el('div', { class: 'field' }, w)));
-    root.appendChild(wrap);
-  }
+  root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', false));
 
-  // Adjustments — these flow into the exported Excel as the contingency/mgmt-fee multipliers
+  // Revenue Drivers — green; Opex Reducers — red. Populated from REVENUE_DRIVER_RULES /
+  // OPEX_REDUCER_RULES against whatever is checked on the Budget tab.
+  root.appendChild(renderFlagSection('Revenue Drivers', '#15803d', '#f0fdf4',
+    collectBudgetFlags(REVENUE_DRIVER_RULES), 'No revenue-driving items currently selected on the Budget tab.', false));
+  root.appendChild(renderFlagSection('Opex Reducers', '#b91c1c', '#fef2f2',
+    collectBudgetFlags(OPEX_REDUCER_RULES), 'No opex-reducing items currently selected on the Budget tab.', false));
+
+  // Adjustments — these flow into the exported Excel as the contingency/mgmt-fee multipliers.
+  // Stored in STATE as a decimal (0.10) but shown/typed as whole percentage points (10).
   const adj = el('section', { class: 'section collapsed' },
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
       el('span', {}, 'Adjustments (used in Excel export)'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' },
-      renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 0.01, min: 0, max: 1, hint: 'Decimal (0.10 = 10%)' },
-        STATE.phase4.contingency_pct, (v) => { STATE.phase4.contingency_pct = Number(v) || 0; saveState(); }),
-      renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 0.01, min: 0, max: 1, hint: 'Decimal' },
-        STATE.phase4.mgmt_fee_pct, (v) => { STATE.phase4.mgmt_fee_pct = Number(v) || 0; saveState(); }),
+      renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)' },
+        (Number(STATE.phase4.contingency_pct) || 0) * 100, (v) => { STATE.phase4.contingency_pct = (Number(v) || 0) / 100; saveState(); }),
+      renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)' },
+        (Number(STATE.phase4.mgmt_fee_pct) || 0) * 100, (v) => { STATE.phase4.mgmt_fee_pct = (Number(v) || 0) / 100; saveState(); }),
       renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea' },
         STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); }),
     )
