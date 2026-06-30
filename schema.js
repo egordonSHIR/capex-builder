@@ -185,6 +185,16 @@ window.SCHEMA = {
         "min": 0
       },
       {
+        "key": "roofs_connected",
+        "label": "Roofs Connected?",
+        "type": "select",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "show_if": "num_buildings > 1"
+      },
+      {
         "key": "vertical_floors",
         "label": "# Vertical Floors (Per Bldg)",
         "type": "number",
@@ -279,16 +289,6 @@ window.SCHEMA = {
         "key": "landscaping_pct_info",
         "type": "info",
         "expr": "`Pervious cover: ${land_sf > 0 ? ((landscaping_sf||0)/land_sf*100).toFixed(1) : 0}% of site`"
-      },
-      {
-        "key": "roofs_connected",
-        "label": "Roofs Connected?",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ],
-        "show_if": "num_buildings > 1"
       },
       {
         "key": "elevators_yn",
