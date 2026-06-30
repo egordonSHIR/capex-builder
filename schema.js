@@ -638,12 +638,8 @@ window.SCHEMA = {
       },
       {
         "key": "toilet_low_flow",
-        "label": "Toilet Low-Flow",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ]
+        "label": "Toilet GPF",
+        "type": "number"
       }
     ]
   },
@@ -656,6 +652,8 @@ window.SCHEMA = {
         "type": "select",
         "options": [
           "Yes",
+          "Yes-Aluminum Wiring",
+          "Yes-Stablock Replace",
           "No"
         ]
       },
