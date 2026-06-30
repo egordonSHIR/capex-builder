@@ -710,6 +710,32 @@ function refreshSection(sec, body, bag) {
   });
 }
 
+// Pastel per-section color scheme for the Basics tab. Each section header gets a
+// soft tint + a matching deeper left-border accent (text stays dark/readable).
+const BASICS_SECTION_TINTS = [
+  { bg: '#FDE2E4', bar: '#F2A1AD' }, // pink
+  { bg: '#E3F0E5', bar: '#9FD2A8' }, // mint
+  { bg: '#DCEBF7', bar: '#97C0E6' }, // sky
+  { bg: '#FFF1E6', bar: '#F4BE86' }, // peach
+  { bg: '#F1E7FB', bar: '#C4A3E8' }, // lavender
+  { bg: '#E0F4F3', bar: '#97D6D2' }, // aqua
+  { bg: '#FCEFD6', bar: '#EACB6E' }, // butter
+  { bg: '#E7EDFF', bar: '#A6BCEF' }, // periwinkle
+  { bg: '#EFE6F7', bar: '#C2A6DC' }, // mauve
+  { bg: '#E9F5E0', bar: '#AFD993' }, // sage
+  { bg: '#FBE4EC', bar: '#ECA3C0' }, // rose
+  { bg: '#E6F2EC', bar: '#9ED2B6' }, // seafoam
+];
+let _basicsColorMap = null;
+function basicsSectionColor(name) {
+  if (!_basicsColorMap) {
+    _basicsColorMap = {};
+    const secs = [...(SCHEMA.phase1 || []), ...(SCHEMA.phase2 || [])];
+    secs.forEach((s, i) => { _basicsColorMap[s.section] = BASICS_SECTION_TINTS[i % BASICS_SECTION_TINTS.length]; });
+  }
+  return _basicsColorMap[name] || null;
+}
+
 function renderSchemaForm(sections, bag, onUpdate) {
   const frag = document.createDocumentFragment();
   sections.forEach((sec, si) => {
@@ -790,8 +816,13 @@ function renderSchemaForm(sections, bag, onUpdate) {
 
     setTimeout(() => refreshSection(sec, body, bag), 0);
 
-    const section = el('section', { class: 'section' + (collapsed ? ' collapsed' : '') },
+    const tint = basicsSectionColor(sec.section);
+    const section = el('section', {
+      class: 'section' + (collapsed ? ' collapsed' : ''),
+      style: tint ? `border-left:4px solid ${tint.bar}` : ''
+    },
       el('header', { class: 'section-header',
+        style: tint ? `background:${tint.bg}` : '',
         onClick: (e) => {
           e.currentTarget.parentElement.classList.toggle('collapsed');
           window['_collapsed_' + sec.section] = e.currentTarget.parentElement.classList.contains('collapsed');
