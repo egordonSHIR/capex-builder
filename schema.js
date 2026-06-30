@@ -407,6 +407,13 @@ window.SCHEMA = {
         ]
       },
       {
+        "key": "corridor_count",
+        "label": "# [Corridor Type]",
+        "type": "number",
+        "min": 0,
+        "dynamic_label": "`# ${corridor === 'Interior (Hallway)' ? 'Hallways' : (corridor === 'Exterior (Walkway)' ? 'Walkways' : '[Corridor Type]')}`"
+      },
+      {
         "key": "garage",
         "label": "Garage",
         "type": "select",
@@ -491,6 +498,22 @@ window.SCHEMA = {
         "hint": "Linear Ft"
       },
       {
+        "key": "walkway_length",
+        "label": "Walkway Length",
+        "type": "number",
+        "min": 0,
+        "hint": "Feet",
+        "show_if": "corridor === 'Exterior (Walkway)'"
+      },
+      {
+        "key": "walkway_width",
+        "label": "Walkway Width",
+        "type": "number",
+        "min": 0,
+        "hint": "Feet",
+        "show_if": "corridor === 'Exterior (Walkway)'"
+      },
+      {
         "key": "balconies",
         "label": "Balconies",
         "type": "select",
@@ -527,22 +550,25 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "hallway_length",
-        "label": "Interior Hallway Dimensions \u2014 Length",
+        "label": "Hallway Length",
         "type": "number",
         "min": 0,
-        "hint": "Feet"
+        "hint": "Feet",
+        "show_if": "corridor === 'Interior (Hallway)'"
       },
       {
         "key": "hallway_width",
-        "label": "Interior Hallway Dimensions \u2014 Width",
+        "label": "Hallway Width",
         "type": "number",
         "min": 0,
-        "hint": "Feet"
+        "hint": "Feet",
+        "show_if": "corridor === 'Interior (Hallway)'"
       },
       {
         "key": "hallway_info",
         "type": "info",
-        "expr": "`Area per hallway: ${Math.round((hallway_length||0)*(hallway_width||0)).toLocaleString()} Sqft \u00b7 Total hallways: ${(p1_num_buildings||0)*(p1_vertical_floors||0)} (${p1_num_buildings||0} bldgs \u00d7 ${p1_vertical_floors||0} floors)`"
+        "expr": "`Area per hallway: ${Math.round((hallway_length||0)*(hallway_width||0)).toLocaleString()} Sqft \u00b7 Total hallways: ${(p1_num_buildings||0)*(p1_vertical_floors||0)} (${p1_num_buildings||0} bldgs \u00d7 ${p1_vertical_floors||0} floors)`",
+        "show_if": "corridor === 'Interior (Hallway)'"
       },
       {
         "key": "fencing_existing_lf",
