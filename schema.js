@@ -1877,6 +1877,13 @@ window.SCHEMA = {
             "default_qty_type": "Avg # BRs"
           },
           {
+            "name": "Toilet",
+            "default_cost_per_item": 100.0,
+            "notes": null,
+            "gl_account": "17130 - CIP Interior - Plumbing Fixtures (7 Yrs)",
+            "default_qty_type": "Avg # BAs"
+          },
+          {
             "name": "Trim & Molding",
             "default_cost_per_item": 500.0,
             "notes": null,
