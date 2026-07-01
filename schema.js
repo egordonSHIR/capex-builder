@@ -112,7 +112,8 @@ window.SCHEMA = {
         "label": "Year Built",
         "type": "number",
         "min": 1900,
-        "max": 2026
+        "max": 2026,
+        "nocomma": true
       }
     ]
   },

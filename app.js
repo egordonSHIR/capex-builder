@@ -635,8 +635,8 @@ function renderField(field, value, onChange) {
     div.setAttribute('data-key', field.key);
     div.appendChild(el('a', {
       class: 'maps-link', target: '_blank', rel: 'noopener noreferrer',
-      style: 'display:inline-flex;align-items:center;gap:6px;color:var(--primary);font-weight:600;font-size:14px;text-decoration:none;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface)'
-    }, field.label || '📍 View on Google Maps'));
+      style: 'display:inline-flex;align-items:center;gap:5px;color:var(--primary);font-weight:600;font-size:14px;text-decoration:underline;cursor:pointer'
+    }, '🔗 ' + (field.label || 'View on Google Maps')));
     return div;
   }
   // 'multiselect' fields: checkbox group, value is an array of selected option strings.
@@ -691,16 +691,18 @@ function renderField(field, value, onChange) {
     // Computed fields WITHOUT a partner are read-only (pure auto-calc).
     // Computed fields WITH a partner (e.g. land_sf <-> land_acres) remain editable.
     if (field.computed && !field.partner) input.readOnly = true;
-    const initial = isNumber ? formatNumberWithCommas(value, field.decimals)
+    const initial = (isNumber && !field.nocomma) ? formatNumberWithCommas(value, field.decimals)
+      : isNumber ? (value !== undefined && value !== null ? String(value) : '')   // nocomma: raw digits (e.g. Year Built 2024)
       : field.decimals !== undefined ? formatNumber(value, field.decimals) : (value !== undefined && value !== null ? value : '');
     input.value = initial;
   }
 
   const isNumberInput = field.type === 'number';
+  const useCommas = isNumberInput && !field.nocomma;
   const rawValue = () => isNumberInput ? input.value.replace(/,/g, '') : input.value;
   input.addEventListener('input', () => onChange(rawValue()));
   input.addEventListener('change', () => onChange(rawValue()));
-  if (isNumberInput) {
+  if (useCommas) {
     input.addEventListener('blur', () => {
       if (input.value === '') return;
       const num = Number(rawValue());
