@@ -13,7 +13,8 @@ window.SCHEMA = {
       {
         "key": "mailing_address",
         "label": "Mailing Address",
-        "type": "text"
+        "type": "text",
+        "required": true
       },
       {
         "key": "city",
@@ -75,7 +76,8 @@ window.SCHEMA = {
           "WV",
           "WI",
           "WY"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "zip",
@@ -84,9 +86,15 @@ window.SCHEMA = {
         "pattern": "[0-9]{5}"
       },
       {
+        "key": "msa",
+        "type": "text",
+        "label": "Market (MSA)",
+        "required": true
+      },
+      {
         "key": "maps_link",
         "type": "maps_link",
-        "label": "\ud83d\udccd View on Google Maps",
+        "label": "View on Google Maps",
         "addr_expr": "mailing_address ? [mailing_address, city, state, zip].filter(Boolean).join(', ') : ''"
       },
       {
@@ -96,7 +104,8 @@ window.SCHEMA = {
         "options": [
           "MFVA",
           "EXSTAY"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "year_built",
@@ -114,7 +123,8 @@ window.SCHEMA = {
         "key": "mf_units",
         "label": "Number of MF Units",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "required": true
       },
       {
         "key": "current_occupancy",
@@ -130,7 +140,8 @@ window.SCHEMA = {
         "key": "mf_rsf",
         "label": "Multifamily RSF",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "required": true
       },
       {
         "key": "commercial_rsf",
@@ -161,7 +172,8 @@ window.SCHEMA = {
         "partner": {
           "target": "land_acres",
           "expr": "land_sf / 43560"
-        }
+        },
+        "required": true
       },
       {
         "key": "land_acres",
@@ -183,7 +195,8 @@ window.SCHEMA = {
         "key": "num_buildings",
         "label": "# Buildings",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "required": true
       },
       {
         "key": "roofs_connected",
@@ -211,7 +224,8 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "decimals": 0,
-        "hint": "Total parcel / site area"
+        "hint": "Total parcel / site area",
+        "required": true
       },
       {
         "key": "parking_lot_sf",
@@ -264,16 +278,11 @@ window.SCHEMA = {
         "key": "bs_div_3"
       },
       {
-        "key": "private_yard_existing",
-        "label": "# Private Yards",
-        "type": "number",
-        "min": 0
-      },
-      {
         "key": "parking_spots_existing",
         "label": "# Parking Spots",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "required": true
       },
       {
         "key": "parking_spots_hc",
@@ -380,7 +389,8 @@ window.SCHEMA = {
         "options": [
           "Pitched",
           "Flat"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "roof_material",
@@ -399,37 +409,10 @@ window.SCHEMA = {
         ]
       },
       {
-        "key": "corridor",
-        "label": "Corridor",
-        "type": "select",
-        "options": [
-          "Interior (Hallway)",
-          "Exterior (Walkway)"
-        ]
-      },
-      {
-        "key": "corridor_count",
-        "label": "# [Corridor Type]",
-        "type": "number",
-        "min": 0,
-        "dynamic_label": "`# ${corridor === 'Interior (Hallway)' ? 'Hallways' : (corridor === 'Exterior (Walkway)' ? 'Walkways' : '[Corridor Type]')}`"
-      },
-      {
         "key": "garage",
-        "label": "Garage",
-        "type": "select",
-        "options": [
-          "None",
-          "Attached",
-          "Detached Single",
-          "Detached Group"
-        ]
-      },
-      {
-        "key": "parking_spots_to_add",
-        "label": "Parking Spots to Add",
+        "label": "# Garage",
         "type": "number",
-        "min": 0
+        "required": true
       },
       {
         "key": "parking_type",
@@ -467,33 +450,30 @@ window.SCHEMA = {
           "Low",
           "Medium",
           "High"
-        ]
+        ],
+        "required": true
+      },
+      {
+        "key": "walkways",
+        "type": "number",
+        "label": "# Walkways"
       },
       {
         "key": "new_railing_lf",
-        "label": "New Railing",
+        "label": "# Railings",
         "type": "number",
         "min": 0,
         "hint": "Linear Ft"
       },
       {
-        "key": "new_railing_panels_sqft",
-        "label": "New Railing Panels",
+        "key": "private_yard_existing",
+        "label": "# Private Yards",
         "type": "number",
-        "computed": "new_railing_lf * 3",
-        "decimals": 0,
-        "hint": "Auto: Linear Ft \u00d7 36\" (Sqft)"
-      },
-      {
-        "key": "private_yards_add",
-        "label": "Private Yards to Add",
-        "type": "number",
-        "min": 0,
-        "hint": "# Yards"
+        "min": 0
       },
       {
         "key": "yard_perimeter_lf",
-        "label": "Yard Perimeter",
+        "label": "Yard Perimeter (Avg)",
         "type": "number",
         "min": 0,
         "hint": "Linear Ft"
@@ -504,7 +484,7 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Feet",
-        "show_if": "corridor === 'Exterior (Walkway)'"
+        "show_if": "walkways > 0"
       },
       {
         "key": "walkway_width",
@@ -512,7 +492,7 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Feet",
-        "show_if": "corridor === 'Exterior (Walkway)'"
+        "show_if": "walkways > 0"
       },
       {
         "key": "balconies",
@@ -521,7 +501,8 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "patios",
@@ -530,7 +511,8 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "patio_type",
@@ -543,6 +525,13 @@ window.SCHEMA = {
           "Back - Swinging Door"
         ],
         "show_if": "patios === 'Yes'"
+      },
+      {
+        "key": "fencing_existing_lf",
+        "label": "Fencing",
+        "type": "number",
+        "min": 0,
+        "hint": "Linear Ft"
       }
     ]
   },
@@ -555,7 +544,7 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Feet",
-        "show_if": "corridor === 'Interior (Hallway)'"
+        "show_if": "hallways > 0"
       },
       {
         "key": "hallway_width",
@@ -563,27 +552,23 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Feet",
-        "show_if": "corridor === 'Interior (Hallway)'"
+        "show_if": "hallways > 0"
       },
       {
         "key": "hallway_info",
         "type": "info",
         "expr": "`Area per hallway: ${Math.round((hallway_length||0)*(hallway_width||0)).toLocaleString()} Sqft \u00b7 Total hallways: ${(p1_num_buildings||0)*(p1_vertical_floors||0)} (${p1_num_buildings||0} bldgs \u00d7 ${p1_vertical_floors||0} floors)`",
-        "show_if": "corridor === 'Interior (Hallway)'"
+        "show_if": "hallways > 0"
       },
       {
-        "key": "fencing_existing_lf",
-        "label": "Existing Fencing",
+        "key": "hallways",
         "type": "number",
-        "min": 0,
-        "hint": "Linear Ft"
+        "label": "# Hallways"
       },
       {
-        "key": "fencing_needed_lf",
-        "label": "Needed Fencing",
+        "key": "atrium_interior",
         "type": "number",
-        "min": 0,
-        "hint": "Linear Ft"
+        "label": "Atrium (Interior)"
       }
     ]
   },
@@ -599,7 +584,8 @@ window.SCHEMA = {
           "Chiller FCUs",
           "PTAC",
           "VTAC"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "heating",
@@ -611,7 +597,8 @@ window.SCHEMA = {
           "Boiler FCUs",
           "PTAC",
           "VTAC"
-        ]
+        ],
+        "required": true
       }
     ]
   },
@@ -637,7 +624,7 @@ window.SCHEMA = {
       },
       {
         "key": "plumbing_pipes",
-        "label": "Plumbing Pipes",
+        "label": "Plumbing Pipes Type",
         "type": "select",
         "options": [
           "Steel",
@@ -724,33 +711,28 @@ window.SCHEMA = {
         "label": "Outdoor Pools",
         "type": "number",
         "min": 0,
-        "hint": "#"
+        "hint": "#",
+        "required": true
       },
       {
         "key": "dog_parks",
-        "label": "Dog Parks",
+        "label": "# Dog Parks",
         "type": "number",
         "min": 0,
-        "hint": "#"
-      },
-      {
-        "key": "dog_park_equipment",
-        "label": "Dog Park Equipment",
-        "type": "select",
-        "options": [
-          "None",
-          "Basic",
-          "Full"
-        ]
+        "hint": "#",
+        "required": true
       },
       {
         "key": "soccer_field",
-        "label": "Soccer (Grass) Field",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ]
+        "label": "# Play Field(s)",
+        "type": "number",
+        "required": true
+      },
+      {
+        "key": "sport_court_outdoor",
+        "type": "number",
+        "label": "# Sport Court (Outdoor)",
+        "required": true
       }
     ]
   },
@@ -764,7 +746,8 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "gym_equipment",
@@ -773,18 +756,20 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "laundry_facilities",
         "label": "Laundry Facilities",
         "type": "number",
         "min": 0,
-        "hint": "#"
+        "hint": "#",
+        "required": true
       },
       {
         "key": "machines_per_facility",
-        "label": "Machines per Facility",
+        "label": "Machines/ Laundry Facility",
         "type": "number",
         "min": 0
       },
@@ -793,7 +778,8 @@ window.SCHEMA = {
         "label": "Indoor Pools",
         "type": "number",
         "min": 0,
-        "hint": "#"
+        "hint": "#",
+        "required": true
       },
       {
         "key": "pool_heater",
@@ -806,36 +792,14 @@ window.SCHEMA = {
       },
       {
         "key": "sport_court_indoor",
-        "label": "Sport Court (Indoor)",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ]
-      }
-    ]
-  },
-  {
-    "section": "Leasing Office",
-    "fields": [
-      {
-        "key": "leasing_office",
-        "label": "Leasing Office",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ]
+        "label": "# Sport Court (Indoor)",
+        "type": "number",
+        "required": true
       },
       {
-        "key": "leasing_office_addons",
-        "label": "Leasing Office Add-Ons",
-        "type": "multiselect",
-        "options": [
-          "Sound System",
-          "Business Center"
-        ],
-        "hint": "Select all that apply"
+        "key": "leasing_office_2",
+        "type": "select",
+        "label": "Leasing Office"
       }
     ]
   }
@@ -1311,6 +1275,13 @@ window.SCHEMA = {
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17530: CIP Parking Lot",
+            "default_qty_type": "Each"
+          },
+          {
+            "name": "# Parking Add - New Cover",
+            "default_cost_per_item": 2000.0,
+            "notes": null,
+            "gl_account": "17535: CIP Parking Lot - Asphalt (15 Yrs)",
             "default_qty_type": "Each"
           }
         ]
@@ -1932,7 +1903,7 @@ window.SCHEMA = {
         "name": "PER UNIT INTERIOR",
         "items": [
           {
-            "name": "Private Yard",
+            "name": "Yard - New",
             "default_cost_per_item": 2000.0,
             "notes": null,
             "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
@@ -2175,7 +2146,7 @@ window.SCHEMA = {
         "name": "RAILINGS",
         "items": [
           {
-            "name": "Railings",
+            "name": "New Railings",
             "default_cost_per_item": 1.5,
             "notes": "Repair/Replace",
             "gl_account": "17325: CIP Exterior - Railings",
