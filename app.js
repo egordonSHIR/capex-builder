@@ -3112,6 +3112,8 @@ function recomputePctRowsAndSummary(summaryNode) {
       const grpTotEl = wrap.querySelector('[data-pct-grouptotal]');
       if (grpTotEl) grpTotEl.textContent = grpTotal ? `(group: ${fmtMoney(grpTotal)})` : '';
     }
+    const condBlk = wrap.querySelector('[data-cond-block]');
+    if (condBlk && condBlk._refresh) condBlk._refresh();
     renderDetailTotals(wrap, gi, si, ii);
   });
   if (summaryNode) updateDetailSummary(summaryNode);
@@ -3132,6 +3134,57 @@ function refreshAllPctGroupSelects() {
         sel.appendChild(o);
       });
   });
+}
+
+// Conditional companion fields for a Budget line item (item.conditional_fields,
+// defined on the Hidden tab of Budget_Details_Control.xlsx). Rendered as a sub-row
+// under the item. Visibility (show_if) + info text (expr) are evaluated against a
+// bag exposing the item's own quantity as `qty`, the phase1 fields as `p1_*`, and
+// any conditional select values by their key. Refreshed by recomputePctRowsAndSummary
+// whenever the row's qty / type / cost changes.
+function renderItemConditionalFields(gi, si, ii, item, summaryNode) {
+  const fields = Array.isArray(item.conditional_fields) ? item.conditional_fields : [];
+  const wrap = el('div', { style: 'grid-column:1/-1;padding:2px 4px 8px 6px;display:flex;flex-direction:column;gap:4px' });
+  wrap.setAttribute('data-cond-block', '');
+  const bag = () => {
+    const v = getP3(gi, si, ii);
+    const cond = v.cond || {};
+    const b = { qty: (v.qty === '' || v.qty == null) ? 0 : Number(v.qty) };
+    fields.forEach(f => { if (f.type !== 'info') b[f.key] = (cond[f.key] != null ? cond[f.key] : ''); });
+    return getEvalBag(b);   // adds p1_* phase1 aliases
+  };
+  const nodes = fields.map(f => {
+    if (f.type === 'select') {
+      const row = el('div', { style: 'display:flex;align-items:center;gap:6px;font-size:12px' });
+      row.appendChild(el('span', { style: 'color:#475569;font-weight:600' }, (f.label || f.key) + ':'));
+      const sel = el('select', { style: 'padding:2px 4px;font-size:12px' });
+      sel.appendChild(el('option', { value: '' }, '—'));
+      const cur = (getP3(gi, si, ii).cond || {})[f.key];
+      (f.options || []).forEach(o => {
+        const opt = el('option', { value: o }, o); if (cur === o) opt.selected = true; sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => {
+        const cond = Object.assign({}, getP3(gi, si, ii).cond); cond[f.key] = sel.value;
+        setP3(gi, si, ii, { cond });
+        recomputePctRowsAndSummary(summaryNode);
+      });
+      row.appendChild(sel);
+      return { f, node: row };
+    }
+    // info (default): italic gray computed text
+    return { f, node: el('div', { style: 'font-size:12px;color:#64748b;font-style:italic;line-height:1.3' }) };
+  });
+  nodes.forEach(n => wrap.appendChild(n.node));
+  wrap._refresh = function () {
+    const eb = bag();
+    nodes.forEach(({ f, node }) => {
+      const vis = f.show_if ? !!computeField(f.show_if, eb) : true;
+      node.style.display = vis ? '' : 'none';
+      if (vis && f.type === 'info') node.textContent = String(computeField(f.expr, eb) ?? '');
+    });
+  };
+  wrap._refresh();
+  return wrap;
 }
 
 // Shared 7-col grid for the Details page: item name | =MF checkbox | Options |
@@ -3539,6 +3592,11 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     }
   }
   syncTypeRelatedUI();
+
+  // Conditional companion fields (e.g. parking suggestion/cost on '# Parking Add - New Cover').
+  if (Array.isArray(item.conditional_fields) && item.conditional_fields.length) {
+    itemWrap.appendChild(renderItemConditionalFields(gi, si, ii, item, summaryNode));
+  }
 
   return itemWrap;
 }
