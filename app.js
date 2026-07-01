@@ -782,7 +782,8 @@ function isFieldFilled(f, bag) {
 function isSectionComplete(sec, bag) {
   const eb = getEvalBag(bag);
   return sec.fields.every(f => {
-    if (f.show_if && !computeField(f.show_if, eb)) return true; // not currently applicable
+    if (!f.required) return true;                              // optional fields never block the ✓ (Required? = N in Basics_Control.xlsx)
+    if (f.show_if && !computeField(f.show_if, eb)) return true; // required but not currently shown -> doesn't block
     return isFieldFilled(f, bag);
   });
 }
