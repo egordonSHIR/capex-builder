@@ -370,6 +370,7 @@ function openProperty(id) {
   if (!STORE.properties[id]) return;
   STORE.currentPropertyId = id;
   STATE = STORE.properties[id];
+  maybeGuessMarketMSA();   // backfill an empty Market (MSA) guessed from the stored address
   saveState();
   CURRENT_PHASE = 1;
   CURRENT_VIEW = 'property';
@@ -2577,8 +2578,8 @@ async function pullProformaFromDrive(rebuild) {
 }
 
 // Parse identity + area fields from the “Dash” sheet of a SHIR proforma workbook.
-// Cell references: E6=address, E7=city/state/zip, E9=year_built, E12=commercial_rsf,
-// E13=common_sf, E17=property_type, E18=occupancy.
+// Cell references: E6=address, E7=city/state/zip, E8=Market (MSA), E9=year_built,
+// E12=commercial_rsf, E13=common_sf, E17=property_type, E18=occupancy.
 function parseDashSheet(wb) {
   const sheetName = wb.SheetNames.find(n => /^dash$/i.test(n));
   if (!sheetName) return null;
@@ -2620,6 +2621,9 @@ function parseDashSheet(wb) {
     }
   }
 
+  const msa = cv('E8');
+  if (msa) result.market_msa = msa;
+
   const yb = nv('E9');
   if (yb !== '') result.year_built = yb;
 
@@ -2650,6 +2654,53 @@ function parseDashSheet(wb) {
   return Object.keys(result).length ? result : null;
 }
 
+// ---- Market (MSA) resolution ------------------------------------------------
+// Options live on the market_msa schema field (single source of truth).
+function getMarketOptions() {
+  for (const s of (SCHEMA.phase1 || [])) for (const f of s.fields) if (f.key === 'market_msa') return f.options || [];
+  return [];
+}
+// Common suburb / alt-name -> MSA principal city (guessing aid; extend as needed).
+const MSA_CITY_ALIASES = {
+  'arvada': 'Denver', 'aurora': 'Denver', 'lakewood': 'Denver', 'centennial': 'Denver', 'thornton': 'Denver', 'westminster': 'Denver', 'littleton': 'Denver',
+  'plano': 'Dallas', 'frisco': 'Dallas', 'irving': 'Dallas', 'mckinney': 'Dallas', 'garland': 'Dallas', 'arlington': 'Dallas', 'denton': 'Dallas', 'fort worth': 'Dallas', 'richardson': 'Dallas', 'carrollton': 'Dallas', 'allen': 'Dallas', 'grand prairie': 'Dallas',
+  'round rock': 'Austin', 'cedar park': 'Austin', 'georgetown': 'Austin', 'pflugerville': 'Austin', 'san marcos': 'Austin', 'kyle': 'Austin', 'leander': 'Austin',
+  'the woodlands': 'Houston', 'sugar land': 'Houston', 'katy': 'Houston', 'pasadena': 'Houston', 'pearland': 'Houston', 'conroe': 'Houston', 'spring': 'Houston',
+  'mesa': 'Phoenix', 'scottsdale': 'Phoenix', 'chandler': 'Phoenix', 'glendale': 'Phoenix', 'tempe': 'Phoenix', 'gilbert': 'Phoenix', 'surprise': 'Phoenix', 'goodyear': 'Phoenix',
+  'henderson': 'Las Vegas', 'north las vegas': 'Las Vegas', 'paradise': 'Las Vegas',
+  'st. petersburg': 'Tampa', 'st petersburg': 'Tampa', 'clearwater': 'Tampa', 'brandon': 'Tampa',
+  'kissimmee': 'Orlando', 'sanford': 'Orlando',
+  'fort lauderdale': 'Miami', 'hollywood': 'Miami', 'pompano beach': 'Miami', 'west palm beach': 'Miami', 'boca raton': 'Miami', 'pembroke pines': 'Miami',
+  'brooklyn': 'New York', 'queens': 'New York', 'bronx': 'New York', 'newark': 'New York', 'jersey city': 'New York',
+  'oakland': 'San Francisco', 'berkeley': 'San Francisco',
+  'st. paul': 'Minneapolis', 'st paul': 'Minneapolis', 'bloomington': 'Minneapolis',
+};
+// Best-effort "City, ST" market guess: exact match -> alias -> largest MSA in state.
+function guessMarketMSA(o) {
+  o = o || {};
+  const options = getMarketOptions(); if (!options.length) return '';
+  const byKey = {}; options.forEach(x => { byKey[x.toLowerCase()] = x; });
+  const st = (o.state || '').trim().toUpperCase();
+  const raw = (o.raw || '').trim();
+  if (raw && byKey[raw.toLowerCase()]) return byKey[raw.toLowerCase()];          // 1. Dash!E8 already a valid option
+  const city = (o.city || '').trim().toLowerCase();
+  if (city && st && byKey[city + ', ' + st.toLowerCase()]) return byKey[city + ', ' + st.toLowerCase()]; // 2. exact City, ST
+  if (city && MSA_CITY_ALIASES[city]) {                                          // 3. suburb -> principal city
+    const alias = MSA_CITY_ALIASES[city].toLowerCase();
+    if (st && byKey[alias + ', ' + st.toLowerCase()]) return byKey[alias + ', ' + st.toLowerCase()];
+    const anySt = options.find(x => x.toLowerCase().startsWith(alias + ', '));
+    if (anySt) return anySt;
+  }
+  if (st) { const inState = options.find(x => x.toUpperCase().endsWith(', ' + st)); if (inState) return inState; } // 4. largest MSA in state
+  return '';
+}
+// Backfill an empty Market (MSA) from the stored address (used on property open).
+function maybeGuessMarketMSA() {
+  if (!STATE || !STATE.phase1 || STATE.phase1.market_msa) return;
+  const mm = guessMarketMSA({ city: STATE.phase1.city, state: STATE.phase1.state });
+  if (mm) { STATE.phase1.market_msa = mm; STATE.updated = Date.now(); saveState(); }
+}
+
 // Import identity fields from the Dash sheet AND unit mix from the RR tab in one shot.
 async function pullBasicsAndUnitsFromDrive() {
   if (!STATE) return;
@@ -2670,7 +2721,7 @@ async function pullBasicsAndUnitsFromDrive() {
     const filled = [];
     const FIELD_LABELS = {
       mailing_address: 'Mailing Address', city: 'City', state: 'State', zip: 'ZIP',
-      year_built: 'Year Built', property_type: 'Property Type',
+      year_built: 'Year Built', property_type: 'Property Type', market_msa: 'Market (MSA)',
       current_occupancy: 'Occupancy', commercial_rsf: 'Commercial RSF', common_sf: 'Common SF',
     };
 
@@ -2681,6 +2732,15 @@ async function pullBasicsAndUnitsFromDrive() {
       for (const k of Object.keys(basics)) {
         if (basics[k] !== '' && basics[k] != null) filled.push(FIELD_LABELS[k] || k);
       }
+    }
+
+    // Market (MSA): use Dash!E8 if it matches an option, otherwise guess from the address.
+    const mm = guessMarketMSA({ raw: basics && basics.market_msa, city: STATE.phase1.city, state: STATE.phase1.state });
+    if (mm) {
+      STATE.phase1.market_msa = mm;
+      if (!filled.includes('Market (MSA)')) filled.push('Market (MSA)');
+    } else if (STATE.phase1.market_msa && !getMarketOptions().includes(STATE.phase1.market_msa)) {
+      STATE.phase1.market_msa = '';   // drop an unrecognized raw value so the dropdown stays valid
     }
 
     // Apply unit mix from RR tab
@@ -5553,6 +5613,7 @@ async function openRemoteProperty(entry) {
     STORE.properties[p.id] = p;
     STORE.currentPropertyId = p.id;
     STATE = p;
+    maybeGuessMarketMSA();   // backfill an empty Market (MSA) guessed from the stored address
     saveState();
     CURRENT_PHASE = 1;
     CURRENT_VIEW = 'property';
