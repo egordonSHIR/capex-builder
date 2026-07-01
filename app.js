@@ -354,6 +354,29 @@ function saveState() {
     if (STATE.phase1 && STATE.phase1.prop_name) STATE.name = STATE.phase1.prop_name;
   }
   localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+  scheduleAutoPush();   // Drive-authoritative: converge the cache to Drive shortly after each edit
+}
+
+// ---- Drive-authoritative auto-push ----------------------------------------
+// localStorage is a transient write-behind cache; Drive is the source of truth.
+// Every saveState() schedules a debounced silent push so the device never holds
+// divergent data for more than ~2s. The 60s syncTick remains as a backstop +
+// heartbeat. _syncState feeds the single sync-bar status.
+let _autoPushTimer = null;
+let _syncState = 'idle';   // 'idle' | 'saving' | 'error'
+const AUTO_PUSH_DEBOUNCE_MS = 2000;
+function scheduleAutoPush() {
+  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;          // nothing to sync to yet
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;  // Drive not connected
+  _syncState = 'saving';
+  if (typeof updateSyncBar === 'function') updateSyncBar();
+  if (_autoPushTimer) clearTimeout(_autoPushTimer);
+  _autoPushTimer = setTimeout(async () => {
+    _autoPushTimer = null;
+    const ok = await pushToDrive({ silent: true });   // returns false on failure, undefined on skip/bail
+    _syncState = (ok === false) ? 'error' : 'idle';
+    if (typeof updateSyncBar === 'function') updateSyncBar();
+  }, AUTO_PUSH_DEBOUNCE_MS);
 }
 
 function createProperty(name) {
@@ -370,8 +393,10 @@ function openProperty(id) {
   if (!STORE.properties[id]) return;
   STORE.currentPropertyId = id;
   STATE = STORE.properties[id];
-  maybeGuessMarketMSA();   // backfill an empty Market (MSA) guessed from the stored address
-  saveState();
+  maybeGuessMarketMSA();   // backfill an empty Market (MSA) — bumps updated + auto-pushes only if it fills one
+  // Persist currentPropertyId WITHOUT bumping `updated` (opening a property is not
+  // an edit — bumping it would falsely mark the cache dirty and risk a stale push).
+  localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
   CURRENT_PHASE = 1;
   CURRENT_VIEW = 'property';
   renderShell();
@@ -379,6 +404,30 @@ function openProperty(id) {
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
+  reconcileFromDrive();   // Drive-authoritative: adopt a newer remote copy if this device is clean
+}
+// Drive-authoritative reconcile: after a cache-first open, if the deal-folder copy
+// is newer than our cache AND we have no unsynced local edits, adopt Drive (Drive
+// wins). If local is dirty and remote is newer, we leave it — pushToDrive's silent
+// bail + the concurrent-editor banner handle that conflict without clobbering.
+function reconcileFromDrive() {
+  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;
+  const targetId = STATE.id;
+  (async () => {
+    try {
+      const targetFolder = await resolveCapexFolder();
+      const existing = await driveFindFile(targetFolder, STATE_FILENAME);
+      if (!existing || !STATE || STATE.id !== targetId) return;   // gone/navigated away
+      const localDirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
+      const remoteNewer = existing.modifiedTime &&
+        (!STATE.drive.remoteModifiedTime || existing.modifiedTime > STATE.drive.remoteModifiedTime);
+      if (remoteNewer && !localDirty) {
+        _syncState = 'saving'; updateSyncBar();
+        await pullFromDrive({ auto: true });
+      }
+    } catch (e) { console.warn('reconcileFromDrive failed:', e); }
+  })();
 }
 function closeProperty() {
   // Stop auto-sync and release our editor lock so teammates do not see a stale
@@ -4339,13 +4388,10 @@ function renderShell() {
   $('#phase-content').classList.toggle('hidden', !inProp);
   $('#phase-tabs').classList.toggle('hidden', !inProp);
   $('#btn-back').classList.toggle('hidden', !inProp);
-  $('#btn-save').classList.toggle('hidden', !inProp);
-  $('#btn-save-float').classList.toggle('hidden', !inProp);
-  // Header Push/Pull buttons are now hidden by default — auto-sync handles
-  // routine pushes every minute. Manual force-sync remains available via the
-  // ☰ drawer (#btn-push-drawer / #btn-pull-drawer).
-  $('#btn-pull').classList.add('hidden');
-  $('#btn-push').classList.add('hidden');
+  // Saving is automatic (Drive-authoritative): no manual Save / Push / Pull
+  // buttons. Edits write to the localStorage cache instantly and auto-push to
+  // Drive on a short debounce (scheduleAutoPush); recovery re-sync is in the
+  // ☰ drawer (#btn-resync).
   $('#drawer-property-section').classList.toggle('hidden', !inProp);
   $('#header-title').textContent = inProp
     ? (STATE.name || STATE.phase1.prop_name || 'Untitled Property')
@@ -4527,10 +4573,9 @@ function renderHomeLegend() {
     r.appendChild(el('span', {}, text));
     return r;
   };
-  body.appendChild(row('●', 'var(--success)', 'Synced to Drive — your work is saved to the deal folder'));
-  body.appendChild(row('○', '#d97706', 'Unsaved local edits — auto-syncs to Drive within ~1 min'));
+  body.appendChild(row('●', 'var(--success)', 'Saved to Drive — edits sync automatically to the deal folder'));
   body.appendChild(row('⊘', '#94a3b8', 'No Drive deal folder linked yet'));
-  body.appendChild(row('☁', '#1e3a8a', 'In the org index but not on this device — tap the card to load it from Drive'));
+  body.appendChild(row('☁', '#1e3a8a', 'In the org index but not loaded on this device — tap the card to open it from Drive'));
   body.appendChild(row('⋮', '#64748b', 'Property menu — rename, link/change Drive folder, delete'));
   body.appendChild(row('📐', '#166534', '“survey” = survey processed (gray “no survey” = not yet)'));
   body.appendChild(row('🏠', '#166534', '“unit mix (N)” = N unit types imported (gray “no unit mix” = none)'));
@@ -4580,18 +4625,16 @@ function renderPropertyCard(local, remote) {
     style: `font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:${unitMixOk ? '#dcfce7' : '#f1f5f9'};color:${unitMixOk ? '#166534' : '#94a3b8'}`,
   }, unitMixOk ? `🏠 unit mix${unitMixCount ? ` (${unitMixCount})` : ''}` : '🏠 no unit mix'));
 
+  // Drive-authoritative: edits auto-save to Drive, so a linked property is simply
+  // "on Drive" (no local-vs-remote dirty state). ☁ = in the org index but not yet
+  // loaded on this device; ⊘ = no deal folder linked.
   let syncCls, syncIcon, syncTitle;
   if (!local) {
     syncCls = 'remote'; syncIcon = '☁'; syncTitle = 'In org index — tap to open from Drive';
   } else if (!p.drive.folderId) {
     syncCls = 'nolink'; syncIcon = '⊘'; syncTitle = 'No Drive folder linked';
   } else {
-    const inSync = p.drive.lastPushed && p.drive.lastPushed >= p.updated;
-    syncCls = inSync ? 'synced' : 'dirty';
-    syncIcon = inSync ? '●' : '○';
-    syncTitle = inSync
-      ? 'Synced with Drive (last push: ' + relativeTime(p.drive.lastPushed) + ')'
-      : 'Local changes — next auto-sync within 1 min';
+    syncCls = 'synced'; syncIcon = '●'; syncTitle = 'Saved to Drive';
   }
 
   // Active-editor badge: another teammate has a fresh heartbeat right now.
@@ -4785,24 +4828,27 @@ function promptLinkFolder(p, after) {
   syncCapexLinkToAsana(p, { interactive: true });
 }
 
+// Single Drive-authoritative status: setup / saving / error / saved.
 function updateSyncBar() {
   const bar = $('#sync-bar');
   if (!STATE) { bar.classList.add('hidden'); return; }
   if (!STATE.drive.folderId) {
     bar.className = 'sync-bar warn';
-    bar.textContent = 'No Drive folder linked — tap ☰ → Find or Link Drive Folder to enable cloud sync.';
+    bar.textContent = 'Link a Drive folder to enable cloud sync — tap ☰ → Find or Link Drive Folder.';
     bar.classList.remove('hidden');
     return;
   }
   const lastPush = STATE.drive.lastPushed;
   const dirty = !lastPush || lastPush < STATE.updated;
-  if (dirty) {
+  if (_syncState === 'error') {
     bar.className = 'sync-bar warn';
-    bar.textContent = 'Local changes — auto-sync within 1 min.' +
-      (lastPush ? ' Last push: ' + relativeTime(lastPush) : '');
+    bar.textContent = '⚠ Can’t reach Drive — retrying…' + (lastPush ? ' Last saved ' + relativeTime(lastPush) : '');
+  } else if (_syncState === 'saving' || _autoPushTimer || dirty) {
+    bar.className = 'sync-bar';
+    bar.textContent = 'Saving to Drive…';
   } else {
     bar.className = 'sync-bar ok';
-    bar.textContent = 'Auto-synced with Drive (last push ' + relativeTime(lastPush) + ').';
+    bar.textContent = '✓ Saved to Drive' + (lastPush ? ' · ' + relativeTime(lastPush) : '');
   }
   bar.classList.remove('hidden');
 }
@@ -4840,9 +4886,8 @@ function bindShell() {
     }
   }));
   $('#btn-back').addEventListener('click', () => closeProperty());
-  const doManualSave = () => { saveState(); toast('Saved on this device (use ⬆ Push to save to Drive)', 'success'); updateSyncBar(); };
-  $('#btn-save').addEventListener('click', doManualSave);
-  $('#btn-save-float').addEventListener('click', doManualSave);
+  // No manual Save button — edits auto-save to the local cache and auto-push to
+  // Drive on a debounce (scheduleAutoPush). Drive is the source of truth.
   $('#btn-menu').addEventListener('click', () => $('#menu-drawer').classList.remove('hidden'));
   $('.drawer-close').addEventListener('click', () => $('#menu-drawer').classList.add('hidden'));
 
@@ -4879,10 +4924,9 @@ function bindShell() {
     closeDrawer();
   });
 
-  $('#btn-push').addEventListener('click', () => pushToDrive());
-  $('#btn-pull').addEventListener('click', () => pullFromDrive());
-  $('#btn-push-drawer').addEventListener('click', () => { pushToDrive(); closeDrawer(); });
-  $('#btn-pull-drawer').addEventListener('click', () => { pullFromDrive(); closeDrawer(); });
+  // Recovery only: re-pull the authoritative Drive copy (prompts if this device
+  // has unsynced edits). Routine sync is automatic.
+  $('#btn-resync').addEventListener('click', async () => { closeDrawer(); await pullFromDrive(); });
 
   $('#btn-export-xlsx').addEventListener('click', () => { exportXlsx(); closeDrawer(); });
   $('#btn-export-json').addEventListener('click', () => {
@@ -5436,40 +5480,47 @@ async function pushToDrive(opts = {}) {
     }
     const res = await driveUploadJson(targetFolder, STATE_FILENAME, STATE, existing && existing.id);
     STATE.drive.fileId = res.id;
-    STATE.drive.lastPushed = new Date().toISOString();
+    STATE.drive.lastPushed = new Date().toISOString();   // > STATE.updated (edit time) => not dirty
     STATE.drive.remoteModifiedTime = res.modifiedTime;
-    saveState();
+    // Persist the drive metadata WITHOUT saveState() — saveState bumps `updated`
+    // and re-schedules a push, which would loop the auto-push.
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
     updateSyncBar();
     updateFolderStatus();
     if (!silent) toast('Pushed to Drive', 'success');
+    return true;
   } catch (e) {
     if (silent) console.warn('Silent push failed:', e);
     else toast('Push failed: ' + e.message, 'error');
+    return false;
   }
 }
 
-async function pullFromDrive() {
+async function pullFromDrive(opts = {}) {
+  const { auto = false } = opts;   // auto = silent Drive-authoritative reconcile (no toasts / no prompt)
   if (!STATE) return;
-  if (!STATE.drive.folderId) { toast('Link a Drive folder first', 'error'); return; }
-  if (!GOOGLE_CLIENT_ID) { toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
+  if (!STATE.drive.folderId) { if (!auto) toast('Link a Drive folder first', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { if (!auto) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
-    toast('Pulling from Drive…');
+    if (!auto) toast('Pulling from Drive…');
     const targetFolder = await resolveCapexFolder();
     const remote = await driveDownloadJson(targetFolder, STATE_FILENAME);
-    if (!remote) { toast('No ' + STATE_FILENAME + ' found in 25. Capex/Capex Builder Budget', 'error'); return; }
+    if (!remote) { if (!auto) toast('No ' + STATE_FILENAME + ' found in 25. Capex/Capex Builder Budget', 'error'); return; }
     const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
-    if (dirty && !confirm('You have unpushed local changes. Replace them with the Drive copy?')) return;
+    if (dirty && !auto && !confirm('You have unpushed local changes. Replace them with the Drive copy?')) return;
     // Preserve local identity + drive metadata; overwrite content fields.
     const keep = { id: STATE.id, drive: { ...STATE.drive } };
     Object.keys(STATE).forEach(k => delete STATE[k]);
     Object.assign(STATE, remote.data);
     STATE.id = keep.id;
-    STATE.drive = { ...keep.drive, fileId: remote.id, lastPulled: new Date().toISOString(), remoteModifiedTime: remote.modifiedTime, lastPushed: new Date().toISOString() };
-    // After pulling, local matches remote — mark pushed time so it is not flagged dirty.
-    STATE.updated = remote.modifiedTime || STATE.updated;
-    saveState();
+    STATE.updated = remote.modifiedTime || new Date().toISOString();
+    STATE.drive = { ...keep.drive, fileId: remote.id, lastPulled: new Date().toISOString(), remoteModifiedTime: remote.modifiedTime, lastPushed: STATE.updated };
+    // Local now matches remote (lastPushed == updated => not dirty). Persist WITHOUT
+    // saveState() so `updated` isn't bumped (which would re-flag dirty + auto-push).
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+    _syncState = 'idle';
     renderShell();
-    toast('Pulled from Drive', 'success');
+    if (!auto) toast('Pulled from Drive', 'success');
   } catch (e) {
     toast('Pull failed: ' + e.message, 'error');
   }
@@ -5671,8 +5722,10 @@ async function openRemoteProperty(entry) {
     STORE.properties[p.id] = p;
     STORE.currentPropertyId = p.id;
     STATE = p;
-    maybeGuessMarketMSA();   // backfill an empty Market (MSA) guessed from the stored address
-    saveState();
+    maybeGuessMarketMSA();   // backfill an empty Market (MSA) — bumps + pushes only if it fills one
+    // Freshly pulled from Drive = already in sync; persist WITHOUT bumping `updated`
+    // (bumping would falsely mark it dirty and re-push identical data).
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
     CURRENT_PHASE = 1;
     CURRENT_VIEW = 'property';
     renderShell();

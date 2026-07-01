@@ -17,9 +17,6 @@
     <span class="title" id="header-title">Capex Builder</span>
   </div>
   <div class="header-actions">
-    <button id="btn-pull" class="btn-icon hidden" title="Pull from Drive">⬇</button>
-    <button id="btn-push" class="btn-icon hidden" title="Push to Drive">⬆</button>
-    <button id="btn-save" class="btn-icon hidden" title="Save">💾</button>
     <button id="btn-menu" class="btn-icon" title="Menu">☰</button>
   </div>
 </header>
@@ -48,8 +45,7 @@
     <button id="btn-delete">Delete Property</button>
     <hr/>
     <h3>Sync</h3>
-    <button id="btn-push-drawer">Push to Drive</button>
-    <button id="btn-pull-drawer">Pull from Drive</button>
+    <button id="btn-resync">↻ Re-sync from Drive</button>
     <div id="sync-status" class="muted small"></div>
     <button id="btn-export-xlsx">Export Excel → Drive</button>
     <button id="btn-export-json">Export JSON (download)</button>
@@ -79,11 +75,6 @@
   <hr/>
   <div class="muted small">v0.9 · multi-property</div>
 </div>
-
-<!-- Floating Save: fixed top-right, stays in view while scrolling so you can
-     save as you edit down the page. Same action as the header 💾 (local save).
-     Shown only in property view (toggled in renderShell alongside #btn-save). -->
-<button id="btn-save-float" class="save-fab hidden" title="Save your work on this device">💾 Save</button>
 
 <div id="toast" class="toast hidden"></div>
 
