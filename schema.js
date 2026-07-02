@@ -462,7 +462,8 @@ window.SCHEMA = {
           "Yuma, AZ",
           "Other"
         ],
-        "hint": "Metro market. Auto-filled from the proforma (Dash!E8) or guessed from the address; you can override. Pick \"Other\" for a market not listed."
+        "hint": "Metro market. Auto-filled from the proforma (Dash!E8) or guessed from the address; you can override. Pick \"Other\" for a market not listed.",
+        "required": true
       },
       {
         "key": "maps_link",
@@ -486,7 +487,8 @@ window.SCHEMA = {
         "type": "number",
         "min": 1900,
         "max": 2026,
-        "nocomma": true
+        "nocomma": true,
+        "required": true
       }
     ]
   },
@@ -686,7 +688,8 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "elevator_year_install",
@@ -749,7 +752,8 @@ window.SCHEMA = {
           "Wood Frame",
           "Concrete",
           "Steel"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "flooring",
@@ -808,13 +812,13 @@ window.SCHEMA = {
           "Low",
           "Medium",
           "High"
-        ],
-        "required": true
+        ]
       },
       {
         "key": "walkways",
         "type": "number",
-        "label": "# Walkways"
+        "label": "# Walkways",
+        "hint": "Enter 0 if none"
       },
       {
         "key": "new_railing_lf",
@@ -827,7 +831,8 @@ window.SCHEMA = {
         "key": "private_yard_existing",
         "label": "# Private Yards",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "yard_perimeter_lf",
@@ -921,12 +926,14 @@ window.SCHEMA = {
       {
         "key": "hallways",
         "type": "number",
-        "label": "# Hallways"
+        "label": "# Hallways",
+        "hint": "Enter 0 if none"
       },
       {
         "key": "atrium_interior",
         "type": "number",
-        "label": "Interior Atrium Sqft"
+        "label": "Interior Atrium Sqft",
+        "hint": "Enter 0 if none"
       }
     ]
   },
@@ -985,7 +992,7 @@ window.SCHEMA = {
       },
       {
         "key": "plumbing_pipes",
-        "label": "Water Pipes In Type",
+        "label": "Water-In Pipes-Type",
         "type": "select",
         "options": [
           "Steel",
@@ -995,7 +1002,7 @@ window.SCHEMA = {
       },
       {
         "key": "sewer_pipes",
-        "label": "Sewer Pipes Out Type",
+        "label": "Sewer-Out Pipes -Type",
         "type": "select",
         "options": [
           "Steel",
@@ -1005,7 +1012,7 @@ window.SCHEMA = {
       },
       {
         "key": "showerhead_aerated",
-        "label": "Showerhead Aerated Y/N",
+        "label": "Showerhead Aerated? (Y/N)",
         "type": "select",
         "options": [
           "Yes",
@@ -1014,7 +1021,7 @@ window.SCHEMA = {
       },
       {
         "key": "bath_sink_aerated",
-        "label": "Bathroom Faucet Aerated Y/N",
+        "label": "Bathroom Faucet Aerated? (Y/N)",
         "type": "select",
         "options": [
           "Yes",
@@ -1024,7 +1031,8 @@ window.SCHEMA = {
       {
         "key": "toilet_low_flow",
         "label": "Toilet GPF",
-        "type": "number"
+        "type": "number",
+        "hint": "Gallons Per Flush"
       }
     ]
   },
@@ -1081,29 +1089,33 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "outdoor_pools",
-        "label": "# Outdoor Pools",
+        "label": "# Outdoor Pool(s)",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "dog_parks",
-        "label": "# Dog Parks",
+        "label": "# Dog Park(s)",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "soccer_field",
         "label": "# Play Field(s)",
         "type": "number",
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "sport_court_outdoor",
         "type": "number",
         "label": "Outdoor Sport Court(s)",
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       }
     ]
   },
@@ -1115,7 +1127,7 @@ window.SCHEMA = {
         "label": "Gym Space Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Enter 0 to indicate no gym on site",
+        "hint": "Enter 0 if none",
         "required": true
       },
       {
@@ -1127,21 +1139,22 @@ window.SCHEMA = {
           "Add More Equipment",
           "Good Equipment"
         ],
-        "required": true,
         "show_if": "gym_space > 0"
       },
       {
         "key": "laundry_facilities",
-        "label": "# Laundry Facilities",
+        "label": "# Laundry Facility(ies)",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "machines_per_facility",
         "label": "Machines/ Laundry Facility",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "show_if": "laundry_facilities > 0"
       },
       {
         "key": "indoor_pools",
@@ -1162,19 +1175,43 @@ window.SCHEMA = {
       },
       {
         "key": "sport_court_indoor",
-        "label": "# Sport Court (Indoor)",
+        "label": "# Sport Indoor Court(s)",
         "type": "number",
         "required": true
       },
       {
         "key": "leasing_office_2",
         "type": "select",
-        "label": "Leasing Office",
+        "label": "Leasing Office Type",
         "options": [
           "Re-Brand Only",
           "Full Renovation",
           "Equipment Only",
           "Furniture Only"
+        ],
+        "required": true
+      },
+      {
+        "key": "business_center",
+        "type": "select",
+        "label": "Business Center(s)",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "required": true
+      },
+      {
+        "key": "other_amenity",
+        "type": "select",
+        "label": "Other Amenity",
+        "options": [
+          "Theater",
+          "Deck",
+          "karaoke room",
+          "yoga studio",
+          "field games",
+          "arcade"
         ]
       }
     ]
