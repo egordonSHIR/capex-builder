@@ -363,7 +363,7 @@ function saveState() {
 // divergent data for more than ~2s. The 60s syncTick remains as a backstop +
 // heartbeat. _syncState feeds the single sync-bar status.
 let _autoPushTimer = null;
-let _syncState = 'idle';   // 'idle' | 'saving' | 'error'
+let _syncState = 'idle';   // 'idle' | 'saving' | 'error' | 'conflict'
 const AUTO_PUSH_DEBOUNCE_MS = 2000;
 function scheduleAutoPush() {
   if (!STATE || !STATE.drive || !STATE.drive.folderId) return;          // nothing to sync to yet
@@ -373,8 +373,8 @@ function scheduleAutoPush() {
   if (_autoPushTimer) clearTimeout(_autoPushTimer);
   _autoPushTimer = setTimeout(async () => {
     _autoPushTimer = null;
-    const ok = await pushToDrive({ silent: true });   // returns false on failure, undefined on skip/bail
-    _syncState = (ok === false) ? 'error' : 'idle';
+    const ok = await pushToDrive({ silent: true });   // true=ok, false=fail, 'conflict'=remote newer, undefined=skip
+    _syncState = (ok === false) ? 'error' : (ok === 'conflict') ? 'conflict' : 'idle';
     if (typeof updateSyncBar === 'function') updateSyncBar();
   }, AUTO_PUSH_DEBOUNCE_MS);
 }
@@ -4967,6 +4967,7 @@ function promptLinkFolder(p, after) {
 function updateSyncBar() {
   const bar = $('#sync-bar');
   if (!STATE) { bar.classList.add('hidden'); return; }
+  bar.onclick = null; bar.style.cursor = '';   // reset; the conflict branch re-arms these
   if (!STATE.drive.folderId) {
     bar.className = 'sync-bar warn';
     bar.textContent = 'Link a Drive folder to enable cloud sync — tap ☰ → Find or Link Drive Folder.';
@@ -4975,7 +4976,14 @@ function updateSyncBar() {
   }
   const lastPush = STATE.drive.lastPushed;
   const dirty = !lastPush || lastPush < STATE.updated;
-  if (_syncState === 'error') {
+  if (_syncState === 'conflict') {
+    // Silent push refused to overwrite a newer Drive copy. Don't lie "Saving…" —
+    // show an actionable bar so the user can resolve (load Drive vs. overwrite).
+    bar.className = 'sync-bar warn';
+    bar.textContent = '⚠ A newer version of this property is on Drive — click here to resolve';
+    bar.style.cursor = 'pointer';
+    bar.onclick = () => resolveSyncConflict();
+  } else if (_syncState === 'error') {
     bar.className = 'sync-bar warn';
     bar.textContent = '⚠ Can’t reach Drive — retrying…' + (lastPush ? ' Last saved ' + relativeTime(lastPush) : '');
   } else if (_syncState === 'saving' || _autoPushTimer || dirty) {
@@ -4986,6 +4994,31 @@ function updateSyncBar() {
     bar.textContent = '✓ Saved to Drive' + (lastPush ? ' · ' + relativeTime(lastPush) : '');
   }
   bar.classList.remove('hidden');
+}
+
+// Invoked from the sync bar when a silent push detected a newer Drive copy.
+// Offers a 2-way resolution: load the Drive version (discard unsynced local edits)
+// or overwrite Drive with the local version. Either path clears the conflict.
+async function resolveSyncConflict() {
+  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;
+  const useRemote = confirm(
+    'A newer version of this property is on Drive.\n\n' +
+    'OK — Load the Drive version (your unsynced local edits will be replaced).\n\n' +
+    'Cancel — Keep your local version and overwrite the Drive copy.'
+  );
+  try {
+    if (useRemote) {
+      await pullFromDrive({ auto: true });   // silent adopt: sets _syncState idle + re-renders
+      toast('Loaded the Drive version', 'success');
+    } else {
+      const r = await pushToDrive({ force: true });   // override the newer-remote guard
+      _syncState = (r === false) ? 'error' : 'idle';
+      if (r !== false) toast('Overwrote the Drive copy with your local version', 'success');
+    }
+  } catch (e) {
+    _syncState = 'error';
+  }
+  updateSyncBar();
 }
 
 function updateFolderStatus() {
@@ -5590,24 +5623,25 @@ async function driveUploadBinary(folderId, filename, blob, mimeType) {
 }
 
 async function pushToDrive(opts = {}) {
-  const { silent = false } = opts;
+  const { silent = false, force = false } = opts;
   if (!STATE) return;
   if (!STATE.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
     if (!silent) toast('Pushing to Drive…');
     const targetFolder = await resolveCapexFolder();
-    // Warn if remote is newer than what we last pulled.
+    // Guard: don't clobber a Drive copy that's newer than our watermark (unless
+    // force — the user explicitly chose "overwrite Drive" from the conflict bar).
     const existing = await driveFindFile(targetFolder, STATE_FILENAME);
-    if (existing && STATE.drive.remoteModifiedTime
+    if (!force && existing && STATE.drive.remoteModifiedTime
         && existing.modifiedTime > STATE.drive.remoteModifiedTime
         && (!STATE.drive.lastPushed || existing.modifiedTime > STATE.drive.lastPushed)) {
       if (silent) {
-        // Auto-sync mustn't silently clobber a newer remote. Skip this tick;
-        // the concurrent-editor banner (driven by the manifest) already warns
-        // the user, and the next tick can retry after they reconcile.
-        console.warn('pushToDrive: remote newer than local — skipping silent push');
-        return;
+        // Auto-sync mustn't silently clobber a newer remote. Signal a conflict so
+        // the sync bar stops lying "Saving…" and offers the user a resolution
+        // (load Drive vs. overwrite) via resolveSyncConflict(); retries next tick.
+        console.warn('pushToDrive: remote newer than local — conflict (awaiting user resolve)');
+        return 'conflict';
       }
       if (!confirm('The Drive copy was modified more recently than your last sync. Overwrite it with your local data?')) {
         return;
@@ -5898,7 +5932,10 @@ async function syncTick() {
     // 1. Push local changes if dirty.
     const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
     if (dirty) {
-      await pushToDrive({ silent: true });
+      const r = await pushToDrive({ silent: true });
+      _syncState = (r === false) ? 'error' : (r === 'conflict') ? 'conflict' : 'idle';
+    } else if (_syncState === 'conflict') {
+      _syncState = 'idle';   // no longer dirty => the conflict was resolved elsewhere
     }
     // 2. Pull the manifest and check for a concurrent editor.
     const { data } = await fetchManifest();
