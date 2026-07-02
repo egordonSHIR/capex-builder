@@ -815,10 +815,16 @@ function refreshSection(sec, body, bag) {
     grp.style.display = show ? '' : 'none';
   });
 
-  // Section-complete checkmark — toggle in the header, to the left of the chevron.
+  // Section status mark in the header (left of the chevron): green ✓ when complete,
+  // red ✗ when not.
   const section = body.parentElement;
   const check = section && section.querySelector('.section-check');
-  if (check) check.style.display = isSectionComplete(sec, bag) ? '' : 'none';
+  if (check) {
+    const done = isSectionComplete(sec, bag);
+    check.textContent = done ? '✓' : '✗';
+    check.style.color = done ? '#16a34a' : '#dc2626';
+    check.style.display = '';
+  }
   updateBasicsTabCheck();
 }
 
@@ -1024,7 +1030,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
       },
         el('span', {}, sec.section),
         el('span', { style: 'display:flex;align-items:center;gap:8px' },
-          el('span', { class: 'section-check', style: 'color:#16a34a;font-weight:700;display:none' }, '✓'),
+          el('span', { class: 'section-check', style: 'color:#dc2626;font-weight:700' }, '✗'),
           el('span', { class: 'chev' }, '▼')
         )
       ),
