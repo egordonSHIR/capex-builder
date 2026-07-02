@@ -8,7 +8,8 @@ window.SCHEMA = {
         "key": "prop_name",
         "label": "Property Name",
         "type": "text",
-        "required": true
+        "required": true,
+        "maxlength": 25
       },
       {
         "key": "mailing_address",

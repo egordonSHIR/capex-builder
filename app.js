@@ -347,9 +347,14 @@ function loadStore() {
   } catch (e) { console.warn('loadStore failed', e); }
   return DEFAULT_STORE();
 }
+const PROP_NAME_MAX = 25;
 function saveState() {
   if (STATE) {
     STATE.updated = new Date().toISOString();
+    // Property Name is capped at PROP_NAME_MAX chars (truncate anything longer).
+    if (STATE.phase1 && typeof STATE.phase1.prop_name === 'string' && STATE.phase1.prop_name.length > PROP_NAME_MAX) {
+      STATE.phase1.prop_name = STATE.phase1.prop_name.slice(0, PROP_NAME_MAX);
+    }
     // Keep displayed name in sync with phase1.prop_name when the user edits it on the form
     if (STATE.phase1 && STATE.phase1.prop_name) STATE.name = STATE.phase1.prop_name;
   }
@@ -393,6 +398,12 @@ function openProperty(id) {
   if (!STORE.properties[id]) return;
   STORE.currentPropertyId = id;
   STATE = STORE.properties[id];
+  // Enforce the 25-char Property Name cap on existing records as they're opened.
+  if (STATE.phase1 && typeof STATE.phase1.prop_name === 'string' && STATE.phase1.prop_name.length > PROP_NAME_MAX) {
+    STATE.phase1.prop_name = STATE.phase1.prop_name.slice(0, PROP_NAME_MAX);
+    STATE.name = STATE.phase1.prop_name;
+    saveState();   // persist + sync the truncation
+  }
   maybeGuessMarketMSA();   // backfill an empty Market (MSA) — bumps updated + auto-pushes only if it fills one
   // Persist currentPropertyId WITHOUT bumping `updated` (opening a property is not
   // an edit — bumping it would falsely mark the cache dirty and risk a stale push).
@@ -725,6 +736,7 @@ function renderField(field, value, onChange) {
     });
   } else if (field.type === 'textarea') {
     input = el('textarea', { rows: 3 });
+    if (field.maxlength) input.maxLength = field.maxlength;
     input.value = value || '';
   } else {
     // Number fields render as text inputs so the display can carry thousands
@@ -735,6 +747,7 @@ function renderField(field, value, onChange) {
     input = el('input', { type: isNumber ? 'text' : (field.type || 'text') });
     if (isNumber) input.setAttribute('inputmode', field.decimals ? 'decimal' : 'numeric');
     if (field.pattern) input.pattern = field.pattern;
+    if (field.maxlength) input.maxLength = field.maxlength;
     if (field.min !== undefined) input.min = field.min;
     if (field.max !== undefined) input.max = field.max;
     if (field.step !== undefined) input.step = field.step;
@@ -4948,9 +4961,9 @@ function findExistingProperty({ name, folderId, excludeId } = {}) {
 }
 
 function promptNewProperty() {
-  const name = prompt('Property name?');
+  const name = prompt(`Property name? (max ${PROP_NAME_MAX} characters)`);
   if (name === null) return;
-  const trimmed = (name || '').trim();
+  const trimmed = (name || '').trim().slice(0, PROP_NAME_MAX);   // cap at 25
   if (!trimmed) { toast('Enter a property name', 'error'); return; }
   // Block duplicates: a property with the same name already exists locally or org-wide.
   const dup = findExistingProperty({ name: trimmed });
