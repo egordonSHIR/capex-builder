@@ -4641,9 +4641,50 @@ function renderOnboardingCard() {
   return card;
 }
 
+// Set true once the on-load silent Drive-token refresh has resolved (success or
+// fail). Until then, a previously-connected user sees "Reconnecting…" rather than
+// the connect gate, avoiding a flash of the gate before the silent token lands.
+let _driveSilentDone = false;
+
+// Full-page gate shown on the home view when Drive is not connected. Cloud sync is
+// mandatory (Drive is the source of truth), so the property list is blocked until
+// the user connects their company Google account. The connect button is a real
+// click (user gesture) so the OAuth popup isn't blocked by the browser.
+function renderDriveGate() {
+  const wrap = el('div', {
+    style: 'max-width:460px;margin:48px auto 0;padding:30px 26px;background:var(--surface);border:1px solid var(--border);border-radius:12px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06)'
+  });
+  wrap.appendChild(el('div', { style: 'font-size:42px;line-height:1;margin-bottom:10px' }, '🔒'));
+  wrap.appendChild(el('h2', { style: 'margin:0 0 8px;font-size:19px;color:var(--primary)' }, 'Connect Google Drive'));
+  wrap.appendChild(el('p', { style: 'margin:0 0 20px;font-size:14px;color:#475569;line-height:1.5' },
+    'Capex Builder syncs every property through the SHIR Google Drive. Connect your company Google account to view and edit properties.'));
+  // Returning user: silent reconnect is probably in flight — show a spinner state.
+  if (!_driveSilentDone && localStorage.getItem(DRIVE_EVER_CONNECTED_KEY)) {
+    wrap.appendChild(el('div', { style: 'font-size:13px;color:#64748b' }, '🔄 Reconnecting to Google Drive…'));
+    return wrap;
+  }
+  const btn = el('button', {
+    class: 'home-new-btn', style: 'width:auto;padding:12px 24px',
+    onClick: async () => {
+      btn.disabled = true; btn.textContent = 'Connecting…';
+      try { await driveConnect(); } catch (e) {}
+      _driveSilentDone = true;
+      if (getDriveToken()) renderHome(); else { btn.disabled = false; btn.textContent = '☁ Connect Google Drive'; }
+    }
+  }, '☁ Connect Google Drive');
+  wrap.appendChild(btn);
+  return wrap;
+}
+
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
+
+  // Mandatory Drive connection — block the home content until connected.
+  if (GOOGLE_CLIENT_ID && !getDriveToken()) {
+    main.appendChild(renderDriveGate());
+    return;
+  }
 
   if (shouldShowOnboarding()) main.appendChild(renderOnboardingCard());
 
@@ -6060,16 +6101,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (CURRENT_VIEW === 'property' && STATE) setHash(propertyHash(STATE));
   }
   // Try to silently refresh the Drive token on load so push/pull just works.
+  // Either outcome flips _driveSilentDone + re-renders home so the connect gate
+  // (renderDriveGate) shows only after silent auth has actually failed.
   if (GOOGLE_CLIENT_ID && !getDriveToken()) {
     driveRequestToken({ silent: true })
       .then(async () => {
+        _driveSilentDone = true;
         updateDriveStatus();
         try { await fetchCurrentUser(); } catch {}
         // Refresh the home index (if on home) or start sync (if on a property).
-        if (CURRENT_VIEW === 'home') refreshHomeIndex();
+        if (CURRENT_VIEW === 'home') { renderHome(); refreshHomeIndex(); }
         else if (CURRENT_VIEW === 'property') startAutoSync();
       })
-      .catch(() => {});
+      .catch(() => { _driveSilentDone = true; if (CURRENT_VIEW === 'home') renderHome(); });
   } else if (getDriveToken()) {
     // Token already valid — fetch user + refresh / sync without re-prompting.
     fetchCurrentUser().catch(() => {});
