@@ -187,12 +187,13 @@ main {
 }
 .field.inline > label { grid-column: 1; margin: 0; }
 .field.inline > .hint { grid-column: 2; margin: 0; text-align: left; }
-.field.inline > input, .field.inline > select { grid-column: 3; width: 100%; text-align: right; }
+.field.inline > input, .field.inline > select, .field.inline > textarea { grid-column: 3; width: 100%; text-align: right; }
+.field.inline > textarea { text-align: left; }
 @media (max-width: 520px) {
   /* Narrow: label + box on one line, note wraps full-width beneath. */
   .field.inline { grid-template-columns: 1fr 110px; }
   .field.inline > label { grid-column: 1; }
-  .field.inline > input, .field.inline > select { grid-column: 2; }
+  .field.inline > input, .field.inline > select, .field.inline > textarea { grid-column: 2; }
   .field.inline > .hint { grid-column: 1 / -1; }
 }
 /* Small computed value shown next to a field name (e.g. pervious %). */

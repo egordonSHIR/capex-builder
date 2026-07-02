@@ -705,14 +705,16 @@ window.SCHEMA = {
         "label": "Total All Roofs Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Pitch-adjusted (footprint \u00f7 cos(pitch))"
+        "hint": "Pitch-adjusted (footprint \u00f7 cos(pitch))",
+        "inline": true
       },
       {
         "key": "total_facade_sf",
         "label": "Total Facade Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Perimeter \u00d7 height, net of openings"
+        "hint": "Perimeter \u00d7 height, net of openings",
+        "inline": true
       },
       {
         "type": "divider",
@@ -772,13 +774,15 @@ window.SCHEMA = {
         "key": "fencing_notes",
         "label": "Fencing Notes",
         "type": "textarea",
-        "hint": "Type / LF / location \u00b7 \"n/a\" if none"
+        "hint": "Type / LF / location \u00b7 \"n/a\" if none",
+        "inline": true
       },
       {
         "key": "gates_notes",
         "label": "Gates Notes",
         "type": "textarea",
-        "hint": "Count / type / location \u00b7 \"n/a\" if none"
+        "hint": "Count / type / location \u00b7 \"n/a\" if none",
+        "inline": true
       }
     ]
   }
