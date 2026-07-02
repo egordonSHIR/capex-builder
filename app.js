@@ -721,8 +721,17 @@ function renderField(field, value, onChange) {
     return wrap;
   }
 
-  const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') });
-  wrap.appendChild(el('label', {}, field.label + (field.required ? ' *' : '')));
+  const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') + (field.inline ? ' inline' : '') });
+  const labelEl = el('label', {}, field.label + (field.required ? ' *' : ''));
+  // label_info: a small computed value shown right after the field name (kept live
+  // by refreshSection). e.g. pervious % next to "Other Pervious Sqft".
+  if (field.label_info) {
+    const li = el('span', { class: 'label-info' });
+    li.setAttribute('data-labelinfo', field.key);
+    labelEl.appendChild(document.createTextNode(' '));
+    labelEl.appendChild(li);
+  }
+  wrap.appendChild(labelEl);
   if (field.hint) wrap.appendChild(el('div', { class: 'hint' }, field.hint));
 
   let input;
@@ -801,6 +810,11 @@ function refreshSection(sec, body, bag) {
       bag[ff.key] = cv;
       const inp = body.querySelector(`[data-key="${ff.key}"]`);
       if (inp) inp.value = ff.type === 'number' ? formatNumberWithCommas(cv, ff.decimals) : (isFinite(cv) ? cv : '');
+    }
+    // label_info: small computed text shown next to the field name.
+    if (ff.label_info) {
+      const li = body.querySelector(`[data-labelinfo="${ff.key}"]`);
+      if (li) li.textContent = String(computeField(ff.label_info, eb) ?? '');
     }
     // Dynamic label: re-evaluate the field's label text from an expression.
     if (ff.dynamic_label) {
@@ -920,10 +934,15 @@ function basicsSectionColor(name) {
 
 function renderSchemaForm(sections, bag, onUpdate) {
   const frag = document.createDocumentFragment();
+  // Track every rendered {sec, body} so an edit can refresh derived UI in ALL
+  // sections (cross-section computed like total_site_area_sf = land_sf, and
+  // label_info that reads a field in another section).
+  const rendered = [];
   sections.forEach((sec, si) => {
     // Default to collapsed; preserve user's explicit choice during the session.
     const collapsed = window['_collapsed_' + sec.section] !== false;
     const body = el('div', { class: 'section-body' });
+    const tint = basicsSectionColor(sec.section);   // section pastel (also colors its dividers)
 
     let activeExpGroup = null;
     let activeExpExpr = null;
@@ -967,11 +986,12 @@ function renderSchemaForm(sections, bag, onUpdate) {
             pInp.value = (partnerField && partnerField.type === 'number') ? formatNumberWithCommas(pv, partnerField.decimals) : (isFinite(pv) ? pv : '');
           }
         }
-        refreshSection(sec, body, bag);
+        rendered.forEach(rs => refreshSection(rs.sec, rs.body, bag));   // refresh ALL sections (cross-section deps)
         saveState();
         onUpdate && onUpdate();
       };
       const fieldNode = renderField(f, value, handleChange);
+      if (f.type === 'divider' && tint) fieldNode.style.borderBottomColor = tint.bar;   // divider matches section color
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
 
@@ -1047,9 +1067,9 @@ function renderSchemaForm(sections, bag, onUpdate) {
       }
     });
 
+    rendered.push({ sec, body });
     setTimeout(() => refreshSection(sec, body, bag), 0);
 
-    const tint = basicsSectionColor(sec.section);
     const section = el('section', {
       class: 'section' + (collapsed ? ' collapsed' : ''),
       style: tint ? `border-left:4px solid ${tint.bar}` : ''
@@ -4276,6 +4296,17 @@ function renderPhase4() {
   const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
   if (p2Filled === 0) warnings.push('Physical characteristics (Basics tab) appear empty.');
   if (countChecked() === 0) warnings.push('No capex items selected on the Questionnaire tab.');
+  // Building & Site area-consistency red flag: paved + footprint + impervious + pervious
+  // should not exceed the total site area (= Land Sqft).
+  {
+    const p1 = STATE.phase1 || {};
+    const site = Number(p1.total_site_area_sf) || Number(p1.land_sf) || 0;
+    const sum = ['parking_lot_sf', 'total_footprint_sf', 'other_impervious_sf', 'landscaping_sf']
+      .reduce((a, k) => a + (Number(p1[k]) || 0), 0);
+    if (site > 0 && sum > site) {
+      warnings.push(`🚩 Site area mismatch: Parking + Buildings Footprint + Other Impervious + Pervious = ${sum.toLocaleString()} sqft exceeds Total Site Area ${site.toLocaleString()} sqft (over by ${(sum - site).toLocaleString()}).`);
+    }
+  }
 
   root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', false));
 

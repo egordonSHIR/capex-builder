@@ -570,7 +570,8 @@ window.SCHEMA = {
           "expr": "land_sf / 43560"
         },
         "required": true,
-        "row": "ar_land"
+        "row": "ar_land",
+        "hint": "Total parcel / site area"
       },
       {
         "key": "land_acres",
@@ -600,7 +601,7 @@ window.SCHEMA = {
       },
       {
         "key": "vertical_floors",
-        "label": "# Vertical Floors (Per Bldg)",
+        "label": "#  Floors (Per Bldg)",
         "type": "number",
         "min": 0,
         "hint": "Min 1",
@@ -618,13 +619,11 @@ window.SCHEMA = {
       },
       {
         "key": "elevators_yn",
-        "label": "Elevators?",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ],
-        "required": true
+        "label": "# Elevators",
+        "type": "number",
+        "required": true,
+        "hint": "Enter 0 if none",
+        "inline": true
       },
       {
         "key": "elevator_year_install",
@@ -633,21 +632,23 @@ window.SCHEMA = {
         "min": 1900,
         "max": 2100,
         "nocomma": true,
-        "show_if": "elevators_yn === 'Yes'"
+        "show_if": "elevators_yn > 0"
       },
       {
         "key": "elevator_passenger",
-        "label": "Passenger #",
+        "label": "# Passenger",
         "type": "number",
         "min": 0,
-        "show_if": "elevators_yn === 'Yes'"
+        "show_if": "elevators_yn > 0",
+        "hint": "Enter 0 if none"
       },
       {
         "key": "elevator_freight",
-        "label": "Freight #",
+        "label": "# Freight",
         "type": "number",
         "min": 0,
-        "show_if": "elevators_yn === 'Yes'"
+        "show_if": "elevators_yn > 0",
+        "hint": "Enter 0 if none"
       },
       {
         "type": "divider",
@@ -659,36 +660,41 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "decimals": 0,
-        "hint": "Total parcel / site area",
-        "required": true
+        "hint": "Auto = Land Sqft",
+        "computed": "land_sf",
+        "inline": true
       },
       {
         "key": "parking_lot_sf",
         "label": "Parking Lot Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Paved area curb-to-curb (stalls + drives)"
+        "hint": "Paved area curb-to-curb (stalls + drives)",
+        "inline": true
       },
       {
         "key": "total_footprint_sf",
         "label": "Total All Buildings Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Sum across all buildings"
+        "hint": "Sum across all buildings",
+        "inline": true
       },
       {
-        "key": "sidewalks_other_paved_sf",
-        "label": "Sidewalks / Other Paved Sqft",
+        "key": "other_impervious_sf",
         "type": "number",
-        "min": 0,
-        "hint": "Walks, pads, dumpster aprons"
+        "label": "Other Impervious Sqft",
+        "hint": "Walks, pads, dumpster aprons",
+        "inline": true
       },
       {
         "key": "landscaping_sf",
-        "label": "Landscaping / Pervious Sqft",
+        "label": "Other Pervious Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Residual = land \u2212 bldg \u2212 parking \u2212 sidewalks; override if known"
+        "hint": "Residual = land \u2212 bldg \u2212 parking \u2212 sidewalks; override if known",
+        "label_info": "land_sf > 0 ? '('+((landscaping_sf||0)/land_sf*100).toFixed(1)+'% of site)' : ''",
+        "inline": true
       },
       {
         "type": "divider",
@@ -717,34 +723,50 @@ window.SCHEMA = {
         "label": "# Parking Spots",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "inline": true
       },
       {
         "key": "parking_spots_hc",
         "label": "# Accessible (HC) Parking",
         "type": "number",
         "min": 0,
-        "hint": "Of total parking above"
+        "hint": "Of total parking above",
+        "inline": true
       },
       {
         "type": "divider",
         "key": "bs_div_4"
       },
       {
-        "key": "landscaping_pct_info",
-        "type": "info",
-        "expr": "`Pervious cover: ${land_sf > 0 ? ((landscaping_sf||0)/land_sf*100).toFixed(1) : 0}% of site`"
-      },
-      {
-        "type": "divider",
-        "key": "bs_div_5"
-      },
-      {
         "key": "site_perimeter_lf",
         "label": "Site Perimeter",
         "type": "number",
         "min": 0,
-        "hint": "Linear Ft (sum of boundary segments)"
+        "hint": "Linear Ft (sum of boundary segments)",
+        "inline": true
+      },
+      {
+        "key": "fence_feet",
+        "type": "number",
+        "label": "Fence Feet",
+        "required": true,
+        "hint": "Linear Ft -Enter 0 if none",
+        "inline": true
+      },
+      {
+        "key": "pedestrian_gates",
+        "type": "number",
+        "label": "# Pedestrian Gates",
+        "show_if": "fence_feet > 0",
+        "hint": "Enter 0 if none"
+      },
+      {
+        "key": "vehicle_gates",
+        "type": "number",
+        "label": "# Vehicle Gates",
+        "show_if": "fence_feet > 0",
+        "hint": "Enter 0 if none"
       },
       {
         "key": "fencing_notes",
