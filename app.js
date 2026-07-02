@@ -721,7 +721,11 @@ function renderField(field, value, onChange) {
     return wrap;
   }
 
-  const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') + (field.inline ? ' inline' : '') });
+  // 3-column inline layout (label | hint | box) is the DEFAULT for standard fields
+  // so each sits on one line. Opt out with inline:false; row-grouped fields
+  // (field.row) keep their shared multi-field .field-row layout instead.
+  const useInline = field.inline !== false && !field.row;
+  const wrap = el('div', { class: 'field' + (field.computed ? ' computed' : '') + (useInline ? ' inline' : '') });
   const labelEl = el('label', {}, field.label + (field.required ? ' *' : ''));
   // label_info: a small computed value shown right after the field name (kept live
   // by refreshSection). e.g. pervious % next to "Other Pervious Sqft".
@@ -4341,11 +4345,11 @@ function renderPhase4() {
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
       el('span', {}, 'Adjustments (used in Excel export)'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' },
-      renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)' },
+      renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)', inline: false },
         (Number(STATE.phase4.contingency_pct) || 0) * 100, (v) => { STATE.phase4.contingency_pct = (Number(v) || 0) / 100; saveState(); }),
-      renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)' },
+      renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)', inline: false },
         (Number(STATE.phase4.mgmt_fee_pct) || 0) * 100, (v) => { STATE.phase4.mgmt_fee_pct = (Number(v) || 0) / 100; saveState(); }),
-      renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea' },
+      renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea', inline: false },
         STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); }),
     )
   );
