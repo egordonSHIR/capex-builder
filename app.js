@@ -1572,7 +1572,14 @@ function renderSurveyBlock() {
 
     blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
 
-    body.appendChild(el('div', { class: 'um-note' },
+    // Collapsible one-line "Instructions" (collapsed by default).
+    const instr = el('details', {
+      style: 'margin:8px 16px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;overflow:hidden'
+    });
+    instr.appendChild(el('summary', {
+      style: 'padding:7px 10px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;user-select:none'
+    }, 'ⓘ Instructions'));
+    instr.appendChild(el('div', { style: 'padding:2px 10px 10px;font-size:12px;color:#475569;line-height:1.45' },
       el('strong', {}, 'Populating these fields: '),
       'click ', el('strong', {}, '📥 Import Survey'), ' to load the latest ',
       el('em', {}, '*_SurveyBreakdownSpecs_*.xlsx'),
@@ -1582,6 +1589,7 @@ function renderSurveyBlock() {
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
       'and replaces the buildings list with the Site-Total values from the workbook.'
     ));
+    body.appendChild(instr);
     return body;
   }
   rebuild();
