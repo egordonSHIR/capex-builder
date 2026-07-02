@@ -1126,7 +1126,8 @@ window.SCHEMA = {
           "Add More Equipment",
           "Good Equipment"
         ],
-        "required": true
+        "required": true,
+        "show_if": "gym_space > 0"
       },
       {
         "key": "laundry_facilities",
