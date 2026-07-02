@@ -1065,7 +1065,7 @@ function renderExpandCollapseBar() {
 
 // Gather every currently-applicable Basics field (phase1 + phase2) that has no
 // value, skipping non-input fields (info/divider/maps_link/computed) and fields
-// hidden by an unmet show_if. Returns [{section, field, key, required}].
+// hidden by an unmet show_if. Returns [{section, field, key, required, type}].
 function collectEmptyBasicsFields() {
   const rows = [];
   const scan = (sections, bag) => {
@@ -1078,7 +1078,7 @@ function collectEmptyBasicsFields() {
         const empty = (f.type === 'multiselect')
           ? !(Array.isArray(v) && v.length)
           : (v === '' || v === null || v === undefined);
-        if (empty) rows.push({ section: sec.section, field: f.label || f.key, key: f.key, required: !!f.required });
+        if (empty) rows.push({ section: sec.section, field: f.label || f.key, key: f.key, required: !!f.required, type: f.type || 'text' });
       });
     });
   };
@@ -1086,23 +1086,57 @@ function collectEmptyBasicsFields() {
   scan(SCHEMA.phase2, STATE.phase2);
   return rows;
 }
-// Download the empty/missing Basics fields as a CSV the user can work off of.
-function exportEmptyBasicsFields() {
+// Friendly label for a field's input type (column D of the export).
+const FIELD_TYPE_LABELS = { text: 'Text', textarea: 'Text (long)', number: 'Number', select: 'Dropdown', multiselect: 'Multi-select' };
+// Export the empty/missing Basics fields as a formatted .xlsx: Required and
+// Optional split into two blocks, frozen bold header, column widths 35/45/20/22,
+// with the field type in column D.
+async function exportEmptyBasicsFields() {
   const rows = collectEmptyBasicsFields();
   if (!rows.length) { toast('All applicable Basics fields are filled ✓', 'success'); return; }
-  const esc = (s) => '"' + String(s).replace(/"/g, '""') + '"';
-  const csv = ['Section,Field,Required?']
-    .concat(rows.map(r => [esc(r.section), esc(r.field), r.required ? 'Required' : 'Optional'].join(',')))
-    .join('\r\n');
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet — try again', 'error'); return; }
+  const req = rows.filter(r => r.required);
+  const opt = rows.filter(r => !r.required);
+  const typeLabel = (t) => FIELD_TYPE_LABELS[t] || (t ? t.charAt(0).toUpperCase() + t.slice(1) : '');
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Missing Basics Fields', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = [{ width: 35 }, { width: 45 }, { width: 20 }, { width: 22 }];
+
+  // Frozen, bold header row (SHIR navy).
+  const hdr = ws.addRow(['Section', 'Field', 'Required?', 'Type']);
+  hdr.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  hdr.eachCell(c => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D2D47' } };
+    c.alignment = { vertical: 'middle' };
+  });
+
+  const addBlock = (title, list, reqLabel, titleFill) => {
+    const t = ws.addRow([`${title} (${list.length})`]);
+    ws.mergeCells(`A${t.number}:D${t.number}`);
+    t.getCell(1).font = { bold: true };
+    t.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: titleFill } };
+    if (!list.length) {
+      const e = ws.addRow(['(none)']);
+      e.getCell(1).font = { italic: true, color: { argb: 'FF888888' } };
+      return;
+    }
+    list.forEach(r => ws.addRow([r.section, r.field, reqLabel, typeLabel(r.type)]));
+  };
+
+  addBlock('REQUIRED — MISSING', req, 'Required', 'FFFCE4E4');   // pale red
+  ws.addRow([]);                                                 // spacer between blocks
+  addBlock('OPTIONAL — MISSING', opt, 'Optional', 'FFEAF0F6');   // pale blue-gray
+
+  const buf = await wb.xlsx.writeBuffer();
   const propName = (STATE && STATE.phase1 && STATE.phase1.prop_name) || 'property';
   const stamp = new Date().toISOString().slice(0, 10);
-  const filename = `${propName.replace(/[^a-z0-9]+/gi, '_')}_Basics_Missing_${stamp}.csv`;
+  const filename = `${propName.replace(/[^a-z0-9]+/gi, '_')}_Basics_Missing_${stamp}.xlsx`;
   const a = el('a', {});
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   a.download = filename;
   a.click();
-  const reqCount = rows.filter(r => r.required).length;
-  toast(`Exported ${rows.length} missing field${rows.length === 1 ? '' : 's'}${reqCount ? ` (${reqCount} required)` : ''} → ${filename}`, 'success');
+  toast(`Exported ${rows.length} missing field${rows.length === 1 ? '' : 's'} (${req.length} required, ${opt.length} optional) → ${filename}`, 'success');
 }
 
 // ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
