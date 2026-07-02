@@ -458,15 +458,10 @@ window.SCHEMA = {
           "Williamsport, PA",
           "Winchester, VA",
           "Yuba City, CA",
-          "Yuma, AZ"
+          "Yuma, AZ",
+          "Other"
         ],
-        "hint": "Metro market. Auto-filled from the proforma (Dash!E8) or guessed from the address; you can override."
-      },
-      {
-        "key": "msa",
-        "type": "text",
-        "label": "Market (MSA)",
-        "required": true
+        "hint": "Metro market. Auto-filled from the proforma (Dash!E8) or guessed from the address; you can override. Pick \"Other\" for a market not listed."
       },
       {
         "key": "maps_link",
@@ -495,7 +490,7 @@ window.SCHEMA = {
     ]
   },
   {
-    "section": "Units & Area",
+    "section": "Units",
     "fields": [
       {
         "key": "mf_units",
@@ -513,7 +508,12 @@ window.SCHEMA = {
         "step": 1,
         "pctOf1": true,
         "hint": "Whole number (75 = 75%)"
-      },
+      }
+    ]
+  },
+  {
+    "section": "Area",
+    "fields": [
       {
         "key": "mf_rsf",
         "label": "Multifamily RSF",
@@ -693,6 +693,7 @@ window.SCHEMA = {
         "type": "number",
         "min": 1900,
         "max": 2100,
+        "nocomma": true,
         "show_if": "elevators_yn === 'Yes'"
       },
       {
@@ -924,7 +925,7 @@ window.SCHEMA = {
       {
         "key": "atrium_interior",
         "type": "number",
-        "label": "Atrium (Interior)"
+        "label": "Interior Atrium Sqft"
       }
     ]
   },
@@ -933,7 +934,7 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "cooling",
-        "label": "Cooling",
+        "label": "Cooling Type",
         "type": "select",
         "options": [
           "Ind. Condenser",
@@ -945,7 +946,7 @@ window.SCHEMA = {
       },
       {
         "key": "heating",
-        "label": "Heating",
+        "label": "Heating Type",
         "type": "select",
         "options": [
           "Ind. Furnace",
@@ -969,18 +970,31 @@ window.SCHEMA = {
           "HWH-Gas",
           "HWH-Elec",
           "Boiler"
-        ]
+        ],
+        "required": true
       },
       {
         "key": "hot_water_count",
         "label": "# Hot Water",
         "type": "number",
         "min": 0,
-        "dynamic_label": "`# ${hot_water_type || '[Hot Water Type]'}`"
+        "dynamic_label": "`# ${hot_water_type || '[Hot Water Type]'}`",
+        "show_if": "hot_water_type",
+        "per_mf_unit": true
       },
       {
         "key": "plumbing_pipes",
-        "label": "Plumbing Pipes Type",
+        "label": "Water Pipes In Type",
+        "type": "select",
+        "options": [
+          "Steel",
+          "PVC",
+          "Cast Iron"
+        ]
+      },
+      {
+        "key": "sewer_pipes",
+        "label": "Sewer Pipes Out Type",
         "type": "select",
         "options": [
           "Steel",
@@ -990,7 +1004,7 @@ window.SCHEMA = {
       },
       {
         "key": "showerhead_aerated",
-        "label": "Showerhead Aerated",
+        "label": "Showerhead Aerated Y/N",
         "type": "select",
         "options": [
           "Yes",
@@ -999,7 +1013,7 @@ window.SCHEMA = {
       },
       {
         "key": "bath_sink_aerated",
-        "label": "Bathroom Sink Aerated",
+        "label": "Bathroom Faucet Aerated Y/N",
         "type": "select",
         "options": [
           "Yes",
@@ -1037,7 +1051,8 @@ window.SCHEMA = {
           "125A",
           "150A",
           "200A"
-        ]
+        ],
+        "show_if": "(panel_in_unit || '').indexOf('Yes') === 0"
       },
       {
         "key": "panel_voltage",
@@ -1046,7 +1061,8 @@ window.SCHEMA = {
         "options": [
           "120V",
           "240V"
-        ]
+        ],
+        "show_if": "(panel_in_unit || '').indexOf('Yes') === 0"
       },
       {
         "key": "lighting_efficient",
@@ -1064,10 +1080,9 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "outdoor_pools",
-        "label": "Outdoor Pools",
+        "label": "# Outdoor Pools",
         "type": "number",
         "min": 0,
-        "hint": "#",
         "required": true
       },
       {
@@ -1075,7 +1090,6 @@ window.SCHEMA = {
         "label": "# Dog Parks",
         "type": "number",
         "min": 0,
-        "hint": "#",
         "required": true
       },
       {
@@ -1087,7 +1101,7 @@ window.SCHEMA = {
       {
         "key": "sport_court_outdoor",
         "type": "number",
-        "label": "# Sport Court (Outdoor)",
+        "label": "Outdoor Sport Court(s)",
         "required": true
       }
     ]
@@ -1097,12 +1111,10 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "gym_space",
-        "label": "Gym Space",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ],
+        "label": "Gym Space Sqft",
+        "type": "number",
+        "min": 0,
+        "hint": "Enter 0 to indicate no gym on site",
         "required": true
       },
       {
@@ -1110,17 +1122,17 @@ window.SCHEMA = {
         "label": "Gym Equipment",
         "type": "select",
         "options": [
-          "Yes",
-          "No"
+          "Full Equipment Needed",
+          "Add More Equipment",
+          "Good Equipment"
         ],
         "required": true
       },
       {
         "key": "laundry_facilities",
-        "label": "Laundry Facilities",
+        "label": "# Laundry Facilities",
         "type": "number",
         "min": 0,
-        "hint": "#",
         "required": true
       },
       {
@@ -1131,10 +1143,9 @@ window.SCHEMA = {
       },
       {
         "key": "indoor_pools",
-        "label": "Indoor Pools",
+        "label": "# Indoor Pool(s)",
         "type": "number",
         "min": 0,
-        "hint": "#",
         "required": true
       },
       {
@@ -1144,7 +1155,8 @@ window.SCHEMA = {
         "options": [
           "Yes",
           "No"
-        ]
+        ],
+        "show_if": "indoor_pools > 0"
       },
       {
         "key": "sport_court_indoor",
@@ -1155,7 +1167,13 @@ window.SCHEMA = {
       {
         "key": "leasing_office_2",
         "type": "select",
-        "label": "Leasing Office"
+        "label": "Leasing Office",
+        "options": [
+          "Re-Brand Only",
+          "Full Renovation",
+          "Equipment Only",
+          "Furniture Only"
+        ]
       }
     ]
   }

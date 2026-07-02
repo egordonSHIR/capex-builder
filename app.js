@@ -831,12 +831,28 @@ function isFieldFilled(f, bag) {
   if (f.type === 'multiselect') return Array.isArray(v) && v.length > 0;
   return v !== '' && v !== null && v !== undefined;
 }
+// True only if the user has actually entered a value for this field (excludes
+// info/divider/maps_link/computed, which carry no user input).
+function fieldHasUserValue(f, bag) {
+  if (f.type === 'info' || f.type === 'divider' || f.type === 'maps_link' || f.computed) return false;
+  const v = bag[f.key];
+  if (f.type === 'multiselect') return Array.isArray(v) && v.length > 0;
+  return v !== '' && v !== null && v !== undefined;
+}
 function isSectionComplete(sec, bag) {
   const eb = getEvalBag(bag);
-  return sec.fields.every(f => {
+  // (1) every applicable *required* field must be filled...
+  const requiredOk = sec.fields.every(f => {
     if (!f.required) return true;                              // optional fields never block the ✓ (Required? = N in Basics_Control.xlsx)
     if (f.show_if && !computeField(f.show_if, eb)) return true; // required but not currently shown -> doesn't block
     return isFieldFilled(f, bag);
+  });
+  if (!requiredOk) return false;
+  // (2) ...and the user must have entered at least one currently-shown value, so
+  // an untouched all-optional section (e.g. Electrical) does NOT show a false ✓.
+  return sec.fields.some(f => {
+    if (f.show_if && !computeField(f.show_if, eb)) return false; // ignore hidden fields
+    return fieldHasUserValue(f, bag);
   });
 }
 function isBasicsAllComplete() {
@@ -901,7 +917,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
       // pctOf1 fields are stored 0–1 (decimal) but shown/typed as whole percentage points.
       if (f.pctOf1 && value !== '' && value !== null && value !== undefined) value = Number(value) * 100;
 
-      const fieldNode = renderField(f, value, (v) => {
+      const handleChange = (v) => {
         bag[f.key] = (f.pctOf1) ? (v === '' ? '' : Number(v) / 100)
                    : (f.type === 'multiselect') ? (Array.isArray(v) ? v : [])
                    : (f.type === 'number') ? (v === '' ? '' : Number(v)) : v;
@@ -917,9 +933,37 @@ function renderSchemaForm(sections, bag, onUpdate) {
         refreshSection(sec, body, bag);
         saveState();
         onUpdate && onUpdate();
-      });
+      };
+      const fieldNode = renderField(f, value, handleChange);
       const inp = fieldNode.querySelector ? fieldNode.querySelector('input, select, textarea') : null;
       if (inp) inp.setAttribute('data-key', f.key);
+
+      // "Per MF Unit" convenience toggle (field flag per_mf_unit): a checkbox that
+      // fills this number field with the MF-unit count from the Unit Mix and locks
+      // it. The checkbox state persists in the bag under <key>_permf.
+      if (f.per_mf_unit && inp) {
+        const permfKey = f.key + '_permf';
+        const mfUnits = () => Number(STATE && STATE.phase1 && STATE.phase1.mf_units) || 0;
+        const applyPerMf = () => {
+          const n = mfUnits();
+          inp.value = n ? formatNumberWithCommas(n) : '';
+          inp.readOnly = true; inp.style.background = '#f3f4f6';
+          handleChange(n ? String(n) : '');
+        };
+        const releasePerMf = () => { inp.readOnly = false; inp.style.background = ''; };
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = !!bag[permfKey];
+        cb.addEventListener('change', () => {
+          bag[permfKey] = cb.checked;
+          if (cb.checked) applyPerMf(); else { releasePerMf(); saveState(); }
+        });
+        const cbWrap = el('label', {
+          class: 'permf-toggle',
+          style: 'display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:var(--muted);cursor:pointer'
+        }, cb, ' Per MF Unit (auto-fill from Unit Mix)');
+        fieldNode.appendChild(cbWrap);
+        if (cb.checked) applyPerMf();
+      }
 
       // Group consecutive same-show_if fields into an indented expansion-group container,
       // but ONLY when 2+ fields share the same show_if (single-field conditionals do not need a toggle).
@@ -1019,6 +1063,48 @@ function renderExpandCollapseBar() {
   return bar;
 }
 
+// Gather every currently-applicable Basics field (phase1 + phase2) that has no
+// value, skipping non-input fields (info/divider/maps_link/computed) and fields
+// hidden by an unmet show_if. Returns [{section, field, key, required}].
+function collectEmptyBasicsFields() {
+  const rows = [];
+  const scan = (sections, bag) => {
+    (sections || []).forEach(sec => {
+      const eb = getEvalBag(bag);
+      sec.fields.forEach(f => {
+        if (f.type === 'info' || f.type === 'divider' || f.type === 'maps_link' || f.computed) return;
+        if (f.show_if && !computeField(f.show_if, eb)) return;   // hidden -> not applicable
+        const v = bag[f.key];
+        const empty = (f.type === 'multiselect')
+          ? !(Array.isArray(v) && v.length)
+          : (v === '' || v === null || v === undefined);
+        if (empty) rows.push({ section: sec.section, field: f.label || f.key, key: f.key, required: !!f.required });
+      });
+    });
+  };
+  scan(SCHEMA.phase1, STATE.phase1);
+  scan(SCHEMA.phase2, STATE.phase2);
+  return rows;
+}
+// Download the empty/missing Basics fields as a CSV the user can work off of.
+function exportEmptyBasicsFields() {
+  const rows = collectEmptyBasicsFields();
+  if (!rows.length) { toast('All applicable Basics fields are filled ✓', 'success'); return; }
+  const esc = (s) => '"' + String(s).replace(/"/g, '""') + '"';
+  const csv = ['Section,Field,Required?']
+    .concat(rows.map(r => [esc(r.section), esc(r.field), r.required ? 'Required' : 'Optional'].join(',')))
+    .join('\r\n');
+  const propName = (STATE && STATE.phase1 && STATE.phase1.prop_name) || 'property';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `${propName.replace(/[^a-z0-9]+/gi, '_')}_Basics_Missing_${stamp}.csv`;
+  const a = el('a', {});
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = filename;
+  a.click();
+  const reqCount = rows.filter(r => r.required).length;
+  toast(`Exported ${rows.length} missing field${rows.length === 1 ? '' : 's'}${reqCount ? ` (${reqCount} required)` : ''} → ${filename}`, 'success');
+}
+
 // ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
 function renderPhase1() {
   const root = el('div');
@@ -1028,15 +1114,22 @@ function renderPhase1() {
     style: 'width:100%;margin-bottom:12px;font-size:14px;padding:10px 14px;text-align:center;font-weight:600',
     onClick: () => pullBasicsAndUnitsFromDrive(),
   }, '☁ Import Basics + Units from GDrive'));
+  root.appendChild(el('button', {
+    type: 'button', class: 'um-btn secondary',
+    style: 'width:100%;margin-bottom:12px;font-size:14px;padding:10px 14px;text-align:center;font-weight:600',
+    onClick: () => exportEmptyBasicsFields(),
+  }, '📋 Export Empty / Missing Fields'));
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
-  // Inject the Unit Mix block into the "Units & Area" schema section so the
-  // unit-by-unit breakdown lives next to the totals it feeds. Sums (mf_units,
-  // mf_rsf) auto-populate the Units & Area inputs via syncUnitMixSumsToPhase1.
+  // Inject the Unit Mix block into the "Units" schema section (split out from the
+  // former "Units & Area" on 2026-07-02) so the unit-by-unit breakdown lives next
+  // to the count it feeds. Sums (mf_units) auto-populate the Units/Area inputs via
+  // syncUnitMixSumsToPhase1. ("Units & Area" still matched for deploy-safety.)
   const sections = root.querySelectorAll('section.section');
   for (const sec of sections) {
     const hdr = sec.querySelector('.section-header span');
-    if (hdr && hdr.textContent.trim() === 'Units & Area') {
+    const t = hdr ? hdr.textContent.trim() : '';
+    if (t === 'Units' || t === 'Units & Area') {
       const body = sec.querySelector('.section-body');
       if (body) body.appendChild(renderUnitMix());
       break;
@@ -2680,7 +2773,9 @@ function parseDashSheet(wb) {
   if (commRsf !== '') result.commercial_rsf = commRsf;
 
   const commonSf = nv('E13');
-  if (commonSf !== '') result.common_sf = commonSf;
+  // Some proformas derive Common SF as a subtraction that can land negative;
+  // never carry a negative into the field (floor at 0).
+  if (commonSf !== '') result.common_sf = Math.max(0, commonSf);
 
   const propType = cv('E17');
   if (propType) {
