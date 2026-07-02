@@ -4676,6 +4676,47 @@ function renderDriveGate() {
   return wrap;
 }
 
+// ---- Home sort state (persisted) ----
+let HOME_SORT_FIELD = localStorage.getItem('capex_home_sort_field') || 'modified'; // 'modified' | 'created' | 'name'
+let HOME_SORT_DIR = localStorage.getItem('capex_home_sort_dir') || 'desc';          // 'asc' | 'desc'
+function setHomeSort(field, dir) {
+  HOME_SORT_FIELD = field; HOME_SORT_DIR = dir;
+  localStorage.setItem('capex_home_sort_field', field);
+  localStorage.setItem('capex_home_sort_dir', dir);
+  renderHome();
+}
+function homeSortDirLabel() {
+  if (HOME_SORT_FIELD === 'name') return HOME_SORT_DIR === 'asc' ? 'A → Z' : 'Z → A';
+  return HOME_SORT_DIR === 'asc' ? '↑ Oldest first' : '↓ Newest first';
+}
+function entryDisplayName({ local, remote }) {
+  return (local && (local.name || (local.phase1 && local.phase1.prop_name)))
+    || (remote && remote.name) || 'Untitled';
+}
+function entryModifiedMs({ local, remote }) {
+  const s = (remote && remote.lastModified) || (local && local.updated) || '';
+  const t = Date.parse(s); return isFinite(t) ? t : 0;
+}
+function entryCreatedMs(e) {
+  const { local, remote } = e;
+  if (local && local.created) { const t = Date.parse(local.created); if (isFinite(t)) return t; }
+  // Fallback: property ids are `p_<rand>_<base36 Date.now()>` — decode the time part.
+  const id = (local && local.id) || (remote && remote.id) || '';
+  const part = id.split('_')[2];
+  if (part) { const t = parseInt(part, 36); if (isFinite(t) && t > 1e11) return t; }
+  return entryModifiedMs(e);   // last resort
+}
+function sortHomeEntries(entries) {
+  const dir = HOME_SORT_DIR === 'asc' ? 1 : -1;
+  entries.sort((a, b) => {
+    let cmp;
+    if (HOME_SORT_FIELD === 'name') cmp = entryDisplayName(a).localeCompare(entryDisplayName(b), undefined, { sensitivity: 'base' });
+    else if (HOME_SORT_FIELD === 'created') cmp = entryCreatedMs(a) - entryCreatedMs(b);
+    else cmp = entryModifiedMs(a) - entryModifiedMs(b);
+    return cmp * dir;
+  });
+}
+
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
@@ -4688,34 +4729,7 @@ function renderHome() {
 
   if (shouldShowOnboarding()) main.appendChild(renderOnboardingCard());
 
-  main.appendChild(el('button', { class: 'home-new-btn', onClick: () => promptNewProperty() },
-    '+ New Property'));
-
-  // Org-wide index status bar (only if Drive is connected — otherwise no index).
-  if (getDriveToken()) {
-    const driveToken = !!getDriveToken();
-    const statusBar = el('div', {
-      style: 'padding:8px 12px;margin:6px 0 10px;background:#f1f5f9;border-radius:6px;font-size:12px;color:#475569;display:flex;align-items:center;justify-content:space-between;gap:8px'
-    });
-    const statusText = HOME_INDEX_LOADING
-      ? '🔄 Loading org index…'
-      : (MANIFEST_CACHE
-          ? `📋 Org index loaded ${MANIFEST_CACHE.fetchedAt ? '(' + relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) + ')' : ''}`
-          : '📋 Tap Refresh to load org index');
-    statusBar.appendChild(el('span', {}, statusText));
-    const meBits = el('span', { style: 'display:flex;align-items:center;gap:8px' });
-    if (CURRENT_USER && CURRENT_USER.email) {
-      meBits.appendChild(el('span', { style: 'color:#64748b' }, CURRENT_USER.email));
-    }
-    meBits.appendChild(el('button', {
-      style: 'background:none;border:none;color:#1d2d47;font-size:12px;cursor:pointer;font-weight:600;padding:0',
-      onClick: () => refreshHomeIndex(),
-    }, '🔄 Refresh'));
-    statusBar.appendChild(meBits);
-    main.appendChild(statusBar);
-  }
-
-  // Merge local properties + manifest entries by id.
+  // Merge local properties + manifest entries by id, then sort per the user's choice.
   const merged = new Map();
   Object.values(STORE.properties).forEach(p => merged.set(p.id, { local: p, remote: null }));
   if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
@@ -4725,13 +4739,59 @@ function renderHome() {
       merged.set(entry.id, cur);
     });
   }
+  const entries = Array.from(merged.values());
+  sortHomeEntries(entries);
 
-  // Sort by latest activity (manifest lastModified preferred, fall back to local updated).
-  const entries = Array.from(merged.values()).sort((a, b) => {
-    const aTime = (a.remote && a.remote.lastModified) || (a.local && a.local.updated) || '';
-    const bTime = (b.remote && b.remote.lastModified) || (b.local && b.local.updated) || '';
-    return bTime.localeCompare(aTime);
+  // ---- Home header box: New Property + org index status + sort + icon legend ----
+  const box = el('div', {
+    style: 'margin:6px 0 12px;background:#f1f5f9;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#475569;display:flex;flex-direction:column;gap:8px'
   });
+
+  // Row 1: [+ New Property] + org-index status  |  user email + Refresh
+  const row1 = el('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap' });
+  const left1 = el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
+  left1.appendChild(el('button', {
+    style: 'background:var(--primary);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap',
+    onClick: () => promptNewProperty(),
+  }, '+ New Property'));
+  const statusText = HOME_INDEX_LOADING
+    ? '🔄 Loading org index…'
+    : (MANIFEST_CACHE
+        ? `📋 Org index loaded ${MANIFEST_CACHE.fetchedAt ? '(' + relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) + ')' : ''}`
+        : '📋 Tap Refresh to load org index');
+  left1.appendChild(el('span', {}, statusText));
+  row1.appendChild(left1);
+  const right1 = el('span', { style: 'display:flex;align-items:center;gap:8px' });
+  if (CURRENT_USER && CURRENT_USER.email) right1.appendChild(el('span', { style: 'color:#64748b' }, CURRENT_USER.email));
+  right1.appendChild(el('button', {
+    style: 'background:none;border:none;color:#1d2d47;font-size:12px;cursor:pointer;font-weight:600;padding:0',
+    onClick: () => refreshHomeIndex(),
+  }, '🔄 Refresh'));
+  row1.appendChild(right1);
+  box.appendChild(row1);
+
+  // Row 2: sort field + direction (only when there is something to sort)
+  if (entries.length) {
+    const row2 = el('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap' });
+    row2.appendChild(el('span', { style: 'color:#64748b' }, 'Sort:'));
+    const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff' });
+    [['modified', 'Date Modified'], ['created', 'Date Created'], ['name', 'Name']].forEach(([v, l]) => {
+      const o = el('option', { value: v }, l); if (HOME_SORT_FIELD === v) o.selected = true; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => setHomeSort(sel.value, HOME_SORT_DIR));
+    row2.appendChild(sel);
+    row2.appendChild(el('button', {
+      style: 'font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;font-weight:600;color:#1d2d47;white-space:nowrap',
+      title: 'Toggle sort direction',
+      onClick: () => setHomeSort(HOME_SORT_FIELD, HOME_SORT_DIR === 'asc' ? 'desc' : 'asc'),
+    }, homeSortDirLabel()));
+    box.appendChild(row2);
+  }
+
+  // Icon legend lives in the same box.
+  if (entries.length) box.appendChild(renderHomeLegend());
+
+  main.appendChild(box);
 
   if (!entries.length) {
     main.appendChild(el('div', { class: 'home-empty' },
@@ -4739,7 +4799,6 @@ function renderHome() {
     return;
   }
 
-  main.appendChild(renderHomeLegend());
   const list = el('div', { class: 'home-list' });
   entries.forEach(({ local, remote }) => list.appendChild(renderPropertyCard(local, remote)));
   main.appendChild(list);
