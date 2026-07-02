@@ -175,22 +175,26 @@ main {
   border-color: var(--primary-light);
 }
 .field.computed input { background: #f8fafc; color: var(--muted); }
-/* Inline field: label on the left, input box to its right (same line). Hint, if
-   present, wraps to its own line under them. */
+/* Inline field: fixed 3-column grid [ label | note | box ] so every input box
+   lands in the same right-hand column across rows; the note word-wraps in the
+   flexible middle column to keep the boxes aligned. */
 .field.inline {
-  flex-direction: row;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 160px;
   align-items: center;
-  gap: 4px 12px;
+  column-gap: 12px;
+  row-gap: 2px;
 }
-.field.inline > label { flex: 1 1 auto; margin: 0; }
-.field.inline > input, .field.inline > select {
-  flex: 0 0 auto;
-  width: 150px;
-  max-width: 50%;
-  text-align: right;
+.field.inline > label { grid-column: 1; margin: 0; }
+.field.inline > .hint { grid-column: 2; margin: 0; text-align: left; }
+.field.inline > input, .field.inline > select { grid-column: 3; width: 100%; text-align: right; }
+@media (max-width: 520px) {
+  /* Narrow: label + box on one line, note wraps full-width beneath. */
+  .field.inline { grid-template-columns: 1fr 110px; }
+  .field.inline > label { grid-column: 1; }
+  .field.inline > input, .field.inline > select { grid-column: 2; }
+  .field.inline > .hint { grid-column: 1 / -1; }
 }
-.field.inline > .hint { flex: 1 1 100%; text-align: right; margin: 0; }
 /* Small computed value shown next to a field name (e.g. pervious %). */
 .label-info { font-weight: 400; color: var(--muted); font-size: 11px; }
 
