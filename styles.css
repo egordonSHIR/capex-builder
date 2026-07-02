@@ -342,9 +342,9 @@ main {
 .home-list { display: flex; flex-direction: column; gap: 10px; }
 .property-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--primary);   /* thin SHIR dark-blue border */
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: flex;
   align-items: center;
   gap: 12px;

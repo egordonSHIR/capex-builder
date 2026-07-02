@@ -4687,7 +4687,7 @@ function setHomeSort(field, dir) {
 }
 function homeSortDirLabel() {
   if (HOME_SORT_FIELD === 'name') return HOME_SORT_DIR === 'asc' ? 'A → Z' : 'Z → A';
-  return HOME_SORT_DIR === 'asc' ? '↑ Oldest first' : '↓ Newest first';
+  return HOME_SORT_DIR === 'asc' ? '↑ Oldest' : '↓ Newest';
 }
 function entryDisplayName({ local, remote }) {
   return (local && (local.name || (local.phase1 && local.phase1.prop_name)))
@@ -4743,52 +4743,47 @@ function renderHome() {
   sortHomeEntries(entries);
 
   // ---- Home header box: New Property + org index status + sort + icon legend ----
+  // SHIR-navy box. Row 1 packs every control (New / status / sort / user / Refresh)
+  // onto one wrapping line; the icon legend is the only second row.
   const box = el('div', {
-    style: 'margin:6px 0 12px;background:#f1f5f9;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#475569;display:flex;flex-direction:column;gap:8px'
+    style: 'margin:6px 0 12px;background:var(--primary);border:1px solid var(--primary);border-radius:8px;padding:9px 12px;font-size:12px;color:#cbd5e1;display:flex;flex-direction:column;gap:8px'
   });
 
-  // Row 1: [+ New Property] + org-index status  |  user email + Refresh
-  const row1 = el('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap' });
-  const left1 = el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
-  left1.appendChild(el('button', {
-    style: 'background:var(--primary);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap',
+  const controls = el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
+  controls.appendChild(el('button', {
+    style: 'background:#fff;color:var(--primary);border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap',
     onClick: () => promptNewProperty(),
   }, '+ New Property'));
   const statusText = HOME_INDEX_LOADING
-    ? '🔄 Loading org index…'
+    ? '🔄 Loading…'
     : (MANIFEST_CACHE
-        ? `📋 Org index loaded ${MANIFEST_CACHE.fetchedAt ? '(' + relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) + ')' : ''}`
-        : '📋 Tap Refresh to load org index');
-  left1.appendChild(el('span', {}, statusText));
-  row1.appendChild(left1);
-  const right1 = el('span', { style: 'display:flex;align-items:center;gap:8px' });
-  if (CURRENT_USER && CURRENT_USER.email) right1.appendChild(el('span', { style: 'color:#64748b' }, CURRENT_USER.email));
-  right1.appendChild(el('button', {
-    style: 'background:none;border:none;color:#1d2d47;font-size:12px;cursor:pointer;font-weight:600;padding:0',
-    onClick: () => refreshHomeIndex(),
-  }, '🔄 Refresh'));
-  row1.appendChild(right1);
-  box.appendChild(row1);
-
-  // Row 2: sort field + direction (only when there is something to sort)
+        ? `📋 Index · ${MANIFEST_CACHE.fetchedAt ? relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) : 'loaded'}`
+        : '📋 Tap Refresh');
+  controls.appendChild(el('span', { style: 'color:#e2e8f0;white-space:nowrap', title: 'Org index' }, statusText));
   if (entries.length) {
-    const row2 = el('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap' });
-    row2.appendChild(el('span', { style: 'color:#64748b' }, 'Sort:'));
-    const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff' });
+    controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap' }, 'Sort:'));
+    const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;color:var(--primary)' });
     [['modified', 'Date Modified'], ['created', 'Date Created'], ['name', 'Name']].forEach(([v, l]) => {
       const o = el('option', { value: v }, l); if (HOME_SORT_FIELD === v) o.selected = true; sel.appendChild(o);
     });
     sel.addEventListener('change', () => setHomeSort(sel.value, HOME_SORT_DIR));
-    row2.appendChild(sel);
-    row2.appendChild(el('button', {
-      style: 'font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;font-weight:600;color:#1d2d47;white-space:nowrap',
+    controls.appendChild(sel);
+    controls.appendChild(el('button', {
+      style: 'font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;font-weight:600;color:var(--primary);white-space:nowrap',
       title: 'Toggle sort direction',
       onClick: () => setHomeSort(HOME_SORT_FIELD, HOME_SORT_DIR === 'asc' ? 'desc' : 'asc'),
     }, homeSortDirLabel()));
-    box.appendChild(row2);
   }
+  // Flexible spacer pushes the user + Refresh to the right edge of the row.
+  controls.appendChild(el('span', { style: 'flex:1 1 auto;min-width:8px' }));
+  if (CURRENT_USER && CURRENT_USER.email) controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap', title: CURRENT_USER.email }, CURRENT_USER.email.split('@')[0]));
+  controls.appendChild(el('button', {
+    style: 'background:none;border:none;color:#fff;font-size:12px;cursor:pointer;font-weight:600;padding:0;white-space:nowrap',
+    onClick: () => refreshHomeIndex(),
+  }, '🔄 Refresh'));
+  box.appendChild(controls);
 
-  // Icon legend lives in the same box.
+  // Icon legend = the second row (collapsible), inside the same box.
   if (entries.length) box.appendChild(renderHomeLegend());
 
   main.appendChild(box);
@@ -4808,7 +4803,7 @@ function renderHome() {
 // the symbols set in renderPropertyCard; keep the two in sync.
 function renderHomeLegend() {
   const d = el('details', { class: 'home-legend',
-    style: 'margin:0 0 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden' });
+    style: 'margin:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden' });
   d.appendChild(el('summary', {
     style: 'padding:9px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;user-select:none'
   }, 'ⓘ  What do the icons mean?'));
@@ -4900,8 +4895,11 @@ function renderPropertyCard(local, remote) {
     else openRemoteProperty(remote);
   } },
     el('div', { class: 'pc-main' },
-      el('div', { class: 'pc-name' }, p.name || (remote && remote.name) || '(unnamed)'),
-      el('div', { class: 'pc-sub' }, subtitle),
+      // Row 1: name + subtitle inline (subtitle ellipsizes); Row 2: status badges.
+      el('div', { style: 'display:flex;align-items:baseline;gap:8px;min-width:0' },
+        el('div', { class: 'pc-name', style: 'white-space:nowrap' }, p.name || (remote && remote.name) || '(unnamed)'),
+        el('div', { class: 'pc-sub', style: 'margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, subtitle),
+      ),
       statusBadges,
       editorBadge,
     ),
