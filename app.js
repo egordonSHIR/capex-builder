@@ -4722,10 +4722,11 @@ function renderDriveGate() {
   wrap.appendChild(el('h2', { style: 'margin:0 0 8px;font-size:19px;color:var(--primary)' }, 'Connect Google Drive'));
   wrap.appendChild(el('p', { style: 'margin:0 0 20px;font-size:14px;color:#475569;line-height:1.5' },
     'Capex Builder syncs every property through the SHIR Google Drive. Connect your company Google account to view and edit properties.'));
-  // Returning user: silent reconnect is probably in flight — show a spinner state.
+  // Returning user with a silent reconnect still in flight: show a spinner line —
+  // but ALWAYS render the manual Connect button below it, so a hung/blocked silent
+  // refresh (GIS prompt:'none' can never call back) never traps the user.
   if (!_driveSilentDone && localStorage.getItem(DRIVE_EVER_CONNECTED_KEY)) {
-    wrap.appendChild(el('div', { style: 'font-size:13px;color:#64748b' }, '🔄 Reconnecting to Google Drive…'));
-    return wrap;
+    wrap.appendChild(el('div', { style: 'font-size:13px;color:#64748b;margin-bottom:14px' }, '🔄 Reconnecting to Google Drive…'));
   }
   const btn = el('button', {
     class: 'home-new-btn', style: 'width:auto;padding:12px 24px',
@@ -4733,9 +4734,9 @@ function renderDriveGate() {
       btn.disabled = true; btn.textContent = 'Connecting…';
       try { await driveConnect(); } catch (e) {}
       _driveSilentDone = true;
-      if (getDriveToken()) renderHome(); else { btn.disabled = false; btn.textContent = '☁ Connect Google Drive'; }
+      if (getDriveToken()) renderHome(); else { btn.disabled = false; btn.textContent = '☁ Connect to Google Drive'; }
     }
-  }, '☁ Connect Google Drive');
+  }, '☁ Connect to Google Drive');
   wrap.appendChild(btn);
   return wrap;
 }
@@ -6225,8 +6226,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // Either outcome flips _driveSilentDone + re-renders home so the connect gate
   // (renderDriveGate) shows only after silent auth has actually failed.
   if (GOOGLE_CLIENT_ID && !getDriveToken()) {
+    // Safety net: GIS prompt:'none' can hang without ever calling back (no active
+    // Google session / blocked 3p cookies). Flip the flag after 4s so the gate
+    // stops saying "Reconnecting…" and surfaces the manual Connect button.
+    const _silentTimer = setTimeout(() => {
+      if (_driveSilentDone) return;
+      _driveSilentDone = true;
+      if (CURRENT_VIEW === 'home') renderHome();
+    }, 4000);
     driveRequestToken({ silent: true })
       .then(async () => {
+        clearTimeout(_silentTimer);
         _driveSilentDone = true;
         updateDriveStatus();
         try { await fetchCurrentUser(); } catch {}
@@ -6234,7 +6244,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (CURRENT_VIEW === 'home') { renderHome(); refreshHomeIndex(); }
         else if (CURRENT_VIEW === 'property') startAutoSync();
       })
-      .catch(() => { _driveSilentDone = true; if (CURRENT_VIEW === 'home') renderHome(); });
+      .catch(() => { clearTimeout(_silentTimer); _driveSilentDone = true; if (CURRENT_VIEW === 'home') renderHome(); });
   } else if (getDriveToken()) {
     // Token already valid — fetch user + refresh / sync without re-prompting.
     fetchCurrentUser().catch(() => {});
