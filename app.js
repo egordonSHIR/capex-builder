@@ -927,6 +927,24 @@ function renderSchemaForm(sections, bag, onUpdate) {
 
     let activeExpGroup = null;
     let activeExpExpr = null;
+    // Row grouping: consecutive fields sharing the same `row` tag render side-by-side
+    // in a flex .field-row (e.g. City / State / ZIP on one line).
+    let activeRowGroup = null;
+    let activeRowKey = null;
+    const placeInBody = (node, f) => {
+      if (f && f.row) {
+        if (activeRowKey !== f.row) {
+          activeRowGroup = el('div', { class: 'field-row' });
+          activeRowGroup.setAttribute('data-row', f.row);
+          body.appendChild(activeRowGroup);
+          activeRowKey = f.row;
+        }
+        activeRowGroup.appendChild(node);
+      } else {
+        activeRowGroup = null; activeRowKey = null;
+        body.appendChild(node);
+      }
+    };
 
     sec.fields.forEach(f => {
       let value;
@@ -1014,16 +1032,18 @@ function renderSchemaForm(sections, bag, onUpdate) {
             activeExpExpr = f.show_if;
           }
           activeExpGroup.appendChild(fieldNode);
+          activeRowGroup = null; activeRowKey = null;
         } else {
           // Single conditional field: render inline; refreshSection toggles its display.
           activeExpGroup = null;
           activeExpExpr = null;
+          activeRowGroup = null; activeRowKey = null;
           body.appendChild(fieldNode);
         }
       } else {
         activeExpGroup = null;
         activeExpExpr = null;
-        body.appendChild(fieldNode);
+        placeInBody(fieldNode, f);
       }
     });
 

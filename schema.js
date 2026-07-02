@@ -20,7 +20,8 @@ window.SCHEMA = {
       {
         "key": "city",
         "label": "City",
-        "type": "text"
+        "type": "text",
+        "row": "id_loc"
       },
       {
         "key": "state",
@@ -78,13 +79,15 @@ window.SCHEMA = {
           "WI",
           "WY"
         ],
-        "required": true
+        "required": true,
+        "row": "id_loc"
       },
       {
         "key": "zip",
         "label": "ZIP",
         "type": "text",
-        "pattern": "[0-9]{5}"
+        "pattern": "[0-9]{5}",
+        "row": "id_loc"
       },
       {
         "key": "market_msa",
@@ -462,14 +465,16 @@ window.SCHEMA = {
           "Yuma, AZ",
           "Other"
         ],
-        "hint": "Metro market. Auto-filled from the proforma (Dash!E8) or guessed from the address; you can override. Pick \"Other\" for a market not listed.",
-        "required": true
+        "hint": "Auto-filled from proforma import or guessed from the address; you can override manually. Pick \"Other\" for a market not listed.",
+        "required": true,
+        "row": "id_mkt"
       },
       {
         "key": "maps_link",
         "type": "maps_link",
         "label": "View on Google Maps",
-        "addr_expr": "mailing_address ? [mailing_address, city, state, zip].filter(Boolean).join(', ') : ''"
+        "addr_expr": "mailing_address ? [mailing_address, city, state, zip].filter(Boolean).join(', ') : ''",
+        "row": "id_mkt"
       },
       {
         "key": "property_type",
@@ -479,7 +484,8 @@ window.SCHEMA = {
           "MFVA",
           "EXSTAY"
         ],
-        "required": true
+        "required": true,
+        "row": "id_type"
       },
       {
         "key": "year_built",
@@ -488,7 +494,8 @@ window.SCHEMA = {
         "min": 1900,
         "max": 2026,
         "nocomma": true,
-        "required": true
+        "required": true,
+        "row": "id_type"
       }
     ]
   },
@@ -497,10 +504,11 @@ window.SCHEMA = {
     "fields": [
       {
         "key": "mf_units",
-        "label": "Number of MF Units",
+        "label": "# of MF Units",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "row": "un_units"
       },
       {
         "key": "current_occupancy",
@@ -510,7 +518,8 @@ window.SCHEMA = {
         "max": 100,
         "step": 1,
         "pctOf1": true,
-        "hint": "Whole number (75 = 75%)"
+        "hint": "Whole number (75 = 75%)",
+        "row": "un_units"
       }
     ]
   },
@@ -522,27 +531,33 @@ window.SCHEMA = {
         "label": "Multifamily RSF",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "row": "ar_rsf"
       },
       {
         "key": "commercial_rsf",
         "label": "Commercial RSF",
         "type": "number",
-        "min": 0
+        "min": 0,
+        "hint": "Enter 0 if none",
+        "row": "ar_rsf"
       },
       {
         "key": "common_sf",
-        "label": "Common (non-rentable) Sqft",
+        "label": "Common Sqft",
         "type": "number",
         "min": 0,
-        "decimals": 0
+        "decimals": 0,
+        "hint": "Enter 0 if none",
+        "row": "ar_rsf"
       },
       {
         "key": "overall_rsf",
-        "label": "Overall RSF",
+        "label": "Overall Sqft",
         "type": "number",
         "computed": "mf_rsf + commercial_rsf + common_sf",
-        "decimals": 0
+        "decimals": 0,
+        "row": "ar_rsf"
       },
       {
         "key": "land_sf",
@@ -554,7 +569,8 @@ window.SCHEMA = {
           "target": "land_acres",
           "expr": "land_sf / 43560"
         },
-        "required": true
+        "required": true,
+        "row": "ar_land"
       },
       {
         "key": "land_acres",
@@ -565,7 +581,8 @@ window.SCHEMA = {
         "partner": {
           "target": "land_sf",
           "expr": "land_acres * 43560"
-        }
+        },
+        "row": "ar_land"
       }
     ]
   },
@@ -577,7 +594,17 @@ window.SCHEMA = {
         "label": "# Buildings",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "hint": "Min 1",
+        "row": "bs_bldg"
+      },
+      {
+        "key": "vertical_floors",
+        "label": "# Vertical Floors (Per Bldg)",
+        "type": "number",
+        "min": 0,
+        "hint": "Min 1",
+        "row": "bs_bldg"
       },
       {
         "key": "roofs_connected",
@@ -590,10 +617,37 @@ window.SCHEMA = {
         "show_if": "num_buildings > 1"
       },
       {
-        "key": "vertical_floors",
-        "label": "# Vertical Floors (Per Bldg)",
+        "key": "elevators_yn",
+        "label": "Elevators?",
+        "type": "select",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "required": true
+      },
+      {
+        "key": "elevator_year_install",
+        "label": "Year Installed",
         "type": "number",
-        "min": 0
+        "min": 1900,
+        "max": 2100,
+        "nocomma": true,
+        "show_if": "elevators_yn === 'Yes'"
+      },
+      {
+        "key": "elevator_passenger",
+        "label": "Passenger #",
+        "type": "number",
+        "min": 0,
+        "show_if": "elevators_yn === 'Yes'"
+      },
+      {
+        "key": "elevator_freight",
+        "label": "Freight #",
+        "type": "number",
+        "min": 0,
+        "show_if": "elevators_yn === 'Yes'"
       },
       {
         "type": "divider",
@@ -682,39 +736,6 @@ window.SCHEMA = {
         "expr": "`Pervious cover: ${land_sf > 0 ? ((landscaping_sf||0)/land_sf*100).toFixed(1) : 0}% of site`"
       },
       {
-        "key": "elevators_yn",
-        "label": "Elevators?",
-        "type": "select",
-        "options": [
-          "Yes",
-          "No"
-        ],
-        "required": true
-      },
-      {
-        "key": "elevator_year_install",
-        "label": "Year Installed",
-        "type": "number",
-        "min": 1900,
-        "max": 2100,
-        "nocomma": true,
-        "show_if": "elevators_yn === 'Yes'"
-      },
-      {
-        "key": "elevator_passenger",
-        "label": "Passenger #",
-        "type": "number",
-        "min": 0,
-        "show_if": "elevators_yn === 'Yes'"
-      },
-      {
-        "key": "elevator_freight",
-        "label": "Freight #",
-        "type": "number",
-        "min": 0,
-        "show_if": "elevators_yn === 'Yes'"
-      },
-      {
         "type": "divider",
         "key": "bs_div_5"
       },
@@ -796,7 +817,8 @@ window.SCHEMA = {
         "key": "garage",
         "label": "# Garage",
         "type": "number",
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       }
     ]
   },
@@ -1161,7 +1183,8 @@ window.SCHEMA = {
         "label": "# Indoor Pool(s)",
         "type": "number",
         "min": 0,
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "pool_heater",
@@ -1177,7 +1200,8 @@ window.SCHEMA = {
         "key": "sport_court_indoor",
         "label": "# Sport Indoor Court(s)",
         "type": "number",
-        "required": true
+        "required": true,
+        "hint": "Enter 0 if none"
       },
       {
         "key": "leasing_office_2",

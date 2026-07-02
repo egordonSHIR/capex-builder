@@ -120,6 +120,24 @@ main {
   border-bottom: 1px solid #f1f5f9;
 }
 .field:last-child { border-bottom: none; }
+/* Row grouping: fields tagged with the same `row` render side-by-side. The row
+   carries the section-edge padding + hairline; its children drop their own. */
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.field-row:last-child { border-bottom: none; }
+.field-row > .field {
+  flex: 1 1 130px;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-bottom: none;
+}
 /* In-section sub-group divider (Basics > Building & Site). A stronger line than
    the per-field hairline border, used to split a section into visual groups. */
 .field-divider {
