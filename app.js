@@ -1046,26 +1046,38 @@ function renderSchemaForm(sections, bag, onUpdate) {
 // sections, CAPEX group banners, sub-sections, Unit Mix, and the Survey
 // Breakdown block. Unit-mix item rows, survey-building rows, and conditional
 // .expansion-group toggles have their own UX and are intentionally left alone.
-function renderExpandCollapseBar() {
-  const btnStyle = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--primary);white-space:nowrap';
+// Compact button style shared by the Expand/Collapse bar and the Basics-page
+// Import/Export buttons so they line up at the same size on one row.
+const BAR_BTN_STYLE = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--primary);white-space:nowrap';
+// leftItems: optional array of button elements rendered on the left of the bar
+// (e.g. Basics Import/Export), with Expand/Collapse pushed to the right.
+function renderExpandCollapseBar(leftItems) {
+  const hasLeft = Array.isArray(leftItems) && leftItems.length;
   const bar = el('div', {
     class: 'expand-collapse-bar',
-    style: 'display:flex;justify-content:flex-end;gap:6px;margin:0 0 10px'
+    style: `display:flex;justify-content:${hasLeft ? 'space-between' : 'flex-end'};align-items:center;gap:6px;margin:0 0 10px;flex-wrap:wrap`
   });
-  bar.appendChild(el('button', {
-    type: 'button', style: btnStyle, title: 'Expand all sections on this tab',
+  if (hasLeft) {
+    const left = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' });
+    leftItems.forEach(b => left.appendChild(b));
+    bar.appendChild(left);
+  }
+  const right = el('div', { style: 'display:flex;gap:6px' });
+  right.appendChild(el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section.collapsed')
         .forEach(s => s.classList.remove('collapsed'));
     },
   }, '▼ Expand all'));
-  bar.appendChild(el('button', {
-    type: 'button', style: btnStyle, title: 'Collapse all sections on this tab',
+  right.appendChild(el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Collapse all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section')
         .forEach(s => s.classList.add('collapsed'));
     },
   }, '▶ Collapse all'));
+  bar.appendChild(right);
   return bar;
 }
 
@@ -1148,17 +1160,16 @@ async function exportEmptyBasicsFields() {
 // ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
 function renderPhase1() {
   const root = el('div');
-  root.appendChild(renderExpandCollapseBar());
-  root.appendChild(el('button', {
-    type: 'button', class: 'um-btn secondary',
-    style: 'width:100%;margin-bottom:12px;font-size:14px;padding:10px 14px;text-align:center;font-weight:600',
+  // Import + Export sit inline (left) with Expand/Collapse all (right) in one bar.
+  const importBtn = el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Import Basics + Unit Mix from the deal proforma in GDrive',
     onClick: () => pullBasicsAndUnitsFromDrive(),
-  }, '☁ Import Basics + Units from GDrive'));
-  root.appendChild(el('button', {
-    type: 'button', class: 'um-btn secondary',
-    style: 'width:100%;margin-bottom:12px;font-size:14px;padding:10px 14px;text-align:center;font-weight:600',
+  }, '☁ Import Proforma Basics & Units');
+  const exportBtn = el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Download the empty/missing Basics fields as an Excel file',
     onClick: () => exportEmptyBasicsFields(),
-  }, '📋 Export Empty / Missing Fields'));
+  }, '📋 Export Missing Fields');
+  root.appendChild(renderExpandCollapseBar([importBtn, exportBtn]));
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units" schema section (split out from the
