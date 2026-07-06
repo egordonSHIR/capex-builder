@@ -4377,15 +4377,17 @@ function renderPhase4() {
   );
   root.appendChild(adj);
 
-  // Export actions: download-only, and place into the deal's 25. Capex Drive folder.
-  root.appendChild(el('button', {
-    style: 'width:100%;padding:18px;background:#1d2d47;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
-    onClick: exportXlsx
-  }, '⬇  Export to Excel'));
-  root.appendChild(el('button', {
-    style: 'width:100%;padding:16px;background:#0f766e;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;margin-top:10px;cursor:pointer',
-    onClick: placeInCapexFolder
-  }, '☁  Place in Capex Folder'));
+  // Export actions (side by side): download-only, and place into the deal's 25. Capex Drive folder.
+  root.appendChild(el('div', { style: 'display:flex;gap:10px;margin-top:8px;flex-wrap:wrap' },
+    el('button', {
+      style: 'flex:1 1 0;min-width:180px;padding:18px;background:#1d2d47;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer',
+      onClick: exportXlsx
+    }, '⬇  Export to Excel'),
+    el('button', {
+      style: 'flex:1 1 0;min-width:180px;padding:18px;background:#0f766e;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer',
+      onClick: placeInCapexFolder
+    }, '☁  Place in Capex Folder')
+  ));
 
   return root;
 }
