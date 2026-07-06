@@ -3520,12 +3520,16 @@ function renderPhase3() {
   // and phase-tabs (9).
   const sticky = el('div', { style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
   const summary = el('div', { class: 'summary-totals', style: 'margin:0' },
-    el('div', { class: 'summary-row' },
-      el('span', { class: 'label' }, 'Items priced'),
-      el('span', { class: 'value' }, String(totals.itemCount))),
-    el('div', { class: 'summary-row grand' },
-      el('span', { class: 'label' }, 'Running Subtotal'),
-      el('span', { class: 'value' }, fmtMoney(totals.subtotal)))
+    el('div', { class: 'summary-row summary-row-inline grand' },
+      el('div', { class: 'summary-stat' },
+        el('span', { class: 'label' }, 'Items priced'),
+        el('span', { class: 'value', 'data-stat': 'count' }, String(totals.itemCount))),
+      el('div', { class: 'summary-stat' },
+        el('span', { class: 'label' }, 'Running Subtotal'),
+        el('span', { class: 'value', 'data-stat': 'subtotal' }, fmtMoney(totals.subtotal))),
+      el('div', { class: 'summary-stat' },
+        el('span', { class: 'label' }, '$/Unit'),
+        el('span', { class: 'value', 'data-stat': 'perunit' }, fmtMoney(totals.subtotalPerUnit))))
   );
   sticky.appendChild(summary);
   // Column header row — same grid template as data rows so cells align.
@@ -4023,9 +4027,12 @@ function renderDetailTotals(itemWrap, gi, si, ii) {
 function updateDetailSummary(node) {
   if (!node) return;
   const totals = computeTotals();
-  const vals = node.querySelectorAll('.value');
-  if (vals[0]) vals[0].textContent = String(totals.itemCount);
-  if (vals[1]) vals[1].textContent = fmtMoney(totals.subtotal);
+  const countEl = node.querySelector('[data-stat="count"]');
+  const subtotalEl = node.querySelector('[data-stat="subtotal"]');
+  const perUnitEl = node.querySelector('[data-stat="perunit"]');
+  if (countEl) countEl.textContent = String(totals.itemCount);
+  if (subtotalEl) subtotalEl.textContent = fmtMoney(totals.subtotal);
+  if (perUnitEl) perUnitEl.textContent = fmtMoney(totals.subtotalPerUnit);
 }
 
 // ---------- CAPEX Groups manager (bottom of Details page) ----------
@@ -4249,7 +4256,8 @@ function computeTotals() {
   const grand = subtotal + cont + fee;
   const units = Number(STATE.phase1.mf_units) || 0;
   const perUnit = units > 0 ? grand / units : 0;
-  return { subtotal, cont, fee, grand, perUnit, itemCount, byGroup };
+  const subtotalPerUnit = units > 0 ? subtotal / units : 0;
+  return { subtotal, cont, fee, grand, perUnit, subtotalPerUnit, itemCount, byGroup };
 }
 
 // Items checked on the Budget tab that, if present, flag a Revenue Driver or

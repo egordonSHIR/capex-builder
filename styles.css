@@ -350,6 +350,14 @@ main {
 .summary-row.grand { font-size: 18px; padding-top: 12px; border-top: 2px solid var(--primary); margin-top: 8px; }
 .summary-row.grand .value { color: var(--primary); }
 
+.summary-row-inline { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+.summary-row-inline .summary-stat { display: flex; align-items: baseline; gap: 8px; }
+.summary-row-inline .label { white-space: nowrap; }
+.summary-row-inline .value { white-space: nowrap; }
+@media (max-width: 520px) {
+  .summary-row-inline { flex-wrap: wrap; gap: 8px 16px; }
+}
+
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .hidden { display: none !important; }
