@@ -3533,7 +3533,7 @@ function renderPhase3() {
       el('span', { class: 'label', style: 'color:#cbd5e1' }, '$/Unit'),
       el('span', { class: 'value', 'data-stat': 'perunit', style: 'color:#fff' }, fmtMoney(totals.subtotalPerUnit))));
   bar.appendChild(summary);
-  const actions = el('div', { style: 'display:flex;gap:6px' });
+  const actions = el('div', { style: 'display:flex;gap:6px;padding-left:12px;border-left:1px solid rgba(255,255,255,0.35)' });
   actions.appendChild(el('button', {
     type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
     onClick: () => {

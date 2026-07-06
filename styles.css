@@ -352,6 +352,7 @@ main {
 
 .summary-row-inline { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
 .summary-row-inline .summary-stat { display: flex; align-items: baseline; gap: 8px; }
+.summary-row-inline .summary-stat:not(:last-child) { padding-right: 16px; border-right: 1px solid rgba(255,255,255,0.35); }
 .summary-row-inline .label { white-space: nowrap; }
 .summary-row-inline .value { white-space: nowrap; }
 @media (max-width: 520px) {
