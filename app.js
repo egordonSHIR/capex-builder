@@ -3520,20 +3520,20 @@ function renderPhase3() {
   // and phase-tabs (9).
   const sticky = el('div', { style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
   const bar = el('div', {
-    style: 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:var(--primary);color:#fff;padding:10px 14px'
+    style: 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:nowrap;overflow-x:auto;background:var(--primary);color:#fff;padding:10px 14px'
   });
-  const summary = el('div', { class: 'summary-totals summary-row-inline', style: 'background:transparent;border:none;padding:0;margin:0;border-radius:0' },
+  const summary = el('div', { class: 'summary-totals summary-row-inline', style: 'background:transparent;border:none;padding:0;margin:0;border-radius:0;flex-wrap:nowrap' },
     el('div', { class: 'summary-stat' },
-      el('span', { class: 'label', style: 'color:#cbd5e1' }, 'Items priced'),
+      el('span', { class: 'label', style: 'color:#cbd5e1' }, '# Items'),
       el('span', { class: 'value', 'data-stat': 'count', style: 'color:#fff' }, String(totals.itemCount))),
     el('div', { class: 'summary-stat' },
-      el('span', { class: 'label', style: 'color:#cbd5e1' }, 'Running Subtotal'),
+      el('span', { class: 'label', style: 'color:#cbd5e1' }, 'Subtotal'),
       el('span', { class: 'value', 'data-stat': 'subtotal', style: 'color:#fff' }, fmtMoney(totals.subtotal))),
     el('div', { class: 'summary-stat' },
       el('span', { class: 'label', style: 'color:#cbd5e1' }, '$/Unit'),
       el('span', { class: 'value', 'data-stat': 'perunit', style: 'color:#fff' }, fmtMoney(totals.subtotalPerUnit))));
   bar.appendChild(summary);
-  const actions = el('div', { style: 'display:flex;gap:6px;padding-left:12px;border-left:1px solid rgba(255,255,255,0.35)' });
+  const actions = el('div', { style: 'display:flex;gap:6px;flex-shrink:0;padding-left:12px;border-left:1px solid rgba(255,255,255,0.35)' });
   actions.appendChild(el('button', {
     type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
     onClick: () => {
