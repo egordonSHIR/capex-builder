@@ -4357,7 +4357,7 @@ function renderPhase4() {
     }
   }
 
-  root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', false));
+  root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', warnings.length === 0));
 
   // Revenue Drivers — green; Opex Reducers — red. Populated from REVENUE_DRIVER_RULES /
   // OPEX_REDUCER_RULES against whatever is checked on the Budget tab. Collapsed by
