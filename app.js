@@ -4696,9 +4696,9 @@ async function placeInCapexFolder() {
     toast('Uploading Excel to 25. Capex…');
     const { blob, filename } = await buildCapexBlob();
     const capexFolder = await driveEnsureSubfolder(STATE.drive.folderId, '25. Capex');
-    const res = await driveUploadBinary(capexFolder, filename, blob, XLSX_MIME);
+    await driveUploadBinary(capexFolder, filename, blob, XLSX_MIME);
     toast('Excel placed in 25. Capex', 'success');
-    if (res && res.webViewLink) window.open(res.webViewLink, '_blank');
+    // (intentionally does NOT open the file in a new tab)
   } catch (e) {
     toast('Upload failed: ' + e.message, 'error');
   }
