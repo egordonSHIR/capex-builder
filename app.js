@@ -595,6 +595,12 @@ function fmtMoney(n) {
   if (!isFinite(n)) return '$0';
   return '$' + Math.round(n).toLocaleString();
 }
+// Gray background while an input/textarea is empty; normal white once it has a value.
+function grayWhenEmpty(inputEl) {
+  if (!inputEl) return;
+  const empty = !String(inputEl.value || '').trim();
+  inputEl.style.background = empty ? '#f3f4f6' : '#ffffff';
+}
 // Comma-format a Budget-tab qty/cost <input>'s displayed value. `v` is a plain
 // number, or '' to display blank (callers already decide falsy-vs-blank before
 // calling this) — used wherever these inputs are set programmatically outside
@@ -4308,15 +4314,21 @@ function collectBudgetFlags(rules) {
 // Collapsible section with a colored header/background — used for Sanity Check,
 // Revenue Drivers, and Opex Reducers below.
 function renderFlagSection(title, color, bg, lines, emptyText, startCollapsed) {
-  const bgStyle = bg ? `background:${bg}` : '';
+  // A flag box stays NEUTRAL GRAY until it actually has data — it only adopts its
+  // signal color (green/red/navy) once there's something to show.
+  const GRAY_TEXT = '#6b7280', GRAY_BG = '#f3f4f6';
+  const hasData = lines.length > 0;
+  const effColor = hasData ? color : GRAY_TEXT;
+  const effBg = hasData ? bg : GRAY_BG;
+  const bgStyle = effBg ? `background:${effBg}` : '';
   const wrap = el('section', { class: 'section' + (startCollapsed ? ' collapsed' : ''), style: bgStyle },
-    el('header', { class: 'section-header', style: `color:${color};${bgStyle}`, onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+    el('header', { class: 'section-header', style: `color:${effColor};${bgStyle}`, onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
       el('span', {}, title), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body', style: bgStyle })
   );
   const body = wrap.querySelector('.section-body');
-  if (lines.length) {
-    lines.forEach(w => body.appendChild(el('div', { class: 'field', style: `color:${color}` }, w)));
+  if (hasData) {
+    lines.forEach(w => body.appendChild(el('div', { class: 'field', style: `color:${effColor}` }, w)));
   } else {
     body.appendChild(el('div', { class: 'field', style: 'color:#64748b;font-style:italic' }, emptyText));
   }
@@ -4367,27 +4379,46 @@ function renderPhase4() {
   // Notes — free-form. (Contingency & Construction Mgmt Fee were removed 2026-07-06:
   // they now live in the MFVA proforma CAPEX tab, applied to the Multifamily Subtotal,
   // so the Capex Builder no longer models them.)
+  // Notes box stays gray until it has text (matches the flag boxes above).
+  const notesField = renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea', inline: false },
+    STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); grayWhenEmpty(notesBox); });
+  const notesBox = notesField.querySelector('textarea, input');
+  grayWhenEmpty(notesBox);
+  if (notesBox) notesBox.addEventListener('input', () => grayWhenEmpty(notesBox));
   const adj = el('section', { class: 'section collapsed' },
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
       el('span', {}, 'Overall Notes'), el('span', { class: 'chev' }, '▼')),
-    el('div', { class: 'section-body' },
-      renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea', inline: false },
-        STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); }),
-    )
+    el('div', { class: 'section-body' }, notesField)
   );
   root.appendChild(adj);
+
+  // Export readiness — the buttons stay gray/disabled until the deal has the
+  // minimum data for a meaningful export: a property name AND at least one
+  // selected Budget item. (Without either, the export has no real content.)
+  const missing = [];
+  if (!STATE.phase1.prop_name) missing.push('a property name (Basics)');
+  if (countChecked() === 0) missing.push('at least one selected Budget item (Questionnaire)');
+  const exportReady = missing.length === 0;
+  const readyTip = exportReady ? '' : 'Add ' + missing.join(' and ') + ' to enable export.';
+  const btnStyle = (activeBg) => exportReady
+    ? `flex:1 1 0;min-width:180px;padding:18px;background:${activeBg};color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer`
+    : `flex:1 1 0;min-width:180px;padding:18px;background:#cbd5e1;color:#f8fafc;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:not-allowed`;
 
   // Export actions (side by side): download-only, and place into the deal's 25. Capex Drive folder.
   root.appendChild(el('div', { style: 'display:flex;gap:10px;margin-top:8px;flex-wrap:wrap' },
     el('button', {
-      style: 'flex:1 1 0;min-width:180px;padding:18px;background:#1d2d47;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer',
+      style: btnStyle('#1d2d47'), disabled: !exportReady, title: readyTip,
       onClick: exportXlsx
     }, '⬇  Export to Excel'),
     el('button', {
-      style: 'flex:1 1 0;min-width:180px;padding:18px;background:#0f766e;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer',
+      style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip,
       onClick: placeInCapexFolder
     }, '☁  Place in Capex Folder')
   ));
+  if (!exportReady) {
+    root.appendChild(el('div', { style: 'margin-top:6px;color:#64748b;font-size:12px;font-style:italic' },
+      'Export needs ' + missing.join(' and ') + '.'));
+  }
 
   return root;
 }
