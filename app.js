@@ -4377,11 +4377,15 @@ function renderPhase4() {
   );
   root.appendChild(adj);
 
-  // Big Export button
+  // Export actions: download-only, and place into the deal's 25. Capex Drive folder.
   root.appendChild(el('button', {
     style: 'width:100%;padding:18px;background:#1d2d47;color:white;border:none;border-radius:8px;font-size:17px;font-weight:600;margin-top:8px;cursor:pointer',
     onClick: exportXlsx
   }, '⬇  Export to Excel'));
+  root.appendChild(el('button', {
+    style: 'width:100%;padding:16px;background:#0f766e;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;margin-top:10px;cursor:pointer',
+    onClick: placeInCapexFolder
+  }, '☁  Place in Capex Folder'));
 
   return root;
 }
@@ -4657,36 +4661,42 @@ async function buildCapexWorkbook() {
   return workbook;
 }
 
-async function exportXlsx() {
-  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+// Build the workbook once and return a downloadable blob + filename.
+async function buildCapexBlob() {
   const propName = STATE.phase1.prop_name || '';
   const workbook = await buildCapexWorkbook();
   const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const buf = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  return { blob: new Blob([buf], { type: XLSX_MIME }), filename };
+}
 
-  if (!STATE || !STATE.drive.folderId) {
-    // No linked folder — fall back to local download so the user is not stuck.
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-    toast('Downloaded (no Drive folder linked)', 'success');
-    return;
-  }
+// "Export to Excel" — download only (never touches Drive).
+async function exportXlsx() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  const { blob, filename } = await buildCapexBlob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  toast('Excel downloaded', 'success');
+}
 
+// "Place in Capex Folder" — upload the same workbook straight into the deal's
+// "25. Capex" subfolder on Google Drive.
+async function placeInCapexFolder() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  if (typeof getDriveToken === 'function' && !getDriveToken()) { toast('Connect Google Drive first', 'error'); return; }
+  if (!STATE || !STATE.drive || !STATE.drive.folderId) { toast('Link a deal Drive folder first (☰ menu)', 'error'); return; }
   try {
-    toast('Uploading Excel to Drive…');
-    const targetFolder = await resolveCapexFolder();
-    const res = await driveUploadBinary(
-      targetFolder,
-      filename,
-      blob,
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-    toast('Excel uploaded to 25. Capex/Capex Builder Budget', 'success');
-    if (res.webViewLink) window.open(res.webViewLink, '_blank');
+    toast('Uploading Excel to 25. Capex…');
+    const { blob, filename } = await buildCapexBlob();
+    const capexFolder = await driveEnsureSubfolder(STATE.drive.folderId, '25. Capex');
+    const res = await driveUploadBinary(capexFolder, filename, blob, XLSX_MIME);
+    toast('Excel placed in 25. Capex', 'success');
+    if (res && res.webViewLink) window.open(res.webViewLink, '_blank');
   } catch (e) {
     toast('Upload failed: ' + e.message, 'error');
   }
