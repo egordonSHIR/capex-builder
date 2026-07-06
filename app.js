@@ -3511,27 +3511,45 @@ function refreshInteriorStatusHeader() {
 
 function renderPhase3() {
   const root = el('div');
-  root.appendChild(renderExpandCollapseBar());
   const totals = computeTotals();
 
-  // Sticky top panel: summary (items priced + running subtotal) + column header.
+  // Sticky top panel: one SHIR-navy box holding the summary stats (Items priced /
+  // Running Subtotal / $/Unit) inline with Expand/Collapse all, + column header.
   // Pinned just below the global app-header (top 60px) + phase-tabs (~41px) so the
   // main nav tabs stay visible at all times. z-index 8 stays under the app-header (10)
   // and phase-tabs (9).
   const sticky = el('div', { style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
-  const summary = el('div', { class: 'summary-totals', style: 'margin:0' },
-    el('div', { class: 'summary-row summary-row-inline grand' },
-      el('div', { class: 'summary-stat' },
-        el('span', { class: 'label' }, 'Items priced'),
-        el('span', { class: 'value', 'data-stat': 'count' }, String(totals.itemCount))),
-      el('div', { class: 'summary-stat' },
-        el('span', { class: 'label' }, 'Running Subtotal'),
-        el('span', { class: 'value', 'data-stat': 'subtotal' }, fmtMoney(totals.subtotal))),
-      el('div', { class: 'summary-stat' },
-        el('span', { class: 'label' }, '$/Unit'),
-        el('span', { class: 'value', 'data-stat': 'perunit' }, fmtMoney(totals.subtotalPerUnit))))
-  );
-  sticky.appendChild(summary);
+  const bar = el('div', {
+    style: 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:var(--primary);color:#fff;padding:10px 14px'
+  });
+  const summary = el('div', { class: 'summary-totals summary-row-inline', style: 'background:transparent;border:none;padding:0;margin:0;border-radius:0' },
+    el('div', { class: 'summary-stat' },
+      el('span', { class: 'label', style: 'color:#cbd5e1' }, 'Items priced'),
+      el('span', { class: 'value', 'data-stat': 'count', style: 'color:#fff' }, String(totals.itemCount))),
+    el('div', { class: 'summary-stat' },
+      el('span', { class: 'label', style: 'color:#cbd5e1' }, 'Running Subtotal'),
+      el('span', { class: 'value', 'data-stat': 'subtotal', style: 'color:#fff' }, fmtMoney(totals.subtotal))),
+    el('div', { class: 'summary-stat' },
+      el('span', { class: 'label', style: 'color:#cbd5e1' }, '$/Unit'),
+      el('span', { class: 'value', 'data-stat': 'perunit', style: 'color:#fff' }, fmtMoney(totals.subtotalPerUnit))));
+  bar.appendChild(summary);
+  const actions = el('div', { style: 'display:flex;gap:6px' });
+  actions.appendChild(el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
+    onClick: () => {
+      $('#phase-content').querySelectorAll('.section.collapsed')
+        .forEach(s => s.classList.remove('collapsed'));
+    },
+  }, '▼ Expand all'));
+  actions.appendChild(el('button', {
+    type: 'button', style: BAR_BTN_STYLE, title: 'Collapse all sections on this tab',
+    onClick: () => {
+      $('#phase-content').querySelectorAll('.section')
+        .forEach(s => s.classList.add('collapsed'));
+    },
+  }, '▶ Collapse all'));
+  bar.appendChild(actions);
+  sticky.appendChild(bar);
   // Column header row — same grid template as data rows so cells align.
   const colHdr = el('div', {
     style: DETAIL_GRID_BASE + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-top:1px solid #e5e7eb'
