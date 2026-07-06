@@ -4269,13 +4269,12 @@ function computeTotals() {
       });
     });
   });
-  const cont = subtotal * (Number(STATE.phase4.contingency_pct) || 0);
-  const fee = subtotal * (Number(STATE.phase4.mgmt_fee_pct) || 0);
-  const grand = subtotal + cont + fee;
+  // Contingency & construction-mgmt fee are NOT computed here anymore — they live
+  // downstream in the MFVA proforma (CAPEX tab), applied to the Multifamily
+  // Subtotal there. The Capex Builder is now the source of the line-item budget only.
   const units = Number(STATE.phase1.mf_units) || 0;
-  const perUnit = units > 0 ? grand / units : 0;
   const subtotalPerUnit = units > 0 ? subtotal / units : 0;
-  return { subtotal, cont, fee, grand, perUnit, subtotalPerUnit, itemCount, byGroup };
+  return { subtotal, subtotalPerUnit, itemCount, byGroup };
 }
 
 // Items checked on the Budget tab that, if present, flag a Revenue Driver or
@@ -4365,16 +4364,13 @@ function renderPhase4() {
   root.appendChild(renderFlagSection('Red Flags / Considerations', '#6b7280', '#f3f4f6',
     redFlagLines, 'No red flags or considerations yet.', redFlagLines.length === 0));
 
-  // Adjustments — these flow into the exported Excel as the contingency/mgmt-fee multipliers.
-  // Stored in STATE as a decimal (0.10) but shown/typed as whole percentage points (10).
+  // Notes — free-form. (Contingency & Construction Mgmt Fee were removed 2026-07-06:
+  // they now live in the MFVA proforma CAPEX tab, applied to the Multifamily Subtotal,
+  // so the Capex Builder no longer models them.)
   const adj = el('section', { class: 'section collapsed' },
     el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-      el('span', {}, 'Adjustments (used in Excel export)'), el('span', { class: 'chev' }, '▼')),
+      el('span', {}, 'Overall Notes'), el('span', { class: 'chev' }, '▼')),
     el('div', { class: 'section-body' },
-      renderField({ key: 'contingency_pct', label: 'Contingency %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)', inline: false },
-        (Number(STATE.phase4.contingency_pct) || 0) * 100, (v) => { STATE.phase4.contingency_pct = (Number(v) || 0) / 100; saveState(); }),
-      renderField({ key: 'mgmt_fee_pct', label: 'Construction Mgmt Fee %', type: 'number', step: 1, min: 0, max: 100, hint: 'Whole number (10 = 10%)', inline: false },
-        (Number(STATE.phase4.mgmt_fee_pct) || 0) * 100, (v) => { STATE.phase4.mgmt_fee_pct = (Number(v) || 0) / 100; saveState(); }),
       renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea', inline: false },
         STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); }),
     )
@@ -4391,147 +4387,222 @@ function renderPhase4() {
 }
 
 // ---------- Excel export ----------
-async function exportXlsx() {
-  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+// buildCapexWorkbook() mirrors the visual language of
+// Control Excels/Budget_Details_Control.xlsx — group-colored full-width
+// banners, light italic section banners, thin-bordered item rows, same
+// column emphasis (Item Name / Options / Qty Type / $/Qty / GL / Notes) —
+// but lists only this deal's CHECKED items with their real qty/rate/finish,
+// i.e. a priced snapshot of THIS property rather than the blank universal
+// line-item template. Split out from exportXlsx() so it can be built/tested
+// without touching Drive.
+async function buildCapexWorkbook() {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Capex Builder';
   workbook.created = new Date();
   const propName = STATE.phase1.prop_name || '';
   const units = Number(STATE.phase1.mf_units) || 0;
-  const contPct = Number(STATE.phase4.contingency_pct) || 0;
-  const feePct = Number(STATE.phase4.mgmt_fee_pct) || 0;
-  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9', BORDER_LIGHT = 'FFD1D5DB';
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9', BORDER_LIGHT = 'FFD1D5DB', WHITE = 'FFFFFFFF';
+  const argb = (hex) => 'FF' + hex.replace('#', '').toUpperCase();
+  const GRAY = 'FFE5E7EB'; // light gray for line items NOT worked on (unchecked) in the app
+  const NEEDS = 'FFFDE68A'; // amber: Options cell that still needs a finish picked
   const styleCurrency = (cell) => { cell.numFmt = '"$"#,##0'; };
-  const stylePct = (cell) => { cell.numFmt = '0%'; };
+  // pct_orig/part/reno are stored as whole percentage points (80 = 80%), not
+  // fractions — a literal "%" suffix (not Excel's auto-×100 '0%' format).
+  const stylePct = (cell) => { cell.numFmt = '0"%"'; };
 
   // ===== Main "Capex Budget" sheet =====
-  // Columns: A=Item, B=# Items, C=$/Item, D=Finish, E/F/G=%Orig/Part/Reno,
-  // H=Total, I=Notes, J=GL Account. Finish is display-only — sourced from
-  // STATE.phase3[key].finish when prefill lands; emits blank in the current
-  // template-only export.
+  // Columns: A Section | B Item Name | C Options(Finish) | D % Orig | E % Part |
+  // F % Reno | G # Qty | H Qty Type | I $/Qty | J Total | K GL Account | L Notes.
+  // Section + Item are separate columns (no section banner rows); the % columns
+  // sit just left of # Qty; only GROUPS get subtotals; each group's item rows are
+  // an Excel outline band so a group can be collapsed with the [-] gutter button.
   const ws = workbook.addWorksheet('Capex Budget', { views: [{ state: 'frozen', xSplit: 0, ySplit: 7 }] });
+  // Summary rows sit BELOW their detail band → collapse button lands on the
+  // group subtotal row (Excel default, but set explicitly for clarity).
+  ws.properties.outlineProperties = { summaryBelow: true, summaryRight: true };
+  const COL_TOTAL = 10; // J
   ws.columns = [
-    { width: 52 }, { width: 10 }, { width: 13 }, { width: 16 },
-    { width: 11 }, { width: 11 }, { width: 11 },
-    { width: 15 }, { width: 30 }, { width: 42 },
+    { width: 22 }, { width: 34 }, { width: 18 },
+    { width: 8 }, { width: 8 }, { width: 8 },
+    { width: 9 }, { width: 12 }, { width: 12 },
+    { width: 15 }, { width: 28 }, { width: 30 },
   ];
 
-  const titleRow = ws.addRow(['CAPEX BUDGET']);
-  titleRow.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+  const titleRow = ws.addRow(['CAPEX BUDGET' + (propName ? ' — ' + propName.toUpperCase() : '')]);
+  titleRow.font = { bold: true, size: 16, color: { argb: WHITE } };
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${titleRow.number}:J${titleRow.number}`);
+  ws.mergeCells(`A${titleRow.number}:L${titleRow.number}`);
 
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
+  const addrRow = ws.addRow(['Address:', [STATE.phase1.mailing_address, STATE.phase1.city, STATE.phase1.state, STATE.phase1.zip].filter(Boolean).join(', ')]);
+  addrRow.getCell(1).font = { bold: true };
   const unitsRow = ws.addRow(['# Units:', units]); unitsRow.getCell(1).font = { bold: true };
   const yrRow = ws.addRow(['Year Built:', STATE.phase1.year_built || '']); yrRow.getCell(1).font = { bold: true };
   ws.addRow([]);
 
-  const colHeaderRow = ws.addRow(['', '# Items', '$/Item', 'Finish', '% Original', '% Partial', '% Reno', 'Total', 'Notes', 'GL Account']);
-  colHeaderRow.font = { bold: true };
-  colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-  colHeaderRow.eachCell((c) => {
-    c.border = { bottom: { style: 'medium', color: { argb: NAVY } } };
-    c.alignment = { horizontal: 'center' };
+  // ----- Summary block (mirrors the proforma CAPEX tab so a standalone export
+  // shares its exact layout). In a standalone export the Construction Mgmt Fee /
+  // Contingency / Commercial Tenant Costs lines are $0 placeholders — those live
+  // in the proforma — so Total Capex Budget = Multifamily Subtotal here. All $
+  // values are backfilled after the detail is built. -----
+  const mkSummary = (label, fillArgb, fontArgb, big) => {
+    const row = ws.addRow([label, '', '', '', '', '', '', '', '', '', '', '']);
+    row.eachCell({ includeEmpty: true }, (c) => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
+      c.font = { bold: true, color: { argb: fontArgb }, size: big ? 14 : 11 };
+    });
+    if (big) row.height = 22;
+    styleCurrency(row.getCell(COL_TOTAL));
+    return row;
+  };
+  const commHex = GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
+  const rowTotal = mkSummary('Total Capex Budget', NAVY, WHITE, true);
+  const rowFee   = mkSummary('Construction Mgmt Fee', LIGHT, NAVY, false);
+  const rowCont  = mkSummary('Contingency', LIGHT, NAVY, false);
+  const rowComm  = mkSummary('Commercial Tenant Costs', argb(commHex), argb(textOn(commHex)), false);
+
+  // Big banner marking the copy/paste boundary — sits directly above Multifamily Subtotal.
+  const rowBanner = ws.addRow(['Copy/Paste Below This Line to Proforma', '', '', '', '', '', '', '', '', '', '', '']);
+  rowBanner.eachCell({ includeEmpty: true }, (c) => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF16A34A' } };
+    c.font = { bold: true, size: 13, color: { argb: WHITE } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
   });
+  rowBanner.height = 26;
+  ws.mergeCells(`A${rowBanner.number}:L${rowBanner.number}`);
+
+  const stRow = mkSummary('MULTIFAMILY SUBTOTAL', NAVY, WHITE, true);
+
   ws.addRow([]);
+  const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', 'GL Account', 'Notes']);
+  colHeaderRow.font = { bold: true, color: { argb: WHITE } };
+  colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  colHeaderRow.height = 22;
+  colHeaderRow.eachCell((c) => { c.alignment = { horizontal: 'center', vertical: 'middle' }; });
+  ws.views = [{ state: 'frozen', ySplit: colHeaderRow.number }];
 
-  // Build full template: every group, subsection, line item.
-  // # Items and $/Item are blank for user to fill in Excel; Total is a live formula =B*C.
-  // Section subtotals and group subtotals use SUM ranges so totals update as user types.
-  const groupSubtotalAddrs = []; // Cell addresses like "G42" for the final grand-sum formula.
+  // Emit EVERY line item (full default list) so the export mirrors the proforma
+  // CAPEX tab in its entirety. Items that were NOT worked on in the app (unchecked
+  // on the Questionnaire) are rendered with a light-gray background so it's obvious
+  // at a glance which items this deal actually touched.
+  // Exclude the Commercial Tenant Costs group — it's represented by the top
+  // "Commercial Tenant Costs" summary line and lives separately in the proforma;
+  // the MF detail + Multifamily Subtotal cover the 6 multifamily groups only.
+  const exportGroups = SCHEMA.phase3.map((group, gi) => {
+    const sections = group.sections
+      .map((sec, si) => ({
+        sec, si,
+        items: sec.items.map((item, ii) => ({ item, ii })),
+      }))
+      .filter((s) => s.items.length);
+    return { group, gi, sections };
+  }).filter((g) => g.sections.length && g.group.name !== 'Commercial Tenant Costs');
 
-  SCHEMA.phase3.forEach((group, gi) => {
-    if (!group.sections.length) return;
-    const isInterior = group.name === 'Interior';
+  const groupSubtotalAddrs = []; // Cell addresses like "J42" for the final grand-sum formula.
 
-    // Group header (total will be SUM of all items in the group)
-    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '']);
-    gh.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
-    gh.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  exportGroups.forEach(({ group, gi, sections }) => {
+    const groupColorHex = GROUP_COLORS[group.name] || '#1E3A8A';
+    const groupFillArgb = argb(groupColorHex);
+    const groupFontArgb = argb(textOn(groupColorHex));
+    const rowTintArgb = argb(lightenHex(groupColorHex, 0.9));
+
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '']);
+    gh.eachCell({ includeEmpty: true }, (c) => {
+      c.font = { bold: true, size: 12, color: { argb: groupFontArgb } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
+    });
+    gh.getCell(1).alignment = { vertical: 'middle', indent: 1 };
     gh.height = 20;
-    gh.alignment = { vertical: 'middle' };
-    styleCurrency(gh.getCell(8));
+    styleCurrency(gh.getCell(COL_TOTAL));
 
     let firstItemRowInGroup = null;
     let lastItemRowInGroup = null;
 
-    group.sections.forEach((sec) => {
-      if (!sec.items.length) return;
-      const sr = ws.addRow(['  ' + sec.name, '', '', '', '', '', '', '', '', '']);
-      sr.font = { bold: true, italic: true };
-      sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+    sections.forEach(({ sec, si, items }) => {
+      items.forEach(({ item, ii }) => {
+        const worked = isChecked(gi, si, ii);   // "worked on in the app"
+        const v = getP3(gi, si, ii);
+        const qtyType = v.unit_type || item.default_qty_type || '';
+        const isPct = qtyType === '%';
+        const pct = (n) => (n === '' || n === null || n === undefined) ? '' : Number(n);
 
-      const sectionFirstRow = sr.number + 1; // first item row is next
-      sec.items.forEach((it) => {
+        let qty, finish, rate, pO, pP, pR, noteExtra = '';
+        if (worked) {
+          qty = Number(v.qty) || 0;
+          finish = v.finish || '';
+          pO = pct(v.pct_orig); pP = pct(v.pct_part); pR = pct(v.pct_reno);
+          if (isPct) {
+            const grp = findCapexGroup(v.pct_group_id);
+            rate = getCapexGroupTotal(v.pct_group_id) / 100;
+            noteExtra = `% of: ${grp && grp.name ? grp.name : '(no group selected)'}`;
+          } else {
+            rate = getEffectiveUnitCost(gi, si, ii);
+          }
+        } else {
+          // Not worked on: blank inputs, show the schema default rate as a starting point.
+          qty = ''; finish = ''; pO = ''; pP = ''; pR = '';
+          const dc = Number(item.default_cost_per_item);
+          rate = Number.isFinite(dc) ? dc : '';
+        }
+        const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
+        const rowFill = worked ? rowTintArgb : GRAY;
+
+        // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty | J Total | K GL | L Notes
         const r = ws.addRow([
-          '      ' + it.name, '', '', '', '', '', '',
-          '', // total (col H) filled by formula below
-          '', it.gl_account || '',
+          sec.name, item.name, finish,
+          pO, pP, pR,
+          qty || '', qtyType, (rate === '' ? '' : (rate || 0)),
+          '', // Total (col J) — live formula below
+          item.gl_account || '', notesText,
         ]);
-        // Live total formula: =B{n}*C{n}
-        r.getCell(8).value = { formula: `B${r.number}*C${r.number}`, result: 0 };
-        styleCurrency(r.getCell(3));
-        styleCurrency(r.getCell(8));
-        stylePct(r.getCell(5)); stylePct(r.getCell(6)); stylePct(r.getCell(7));
-        r.getCell(8).font = { bold: true };
-        r.eachCell({ includeEmpty: false }, (c) => { c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } }; });
+        // Total never shows an error (blank/text $/Qty) — falls back to 0.
+        r.getCell(COL_TOTAL).value = { formula: `IFERROR(G${r.number}*I${r.number},0)`, result: (Number(qty) || 0) * (Number(rate) || 0) };
+        stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
+        styleCurrency(r.getCell(9));
+        styleCurrency(r.getCell(COL_TOTAL));   // per-row Total stays regular weight
+        r.outlineLevel = 1; // collapsible under the group
+        r.eachCell({ includeEmpty: true }, (c) => {
+          c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowFill } };
+        });
+        // Options cell needs a finish picked (item has finishes but none chosen) → amber.
+        const hasOptions = Array.isArray(item.options) && item.options.length > 0;
+        if (hasOptions && !finish) {
+          r.getCell(3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NEEDS } };
+        }
 
         if (firstItemRowInGroup === null) firstItemRowInGroup = r.number;
         lastItemRowInGroup = r.number;
       });
-      const sectionLastRow = lastItemRowInGroup;
-      // Update section header total cell to SUM its items
-      sr.getCell(8).value = { formula: `SUM(H${sectionFirstRow}:H${sectionLastRow})`, result: 0 };
-      styleCurrency(sr.getCell(8));
     });
 
-    // Group subtotal row spans all items in the group
-    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '']);
-    subr.font = { bold: true };
-    subr.eachCell({ includeEmpty: true }, (c) => { c.border = { top: { style: 'thin', color: { argb: NAVY } } }; });
+    // Group subtotal row — same coloring as this group's header banner.
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '', '', '']);
+    subr.eachCell({ includeEmpty: true }, (c) => {
+      c.font = { bold: true, color: { argb: groupFontArgb } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
+      c.border = { top: { style: 'thin', color: { argb: NAVY } } };
+    });
     if (firstItemRowInGroup !== null) {
-      subr.getCell(8).value = { formula: `SUM(H${firstItemRowInGroup}:H${lastItemRowInGroup})`, result: 0 };
+      subr.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
       // Group header total = same range
-      gh.getCell(8).value = { formula: `SUM(H${firstItemRowInGroup}:H${lastItemRowInGroup})`, result: 0 };
-      groupSubtotalAddrs.push(`H${subr.number}`);
+      gh.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
+      groupSubtotalAddrs.push(`J${subr.number}`);
     }
-    styleCurrency(subr.getCell(8));
+    styleCurrency(subr.getCell(COL_TOTAL));
     ws.addRow([]);
   });
 
-  // Final totals (live formulas) — Total column shifted from G to H to make
-  // room for the Finish column at D.
-  ws.addRow([]);
-  const stRow = ws.addRow(['SUBTOTAL', '', '', '', '', '', '', '', '', '']);
-  stRow.font = { bold: true };
-  styleCurrency(stRow.getCell(8));
+  // Backfill the top summary now that group subtotal rows are known.
   if (groupSubtotalAddrs.length) {
-    stRow.getCell(8).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
+    stRow.getCell(COL_TOTAL).value = { formula: groupSubtotalAddrs.join('+'), result: 0 };
   }
-
-  const contRow = ws.addRow([`Contingency (${Math.round(contPct * 100)}%)`, '', '', '', '', '', '', '', '', '']);
-  styleCurrency(contRow.getCell(8));
-  contRow.getCell(8).value = { formula: `H${stRow.number}*${contPct}`, result: 0 };
-
-  const feeRow = ws.addRow([`Construction Mgmt Fee (${Math.round(feePct * 100)}%)`, '', '', '', '', '', '', '', '', '']);
-  styleCurrency(feeRow.getCell(8));
-  feeRow.getCell(8).value = { formula: `H${stRow.number}*${feePct}`, result: 0 };
-
-  const grandRow = ws.addRow(['TOTAL CAPEX', '', '', '', '', '', '', '', '', '']);
-  grandRow.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
-  grandRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
-  grandRow.height = 22;
-  styleCurrency(grandRow.getCell(8));
-  grandRow.getCell(8).value = { formula: `H${stRow.number}+H${contRow.number}+H${feeRow.number}`, result: 0 };
-
-  if (units > 0) {
-    const puRow = ws.addRow(['$ / Unit', '', '', '', '', '', '', '', '', '']);
-    puRow.font = { italic: true, bold: true };
-    styleCurrency(puRow.getCell(8));
-    puRow.getCell(8).value = { formula: `H${grandRow.number}/${units}`, result: 0 };
-  }
+  rowFee.getCell(COL_TOTAL).value = 0;
+  rowCont.getCell(COL_TOTAL).value = 0;
+  rowComm.getCell(COL_TOTAL).value = 0;
+  rowTotal.getCell(COL_TOTAL).value = { formula: `J${stRow.number}+J${rowComm.number}+J${rowCont.number}+J${rowFee.number}`, result: 0 };
 
   if (STATE.phase4.notes) {
     ws.addRow([]);
@@ -4583,6 +4654,13 @@ async function exportXlsx() {
     });
   });
 
+  return workbook;
+}
+
+async function exportXlsx() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  const propName = STATE.phase1.prop_name || '';
+  const workbook = await buildCapexWorkbook();
   const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const buf = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
