@@ -1329,6 +1329,27 @@ function renderNotesSection(title, placeholder, getVal, setVal) {
   return section;
 }
 
+// Flatten the rich-text notes HTML into readable plain-text lines for Excel:
+// bulleted items → "• …", numbered items → "1. …", block breaks → new lines.
+function notesHtmlToLines(html) {
+  if (!html || !String(html).trim()) return [];
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  div.querySelectorAll('ol').forEach(ol => {
+    let n = 1;
+    ol.querySelectorAll(':scope > li').forEach(li => li.prepend(document.createTextNode((n++) + '. ')));
+  });
+  div.querySelectorAll('ul').forEach(ul => {
+    ul.querySelectorAll(':scope > li').forEach(li => li.prepend(document.createTextNode('• ')));
+  });
+  div.querySelectorAll('br').forEach(br => br.replaceWith(document.createTextNode('\n')));
+  div.querySelectorAll('div, p, li').forEach(b => {
+    b.prepend(document.createTextNode('\n'));   // break before the block…
+    b.append(document.createTextNode('\n'));    // …and after, so blocks never run together
+  });
+  return div.textContent.replace(/\n{2,}/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
+}
+
 // ---------- Unit Mix (part of Physical; repeatable rows) ----------
 const UNIT_STATUS = ['Original', 'Partial', 'Reno'];
 
@@ -4822,9 +4843,9 @@ async function buildCapexWorkbook() {
 
   // ===== Property Basics + Physical sheets =====
   [
-    { name: 'Property Basics', phase: SCHEMA.phase1, state: STATE.phase1 },
-    { name: 'Physical', phase: SCHEMA.phase2, state: STATE.phase2 },
-  ].forEach(({ name, phase, state }) => {
+    { name: 'Property Basics', phase: SCHEMA.phase1, state: STATE.phase1, noteKey: 'basics_notes', noteTitle: 'Basics Notes' },
+    { name: 'Physical', phase: SCHEMA.phase2, state: STATE.phase2, noteKey: 'physical_notes', noteTitle: 'Physical Notes' },
+  ].forEach(({ name, phase, state, noteKey, noteTitle }) => {
     const w = workbook.addWorksheet(name);
     w.columns = [{ width: 42 }, { width: 32 }];
     const t = w.addRow([name.toUpperCase()]);
@@ -4845,6 +4866,21 @@ async function buildCapexWorkbook() {
       });
       w.addRow([]);
     });
+    // Rich-text notes for this page (Basics Notes / Physical Notes) as plain-text
+    // lines under their own banner, each wrapped across the full width.
+    const noteLines = notesHtmlToLines(state[noteKey]);
+    if (noteLines.length) {
+      const sr = w.addRow([noteTitle]);
+      sr.font = { bold: true };
+      sr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+      w.mergeCells(`A${sr.number}:B${sr.number}`);
+      noteLines.forEach((line) => {
+        const r = w.addRow([line]);
+        w.mergeCells(`A${r.number}:B${r.number}`);
+        r.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+      });
+      w.addRow([]);
+    }
   });
 
   return workbook;
