@@ -3192,6 +3192,8 @@ const AVG_QTY_TYPES = ['Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
 // property's value for that field. Mirrors the LISTS "Basics Item" column in
 // Budget_Details_Control.xlsx (col A == col B there). Keep both in sync.
 const BASICS_QTY_TYPE_FIELDS = {
+  // 'MF Unit' replaces the old =MF checkbox: auto-fills # Qty from # of MF Units.
+  'MF Unit': 'mf_units',
   'Multifamily RSF': 'mf_rsf',
   'Land Sqft': 'land_sf',
   'Parking Lot Sqft': 'parking_lot_sf',
@@ -3491,11 +3493,12 @@ function renderItemConditionalFields(gi, si, ii, item, summaryNode) {
   return wrap;
 }
 
-// Shared 7-col grid for the Details page: item name | =MF checkbox | Options |
-// # Qty | Qty Type | $/Qty | $ Amt. Options is the Finish picker — dropdown if
-// the item has any options defined in the schema; gray-disabled cell otherwise.
+// Shared 6-col grid for the Details page: item name | Options | # Qty | Qty Type
+// | $/Qty | $ Amt. Options is the Finish picker — dropdown if the item has any
+// options defined in the schema; gray-disabled cell otherwise. (The old =MF
+// checkbox column was removed 2026-07-07 — use the "MF Unit" Qty Type instead.)
 // Used by both the sticky column header and each line-item row so columns line up.
-const DETAIL_GRID_COLS = 'minmax(0,1fr) 44px 86px 64px 78px 72px 84px';
+const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
 // Interior group: 9 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
 // checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
@@ -3599,7 +3602,6 @@ function renderPhase3() {
     style: DETAIL_GRID_BASE + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-top:1px solid #e5e7eb'
   },
     el('div', {}, 'Item'),
-    el('div', { style: 'text-align:center' }, '=MF'),
     el('div', {}, 'Options'),
     el('div', { style: 'text-align:right' }, '# Qty'),
     el('div', {}, 'Qty Type'),
@@ -3720,20 +3722,19 @@ function renderOptionsCell(gi, si, ii, item, onChange) {
 
 function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const v = getP3(gi, si, ii);
-  // If this row is linked to MF Units (=MF checkbox on), force its qty to
-  // match the current Basics → Units & Area mf_units value before rendering.
+  // Legacy migration: the old "=MF" checkbox (removed 2026-07-07) is superseded by
+  // the "MF Unit" Basics-linked Qty Type. Convert any lingering mf_linked row to
+  // unit_type 'MF Unit' so it keeps auto-filling # Qty from # of MF Units.
   if (v.mf_linked) {
-    const mf = Number(STATE.phase1.mf_units) || 0;
-    if (mf > 0 && v.qty !== mf) {
-      setP3(gi, si, ii, { qty: mf });
-    }
+    setP3(gi, si, ii, { unit_type: 'MF Unit', mf_linked: false });
   }
   // Basics-linked Qty Type: force qty from the mapped property value before the
-  // initial total is computed (mirrors the =MF block above so $ Amt is right on
-  // first render, not just after the next recompute).
+  // initial total is computed (so $ Amt is right on first render, not just after
+  // the next recompute).
   {
-    const bv0 = basicsQtyValue(v.unit_type || item.default_qty_type || '');
-    if (bv0 != null && (Number(v.qty) || 0) !== bv0) setP3(gi, si, ii, { qty: bv0 });
+    const cur0 = getP3(gi, si, ii);
+    const bv0 = basicsQtyValue(cur0.unit_type || item.default_qty_type || '');
+    if (bv0 != null && (Number(cur0.qty) || 0) !== bv0) setP3(gi, si, ii, { qty: bv0 });
   }
   const total = getDetailItemTotal(gi, si, ii);
   // Group-derived tints: idle = very-light group color, priced = slightly more
@@ -3760,14 +3761,13 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   );
   itemWrap.appendChild(nameCell);
 
-  // Inputs are declared up front so the =MF and type-change handlers can flip
+  // Inputs are declared up front so the type-change handler can flip
   // qty/cost readonly state.
   const qtyInp = el('input', {
     type: 'text', inputmode: 'decimal',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
   setNumVal(qtyInp, v.qty);
-  if (v.mf_linked) { qtyInp.readOnly = true; qtyInp.style.background = '#f1f5f9'; }
   qtyInp.addEventListener('input', () => {
     if (qtyInp.readOnly) return;
     setP3(gi, si, ii, { qty: numVal(qtyInp) });
@@ -3775,28 +3775,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   });
   qtyInp.addEventListener('blur', () => setNumVal(qtyInp, numVal(qtyInp)));
 
-  // Col 2: =MF Units checkbox
-  const mfCb = el('input', { type: 'checkbox', style: 'width:16px;height:16px;cursor:pointer' });
-  mfCb.checked = !!v.mf_linked;
-  mfCb.title = '=MF Units (auto-fill # Qty from Basics → Number of MF Units)';
-  mfCb.addEventListener('change', () => {
-    const linked = mfCb.checked;
-    if (linked) {
-      const mf = Number(STATE.phase1.mf_units) || 0;
-      setP3(gi, si, ii, { mf_linked: true, qty: mf });
-      setNumVal(qtyInp, mf || '');
-      qtyInp.readOnly = true;
-      qtyInp.style.background = '#f1f5f9';
-    } else {
-      setP3(gi, si, ii, { mf_linked: false });
-      qtyInp.readOnly = false;
-      qtyInp.style.background = '';
-    }
-    recomputePctRowsAndSummary(summaryNode);
-  });
-  itemWrap.appendChild(el('div', { style: 'text-align:center' }, mfCb));
-
-  // Col 3: Options/Finish picker. When the user picks a finish, the row's
+  // Col 2: Options/Finish picker. When the user picks a finish, the row's
   // unit_cost is cleared so the Options-tab rate flows through; we then push
   // the new effective rate into costInp as the visible value. The user can
   // still type to override (sticky).
@@ -3911,7 +3890,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       qtyInp.title = bv
         ? `Auto-filled from Basics → ${cur.unit_type}`
         : `Auto-filled from Basics → ${cur.unit_type} (not set — enter it on the Basics tab)`;
-    } else if (!cur.mf_linked) {
+    } else {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
       qtyInp.title = '';
