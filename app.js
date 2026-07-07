@@ -1273,10 +1273,60 @@ function renderPhase1() {
   }
   if (surveyHost) surveyHost.insertBefore(renderSurveyBlock(), surveyHost.firstChild);
   else root.appendChild(renderSurveyBlock());   // fallback if the schema section is renamed
+  // Basics Notes — free-form rich-text notes at the end of the Basics (phase1)
+  // sections, i.e. right below Building & Site. Stored as HTML in phase1.
+  root.appendChild(renderNotesSection('Basics Notes', 'Notes about the property basics, building & site…',
+    () => (STATE.phase1 && STATE.phase1.basics_notes) || '',
+    (html) => { STATE.phase1.basics_notes = html; saveState(); }));
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
+  // Physical Notes — same rich-text notes at the end of the Physical
+  // Characteristics sections, i.e. right below Amenities - Indoor. Stored in phase2.
+  root.appendChild(renderNotesSection('Physical Notes', 'Notes about the physical characteristics…',
+    () => (STATE.phase2 && STATE.phase2.physical_notes) || '',
+    (html) => { STATE.phase2.physical_notes = html; saveState(); }));
   return root;
+}
+
+// A collapsible rich-text notes section (Notepad-style): a small toolbar (Bold,
+// Italic, Underline, bullet list, numbered list) above a contenteditable box.
+// Content is stored/loaded as an HTML string via getVal/setVal. Toolbar buttons
+// use mousedown+preventDefault so the editor keeps its selection/focus.
+function renderNotesSection(title, placeholder, getVal, setVal) {
+  const section = el('section', { class: 'section' });
+  section.appendChild(el('header', {
+    class: 'section-header',
+    onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed'),
+  }, el('span', {}, title), el('span', { class: 'chev' }, '▼')));
+  const body = el('div', { class: 'section-body' });
+
+  const editor = el('div', {
+    class: 'notes-editor',
+    contenteditable: 'true',
+    'data-placeholder': placeholder || 'Type notes here…',
+    style: 'min-height:120px;max-height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:14px;line-height:1.5;background:#fff;color:var(--text);outline:none',
+  });
+  editor.innerHTML = getVal() || '';
+  const save = () => setVal(editor.innerHTML);
+  const exec = (cmd) => { editor.focus(); document.execCommand(cmd, false, null); save(); };
+  const tbBtn = (label, cmd, title, extra = '') => el('button', {
+    type: 'button', title,
+    style: 'min-width:30px;padding:5px 9px;font-size:13px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:5px;cursor:pointer;color:var(--text);' + extra,
+    onMousedown: (e) => { e.preventDefault(); exec(cmd); },
+  }, label);
+  body.appendChild(el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px' },
+    tbBtn('B', 'bold', 'Bold', 'font-weight:800'),
+    tbBtn('I', 'italic', 'Italic', 'font-style:italic'),
+    tbBtn('U', 'underline', 'Underline', 'text-decoration:underline'),
+    tbBtn('• List', 'insertUnorderedList', 'Bulleted list'),
+    tbBtn('1. List', 'insertOrderedList', 'Numbered list'),
+  ));
+  editor.addEventListener('input', save);
+  editor.addEventListener('blur', save);
+  body.appendChild(editor);
+  section.appendChild(body);
+  return section;
 }
 
 // ---------- Unit Mix (part of Physical; repeatable rows) ----------

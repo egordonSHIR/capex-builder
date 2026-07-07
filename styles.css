@@ -125,6 +125,12 @@ main {
   letter-spacing: 0;
 }
 .section.collapsed > .section-header .section-collapsed-badge { display: inline-block; }
+/* Rich-text notes editor (Basics Notes / Physical Notes). Ensure list markers
+   render inside the contenteditable, and show a placeholder while empty. */
+.notes-editor ul { list-style: disc; margin: 4px 0 4px 24px; }
+.notes-editor ol { list-style: decimal; margin: 4px 0 4px 24px; }
+.notes-editor li { margin: 2px 0; }
+.notes-editor:empty::before { content: attr(data-placeholder); color: #94a3b8; }
 .section-body { padding: 8px 0; }
 
 .field {
