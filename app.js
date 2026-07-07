@@ -1112,6 +1112,9 @@ function renderSchemaForm(sections, bag, onUpdate) {
 // Compact button style shared by the Expand/Collapse bar and the Basics-page
 // Import/Export buttons so they line up at the same size on one row.
 const BAR_BTN_STYLE = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--primary);white-space:nowrap';
+// Variant for buttons that sit ON the navy summary bar (Budget page Expand/
+// Collapse): match the blue background, white font, thin white border.
+const BAR_BTN_STYLE_ON_NAVY = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--primary);border:1px solid #fff;border-radius:6px;cursor:pointer;color:#fff;white-space:nowrap';
 // leftItems: optional array of button elements rendered on the left of the bar
 // (e.g. Basics Import/Export), with Expand/Collapse pushed to the right.
 function renderExpandCollapseBar(leftItems) {
@@ -3600,14 +3603,14 @@ function renderPhase3() {
   bar.appendChild(summary);
   const actions = el('div', { style: 'display:flex;gap:6px;flex-shrink:0;padding-left:12px;border-left:1px solid rgba(255,255,255,0.35)' });
   actions.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Expand all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section.collapsed')
         .forEach(s => s.classList.remove('collapsed'));
     },
   }, '▼ Expand all'));
   actions.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Collapse all sections on this tab',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Collapse all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section')
         .forEach(s => s.classList.add('collapsed'));
