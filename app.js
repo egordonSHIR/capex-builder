@@ -3221,6 +3221,24 @@ function basicsQtyValue(ut) {
   const n = Number(raw);
   return Number.isFinite(n) ? n : 0;
 }
+// Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,
+// inserting a disabled "----------" separator between the base types and the
+// appended Basics-linked ones. ('MF Unit' is a base type that's also Basics-
+// linked, so it stays ABOVE the separator; the split lands before the first
+// truly-appended type, i.e. 'Multifamily RSF'.) `effectiveUT` is pre-selected.
+function fillQtyTypeOptions(sel, effectiveUT) {
+  sel.appendChild(el('option', { value: '' }, '—'));
+  let sepDone = false;
+  UNIT_TYPES.forEach(u => {
+    if (!sepDone && u !== 'MF Unit' && BASICS_QTY_TYPE_FIELDS[u]) {
+      sel.appendChild(el('option', { value: '', disabled: true }, '----------'));
+      sepDone = true;
+    }
+    const o = el('option', { value: u }, u);
+    if (effectiveUT === u) o.selected = true;
+    sel.appendChild(o);
+  });
+}
 
 function getP3(gi, si, ii) {
   return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '', finish: '' };
@@ -3798,12 +3816,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // and selecting "—" effectively means "fall back to the default on next render."
   const effectiveUT = v.unit_type || item.default_qty_type || '';
   const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
-  utSel.appendChild(el('option', { value: '' }, '—'));
-  UNIT_TYPES.forEach(u => {
-    const o = el('option', { value: u }, u);
-    if (effectiveUT === u) o.selected = true;
-    utSel.appendChild(o);
-  });
+  fillQtyTypeOptions(utSel, effectiveUT);
   utSel.addEventListener('change', () => {
     setP3(gi, si, ii, { unit_type: utSel.value });
     syncTypeRelatedUI();
@@ -4026,12 +4039,7 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   // Col 6: Qty Type
   const effectiveUT = v.unit_type || item.default_qty_type || '';
   const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
-  utSel.appendChild(el('option', { value: '' }, '—'));
-  UNIT_TYPES.forEach(u => {
-    const o = el('option', { value: u }, u);
-    if (effectiveUT === u) o.selected = true;
-    utSel.appendChild(o);
-  });
+  fillQtyTypeOptions(utSel, effectiveUT);
   utSel.addEventListener('change', () => {
     setP3(gi, si, ii, { unit_type: utSel.value });
     // Switching to/from an Avg-* sizing type changes the auto-computed # Qty.
