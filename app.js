@@ -3176,11 +3176,49 @@ function renderPhase2() {
 // Source of truth: LISTS!A3:A<n> in Capex_Builder_Line_Items_Control.xlsx.
 // Keep in sync with that workbook's QTY_TYPES list. '%' triggers special % logic
 // (see getDetailItemTotal / renderDetailItem); all others are display-only.
-const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
+const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs',
+  // Basics-linked Qty Types (2026-07-07): picking one auto-fills a Budget row's
+  // # Qty (read-only) from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
+  'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
+  '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
+  '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)'];
 // Interior "sizing" Qty Types: when an Interior row uses one of these, its
 // auto-computed # Qty (units being renovated) is multiplied by the matching
 // property-wide average from the Unit Mix. See avgSizingForUnitType().
 const AVG_QTY_TYPES = ['Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
+
+// Basics-linked Qty Types: Qty Type name -> Basics/Physical schema key. When a
+// Budget row uses one of these, its # Qty auto-fills (read-only) from the
+// property's value for that field. Mirrors the LISTS "Basics Item" column in
+// Budget_Details_Control.xlsx (col A == col B there). Keep both in sync.
+const BASICS_QTY_TYPE_FIELDS = {
+  'Multifamily RSF': 'mf_rsf',
+  'Land Sqft': 'land_sf',
+  'Parking Lot Sqft': 'parking_lot_sf',
+  'Total Facade Sqft': 'total_facade_sf',
+  'Other Pervious Sqft': 'landscaping_sf',
+  '# Parking Spots': 'parking_spots_existing',
+  '# Vehicle Gates': 'vehicle_gates',
+  '# Elevators': 'elevators_yn',
+  '# Private Yards': 'private_yard_existing',
+  '# Garage': 'garage',
+  '# Hallways': 'hallways',
+  '# Outdoor Pool(s)': 'outdoor_pools',
+  '# Dog Park(s)': 'dog_parks',
+  '# Laundry Facility(ies)': 'laundry_facilities',
+  '# Indoor Pool(s)': 'indoor_pools',
+};
+// Property value backing a Basics-linked Qty Type, or null if `ut` isn't one.
+// Reads phase1 then phase2 (keys are unique across the two); blank/non-numeric -> 0.
+function basicsQtyValue(ut) {
+  const key = BASICS_QTY_TYPE_FIELDS[ut];
+  if (!key) return null;
+  const p1 = STATE.phase1 || {}, p2 = STATE.phase2 || {};
+  const raw = (p1[key] !== undefined && p1[key] !== '') ? p1[key]
+            : (p2[key] !== undefined ? p2[key] : '');
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
 
 function getP3(gi, si, ii) {
   return STATE.phase3[ckKey(gi, si, ii)] || { qty: '', unit_type: '', unit_cost: '', notes: '', mf_linked: false, pct_group_id: '', pct_orig: '', pct_part: '', pct_reno: '', finish: '' };
@@ -3690,6 +3728,13 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       setP3(gi, si, ii, { qty: mf });
     }
   }
+  // Basics-linked Qty Type: force qty from the mapped property value before the
+  // initial total is computed (mirrors the =MF block above so $ Amt is right on
+  // first render, not just after the next recompute).
+  {
+    const bv0 = basicsQtyValue(v.unit_type || item.default_qty_type || '');
+    if (bv0 != null && (Number(v.qty) || 0) !== bv0) setP3(gi, si, ii, { qty: bv0 });
+  }
   const total = getDetailItemTotal(gi, si, ii);
   // Group-derived tints: idle = very-light group color, priced = slightly more
   // saturated of the same hue. renderDetailTotals reads these from dataset to
@@ -3856,6 +3901,21 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // and display the auto-computed $/Qty value for % rows.
   function syncTypeRelatedUI() {
     const cur = getP3(gi, si, ii);
+    // # Qty: Basics-linked Qty Types auto-fill (read-only) from the property value.
+    const bv = basicsQtyValue(cur.unit_type);
+    if (bv != null) {
+      if ((Number(cur.qty) || 0) !== bv) setP3(gi, si, ii, { qty: bv });
+      setNumVal(qtyInp, bv || '');
+      qtyInp.readOnly = true;
+      qtyInp.style.background = '#f1f5f9';
+      qtyInp.title = bv
+        ? `Auto-filled from Basics → ${cur.unit_type}`
+        : `Auto-filled from Basics → ${cur.unit_type} (not set — enter it on the Basics tab)`;
+    } else if (!cur.mf_linked) {
+      qtyInp.readOnly = false;
+      qtyInp.style.background = '';
+      qtyInp.title = '';
+    }
     if (cur.unit_type === '%') {
       subRow.style.display = 'flex';
       const grpTotal = getCapexGroupTotal(cur.pct_group_id);
