@@ -1115,29 +1115,33 @@ const BAR_BTN_STYLE = 'padding:6px 10px;font-size:12px;font-weight:600;backgroun
 // Variant for buttons that sit ON the navy summary bar (Budget page Expand/
 // Collapse): match the blue background, white font, thin white border.
 const BAR_BTN_STYLE_ON_NAVY = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--primary);border:1px solid #fff;border-radius:6px;cursor:pointer;color:#fff;white-space:nowrap';
-// leftItems: optional array of button elements rendered on the left of the bar
-// (e.g. Basics Import/Export), with Expand/Collapse pushed to the right.
-function renderExpandCollapseBar(leftItems) {
-  const hasLeft = Array.isArray(leftItems) && leftItems.length;
+// One SHIR-navy box (matches the Budget page summary bar): optional left content
+// (leftStat for a summary chip and/or leftItems for buttons) on the left, and the
+// Expand/Collapse-all buttons on the right. All buttons use the on-navy style
+// (navy bg, white text, thin white border) so they read as one master blue box.
+// leftItems buttons should already carry BAR_BTN_STYLE_ON_NAVY.
+function renderExpandCollapseBar(leftItems, leftStat) {
+  const hasLeft = (Array.isArray(leftItems) && leftItems.length) || !!leftStat;
   const bar = el('div', {
     class: 'expand-collapse-bar',
-    style: `display:flex;justify-content:${hasLeft ? 'space-between' : 'flex-end'};align-items:center;gap:6px;margin:0 0 10px;flex-wrap:wrap`
+    style: `display:flex;justify-content:${hasLeft ? 'space-between' : 'flex-end'};align-items:center;gap:10px;margin:0 0 12px;flex-wrap:wrap;background:var(--primary);color:#fff;padding:10px 12px;border-radius:8px`
   });
   if (hasLeft) {
-    const left = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' });
-    leftItems.forEach(b => left.appendChild(b));
+    const left = el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' });
+    if (leftStat) left.appendChild(leftStat);
+    if (Array.isArray(leftItems)) leftItems.forEach(b => left.appendChild(b));
     bar.appendChild(left);
   }
   const right = el('div', { style: 'display:flex;gap:6px' });
   right.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Expand all sections on this tab',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Expand all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section.collapsed')
         .forEach(s => s.classList.remove('collapsed'));
     },
   }, '▼ Expand all'));
   right.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Collapse all sections on this tab',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Collapse all sections on this tab',
     onClick: () => {
       $('#phase-content').querySelectorAll('.section')
         .forEach(s => s.classList.add('collapsed'));
@@ -1226,13 +1230,14 @@ async function exportEmptyBasicsFields() {
 // ---------- Phase 1: Basics (identity + Physical characteristics folded in) ----------
 function renderPhase1() {
   const root = el('div');
-  // Import + Export sit inline (left) with Expand/Collapse all (right) in one bar.
+  // All Basics-page buttons live in one master SHIR-navy box: Import + Export on
+  // the left, Expand/Collapse all on the right (all on-navy styled).
   const importBtn = el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Import Basics + Unit Mix from the deal proforma in GDrive',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Import Basics + Unit Mix from the deal proforma in GDrive',
     onClick: () => pullBasicsAndUnitsFromDrive(),
   }, '☁ Import Proforma Basics & Units');
   const exportBtn = el('button', {
-    type: 'button', style: BAR_BTN_STYLE, title: 'Download the empty/missing Basics fields as an Excel file',
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Download the empty/missing Basics fields as an Excel file',
     onClick: () => exportEmptyBasicsFields(),
   }, '📋 Export Missing Fields');
   root.appendChild(renderExpandCollapseBar([importBtn, exportBtn]));
@@ -3091,14 +3096,12 @@ function groupHeader(groupName) {
 // ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
 function renderPhase2() {
   const root = el('div');
-  root.appendChild(renderExpandCollapseBar());
-  const summary = el('div', { class: 'summary-totals' },
-    el('div', { class: 'summary-row grand' },
-      el('span', { class: 'label' }, 'Items selected'),
-      el('span', { class: 'value', 'data-checked-count': true }, String(countChecked())))
-  );
-  root.appendChild(summary);
-  root.appendChild(el('div', { class: 'muted small', style: 'margin:-8px 2px 14px' },
+  // "# Items" count sits inline in the navy bar with Expand/Collapse all.
+  const itemsStat = el('div', { style: 'display:flex;align-items:center;gap:8px' },
+    el('span', { style: 'color:#cbd5e1;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.03em' }, '# Items'),
+    el('span', { class: 'value', 'data-checked-count': true, style: 'color:#fff;font-size:16px;font-weight:700' }, String(countChecked())));
+  root.appendChild(renderExpandCollapseBar(null, itemsStat));
+  root.appendChild(el('div', { class: 'muted small', style: 'margin:2px 2px 14px' },
     'Check every capex item this property needs. Selected items appear in the BUDGET $ tab for pricing.'));
 
   const refreshCount = () => {
