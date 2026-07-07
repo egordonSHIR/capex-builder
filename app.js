@@ -5053,6 +5053,39 @@ function sortHomeEntries(entries) {
   });
 }
 
+// ---- Archive / Live views ----
+// A property can be archived: hidden from the main "Live" list and shown on the
+// Archived page instead. The org manifest is the source of truth for archived
+// when it has an opinion (it survives the reconcile-on-open that overwrites the
+// property JSON); the per-property `archived` flag is a same-device hint used
+// for the ⋮ menu label and offline.
+let HOME_VIEW_MODE = 'live'; // 'live' | 'archived'
+function isEntryArchived({ local, remote }) {
+  if (remote && remote.archived !== undefined) return !!remote.archived;
+  return !!(local && local.archived);
+}
+// Persist archived onto the property's EXISTING manifest entry (best-effort; if
+// the property isn't in the org index yet, the local flag still holds it).
+async function setManifestArchived(id, archived) {
+  try {
+    const { data } = await fetchManifest();
+    const e = data.properties.find(p => p.id === id);
+    if (e && !!e.archived !== !!archived) { e.archived = archived; await writeManifest(data); }
+  } catch (_) { /* local flag still holds; index catches up on next sync */ }
+}
+function setPropertyArchived(p, archived) {
+  p.archived = archived;                       // local hint
+  if (STATE && STATE.id === p.id) { STATE.archived = archived; saveState(); }
+  else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));   // persist without bumping the open property
+  if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
+    const e = MANIFEST_CACHE.data.properties.find(x => x.id === p.id);
+    if (e) e.archived = archived;              // reflect immediately in the cached index
+  }
+  setManifestArchived(p.id, archived);         // async, best-effort → shared org index
+  toast(archived ? `Archived “${p.name || 'property'}”` : `Restored “${p.name || 'property'}” to Live`, 'success');
+  renderHome();
+}
+
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
@@ -5077,6 +5110,9 @@ function renderHome() {
   }
   const entries = Array.from(merged.values());
   sortHomeEntries(entries);
+  // Split into Live vs Archived; the current view mode picks which to show.
+  const archivedCount = entries.filter(isEntryArchived).length;
+  const visible = entries.filter(e => HOME_VIEW_MODE === 'archived' ? isEntryArchived(e) : !isEntryArchived(e));
 
   // ---- Home header box: New Property + org index status + sort + icon legend ----
   // SHIR-navy box. Row 1 packs every control (New / status / sort / user / Refresh)
@@ -5090,13 +5126,28 @@ function renderHome() {
     style: 'background:#fff;color:var(--primary);border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap',
     onClick: () => promptNewProperty(),
   }, '+ New Property'));
+  // Live ⇄ Archived view toggle.
+  if (HOME_VIEW_MODE === 'archived') {
+    controls.appendChild(el('button', {
+      style: 'background:#fff;color:var(--primary);border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap',
+      title: 'Back to the main properties list',
+      onClick: () => { HOME_VIEW_MODE = 'live'; renderHome(); },
+    }, '← Live'));
+    controls.appendChild(el('span', { style: 'color:#fff;font-weight:700;white-space:nowrap' }, `🗄 Archived (${archivedCount})`));
+  } else {
+    controls.appendChild(el('button', {
+      style: 'background:rgba(255,255,255,0.14);color:#fff;border:1px solid rgba(255,255,255,0.55);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap',
+      title: 'View archived properties',
+      onClick: () => { HOME_VIEW_MODE = 'archived'; renderHome(); },
+    }, `🗄 Archived${archivedCount ? ` (${archivedCount})` : ''}`));
+  }
   const statusText = HOME_INDEX_LOADING
     ? '🔄 Loading…'
     : (MANIFEST_CACHE
         ? `📋 Index · ${MANIFEST_CACHE.fetchedAt ? relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) : 'loaded'}`
         : '📋 Tap Refresh');
   controls.appendChild(el('span', { style: 'color:#e2e8f0;white-space:nowrap', title: 'Org index' }, statusText));
-  if (entries.length) {
+  if (visible.length) {
     controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap' }, 'Sort:'));
     const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;color:var(--primary)' });
     [['modified', 'Date Modified'], ['created', 'Date Created'], ['name', 'Name']].forEach(([v, l]) => {
@@ -5120,18 +5171,20 @@ function renderHome() {
   box.appendChild(controls);
 
   // Icon legend = the second row (collapsible), inside the same box.
-  if (entries.length) box.appendChild(renderHomeLegend());
+  if (visible.length) box.appendChild(renderHomeLegend());
 
   main.appendChild(box);
 
-  if (!entries.length) {
+  if (!visible.length) {
     main.appendChild(el('div', { class: 'home-empty' },
-      'No properties yet. Tap "+ New Property" to start.'));
+      HOME_VIEW_MODE === 'archived'
+        ? 'No archived properties. Use a property’s ⋮ menu → Archive to move it here.'
+        : 'No properties yet. Tap "+ New Property" to start.'));
     return;
   }
 
   const list = el('div', { class: 'home-list' });
-  entries.forEach(({ local, remote }) => list.appendChild(renderPropertyCard(local, remote)));
+  visible.forEach(({ local, remote }) => list.appendChild(renderPropertyCard(local, remote)));
   main.appendChild(list);
 }
 
@@ -5153,7 +5206,7 @@ function renderHomeLegend() {
   body.appendChild(row('●', 'var(--success)', 'Saved to Drive — edits sync automatically to the deal folder'));
   body.appendChild(row('⊘', '#94a3b8', 'No Drive deal folder linked yet'));
   body.appendChild(row('☁', '#1e3a8a', 'In the org index but not loaded on this device — tap the card to open it from Drive'));
-  body.appendChild(row('⋮', '#64748b', 'Property menu — rename, link/change Drive folder, delete'));
+  body.appendChild(row('⋮', '#64748b', 'Property menu — rename, link/change Drive folder, archive, delete'));
   body.appendChild(row('📐', '#166534', '“survey” = survey processed (gray “no survey” = not yet)'));
   body.appendChild(row('🏠', '#166534', '“unit mix (N)” = N unit types imported (gray “no unit mix” = none)'));
   d.appendChild(body);
@@ -5337,9 +5390,10 @@ async function promptLinkDriveDuringSetup(p) {
 }
 
 function propertyMenu(p) {
+  const archiveLabel = p.archived ? 'Unarchive (move to Live)' : 'Archive';
   const choice = prompt(
     `"${p.name || '(unnamed)'}"\n\n` +
-    `1. Open\n2. Rename\n3. Link Drive folder\n4. Delete\n\nEnter 1-4:`
+    `1. Open\n2. Rename\n3. Link Drive folder\n4. ${archiveLabel}\n5. Delete\n\nEnter 1-5:`
   );
   if (choice === '1') openProperty(p.id);
   else if (choice === '2') {
@@ -5353,6 +5407,8 @@ function propertyMenu(p) {
   } else if (choice === '3') {
     promptLinkFolder(p, () => renderHome());
   } else if (choice === '4') {
+    setPropertyArchived(p, !p.archived);
+  } else if (choice === '5') {
     if (confirm(`Delete "${p.name}"?\n\nThis only removes the local copy — the Drive folder and its files are NOT affected.`)) {
       deleteProperty(p.id);
       renderHome();
