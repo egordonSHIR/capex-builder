@@ -5064,24 +5064,51 @@ function isEntryArchived({ local, remote }) {
   if (remote && remote.archived !== undefined) return !!remote.archived;
   return !!(local && local.archived);
 }
-// Persist archived onto the property's EXISTING manifest entry (best-effort; if
-// the property isn't in the org index yet, the local flag still holds it).
-async function setManifestArchived(id, archived) {
+// Propagate a property's archived state to EVERY device by writing it into the
+// shared org manifest (the same channel used for the home index / editor
+// presence). Read-modify-write against a fresh fetch; upserts the entry so the
+// flag lands even if this property wasn't indexed yet. Only meaningful for a
+// Drive-linked property — a folderless, local-only property can't propagate.
+async function setManifestArchived(p, archived) {
+  if (!p || !p.id) return;
+  const hasFolder = !!(p.drive && p.drive.folderId);
   try {
-    const { data } = await fetchManifest();
-    const e = data.properties.find(p => p.id === id);
-    if (e && !!e.archived !== !!archived) { e.archived = archived; await writeManifest(data); }
-  } catch (_) { /* local flag still holds; index catches up on next sync */ }
+    const { data } = await fetchManifest();       // fresh copy from Drive
+    const idx = data.properties.findIndex(x => x.id === p.id);
+    if (idx >= 0) {
+      if (!!data.properties[idx].archived === !!archived) return;   // already in sync
+      data.properties[idx].archived = archived;
+    } else if (hasFolder) {
+      // Not indexed yet — create a minimal entry so the archive still propagates.
+      data.properties.push({
+        id: p.id,
+        name: p.name || (p.phase1 && p.phase1.prop_name) || 'Untitled',
+        dealFolderId: (p.drive && p.drive.folderId) || '',
+        capexFileId: (p.drive && p.drive.fileId) || '',
+        lastModified: p.updated || new Date().toISOString(),
+        lastEditor: (CURRENT_USER || {}).email || 'unknown',
+        archived: !!archived,
+      });
+    } else {
+      return;   // local-only property (no Drive folder) — nothing to propagate
+    }
+    await writeManifest(data);                    // persist → all devices see it on their next index fetch
+    renderHome();                                 // reflect the confirmed org-index state
+  } catch (_) {
+    // Best-effort: the local flag still holds; a later sync retries. Surface it
+    // so the user knows the org-wide change didn't land.
+    if (hasFolder) toast('Archived locally, but couldn’t update the shared index — will retry on next sync', 'error');
+  }
 }
 function setPropertyArchived(p, archived) {
-  p.archived = archived;                       // local hint
+  p.archived = archived;                       // local hint (menu label / offline)
   if (STATE && STATE.id === p.id) { STATE.archived = archived; saveState(); }
   else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));   // persist without bumping the open property
   if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
     const e = MANIFEST_CACHE.data.properties.find(x => x.id === p.id);
     if (e) e.archived = archived;              // reflect immediately in the cached index
   }
-  setManifestArchived(p.id, archived);         // async, best-effort → shared org index
+  setManifestArchived(p, archived);            // async → propagate org-wide to all devices
   toast(archived ? `Archived “${p.name || 'property'}”` : `Restored “${p.name || 'property'}” to Live`, 'success');
   renderHome();
 }
