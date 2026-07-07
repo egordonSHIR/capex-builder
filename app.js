@@ -3079,7 +3079,7 @@ function lightenHex(hex, blend) {
   return '#' + mix(r) + mix(g) + mix(b);
 }
 // Build a colored group <header> for the CAPEX group sections.
-function groupHeader(groupName) {
+function groupHeader(groupName, badgeNode) {
   const color = GROUP_COLORS[groupName];
   const txt = color ? textOn(color) : null;
   const headerAttrs = {
@@ -3088,9 +3088,30 @@ function groupHeader(groupName) {
   };
   if (color) headerAttrs.style = `background:${color};color:${txt};border-bottom-color:rgba(0,0,0,0.12)`;
   return el('header', headerAttrs,
-    el('span', { style: 'font-size:15px;font-weight:700' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
+    el('span', { style: 'font-size:15px;font-weight:700;flex:1' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
+    badgeNode || false,
     el('span', { class: 'chev', style: txt ? `color:${txt}` : '' }, '▼')
   );
+}
+
+// Update the per-section / per-group "N selected" badges shown on collapsed
+// Questionnaire headers. Cheap DOM walk over the badge placeholders.
+function refreshQuestionnaireBadges() {
+  const root = $('#phase-content');
+  if (!root) return;
+  root.querySelectorAll('[data-q-badge]').forEach(b => {
+    const [gi, si] = b.dataset.qBadge.split('.').map(Number);
+    const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
+    if (!sec) return;
+    let n = 0; sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) n++; });
+    b.textContent = `${n} selected`;
+  });
+  root.querySelectorAll('[data-q-badge-group]').forEach(b => {
+    const gi = Number(b.dataset.qBadgeGroup);
+    const g = SCHEMA.phase3[gi]; if (!g) return;
+    let n = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) n++; }));
+    b.textContent = `${n} selected`;
+  });
 }
 
 // ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
@@ -3107,6 +3128,7 @@ function renderPhase2() {
   const refreshCount = () => {
     const n = root.querySelector('[data-checked-count]');
     if (n) n.textContent = String(countChecked());
+    refreshQuestionnaireBadges();
   };
 
   SCHEMA.phase3.forEach((group, gi) => {
@@ -3155,10 +3177,12 @@ function renderPhase2() {
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
         : '';
+      const secChecked = sec.items.filter((_, ii) => isChecked(gi, si, ii)).length;
       const secNode = el('section', { class: 'section' },
         el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1' }, sec.name),
+          el('span', { class: 'section-collapsed-badge', 'data-q-badge': gi + '.' + si }, `${secChecked} selected`),
           el('span', { style: 'display:flex;align-items:center;gap:6px;flex-shrink:0' },
             selectAllBtn,
             clearBtn,
@@ -3169,7 +3193,10 @@ function renderPhase2() {
       );
       groupBody.appendChild(secNode);
     });
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name), groupBody);
+    let groupChecked = 0;
+    group.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) groupChecked++; }));
+    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-q-badge-group': gi }, `${groupChecked} selected`);
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge), groupBody);
     root.appendChild(groupNode);
   });
   return root;
@@ -3447,6 +3474,26 @@ function recomputePctRowsAndSummary(summaryNode) {
     renderDetailTotals(wrap, gi, si, ii);
   });
   if (summaryNode) updateDetailSummary(summaryNode);
+  refreshBudgetBadges();
+}
+// Update the per-section / per-group "$ subtotal" badges shown on collapsed
+// Budget headers (sum of $ Amt across each section's / group's checked items).
+function refreshBudgetBadges() {
+  const root = $('#phase-content');
+  if (!root) return;
+  root.querySelectorAll('[data-b-badge]').forEach(b => {
+    const [gi, si] = b.dataset.bBadge.split('.').map(Number);
+    const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
+    if (!sec) return;
+    let sum = 0; sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); });
+    b.textContent = fmtMoney(sum);
+  });
+  root.querySelectorAll('[data-b-badge-group]').forEach(b => {
+    const gi = Number(b.dataset.bBadgeGroup);
+    const g = SCHEMA.phase3[gi]; if (!g) return;
+    let sum = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
+    b.textContent = fmtMoney(sum);
+  });
 }
 // Re-populate every visible % group dropdown when CAPEX Groups change
 // (added / renamed / deleted) so the in-line item % selectors stay current
@@ -3646,6 +3693,7 @@ function renderPhase3() {
     const isInterior = group.name === 'Interior';
     const groupBody = el('div', { class: 'section-body group-body' });
     let groupHasChecked = false;
+    let groupSum = 0;
     // Derive sub-section + row tints from the group banner color. Sub-section
     // headers get a medium-light tint (still readable text); idle line-item
     // rows get an even lighter tint; rows with a non-zero $ Amt get a slightly
@@ -3669,13 +3717,17 @@ function renderPhase3() {
             : renderDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg })
         );
       });
+      let secSum = 0;
+      checkedItems.forEach(({ ii }) => { secSum += getDetailItemTotal(gi, si, ii); });
+      groupSum += secSum;
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
         : '';
       const secNode = el('section', { class: 'section' },
         el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', {}, sec.name),
+          el('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, sec.name),
+          el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si }, fmtMoney(secSum)),
           el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
         secBody
@@ -3683,7 +3735,8 @@ function renderPhase3() {
       groupBody.appendChild(secNode);
     });
     if (!groupHasChecked) return;
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name));
+    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
@@ -4799,6 +4852,12 @@ function renderApp() {
   else if (CURRENT_PHASE === 3) view = renderPhase3();
   else view = renderPhase4();
   main.appendChild(view);
+  // On navigation, start the section-heavy tabs (Basics / Questionnaire / Budget)
+  // fully collapsed by default. Finalize (4) keeps its own per-section collapse
+  // logic (Sanity auto-expands on issues, etc.).
+  if (CURRENT_PHASE <= 3) {
+    main.querySelectorAll('.section').forEach(s => s.classList.add('collapsed'));
+  }
   $$('.tab').forEach(t => t.classList.toggle('active', Number(t.dataset.phase) === CURRENT_PHASE));
   setTimeout(updateBasicsTabCheck, 0);
 }

@@ -110,6 +110,21 @@ main {
 .section-header .chev { transition: transform 0.2s; }
 .section.collapsed .chev { transform: rotate(-90deg); }
 .section.collapsed .section-body { display: none; }
+/* Per-section summary badge (Questionnaire "N selected" / Budget "$ subtotal"):
+   shown only when the section is collapsed, so it summarizes what's hidden. */
+.section-collapsed-badge {
+  display: none;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 9px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.28);
+  white-space: nowrap;
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.section.collapsed > .section-header .section-collapsed-badge { display: inline-block; }
 .section-body { padding: 8px 0; }
 
 .field {
