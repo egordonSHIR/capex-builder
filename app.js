@@ -1829,11 +1829,19 @@ function parseSurveyXlsx(wb) {
   }
   if (headerIdx < 0) throw new Error('Could not find header row');
   const headers = rows[headerIdx];
-  // The last column that contains "Site Total" — fall back to the last non-null column.
-  let siteTotalCol = headers.length - 1;
+  // Value column: the "Site Total" column (per-tract layouts, pre-2026-07-08)
+  // or the "Value" column (v3 single "SITE SUMMARY" layout). Fall back to the
+  // last header column.
+  let siteTotalCol = -1;
   for (let c = headers.length - 1; c >= 2; c--) {
     if (/site\s*total/i.test(_surveyStr(headers[c]))) { siteTotalCol = c; break; }
   }
+  if (siteTotalCol < 0) {
+    for (let c = 2; c < headers.length; c++) {
+      if (/^value$/i.test(_surveyStr(headers[c]))) { siteTotalCol = c; break; }
+    }
+  }
+  if (siteTotalCol < 0) siteTotalCol = headers.length - 1;
   // Tract columns are C..(siteTotalCol-1). First tract col is C (index 2).
   const tractCols = [];
   for (let c = 2; c < siteTotalCol; c++) {
@@ -1843,11 +1851,16 @@ function parseSurveyXlsx(wb) {
 
   const flat = {};
   const buildings = [];
-  let currentSection = null;   // '7' | '8' | '9' — which item we are inside
+  let currentSection = null;   // '7' | '7a' | '7b' | '7d' | '8' | '9' — which item we are inside
   let bldIdx = 0;
   const notes = [];
   const discrepancies = [];
   let inNotes = false, inDiscrepancies = false;
+  // v3 layout (2026-07-08 skill): a "BUILDINGS & SECTIONS" table replaces
+  // items 7/7a/7b/7d/8/9 — one row per building/section with Width | Length |
+  // Footprint | # Floors | Gross | Height | Roof | Facade | Pitch | Notes cols.
+  let tableMode = null;        // null | 'header' (banner seen) | 'rows'
+  let tcol = {};               // column indexes mapped from the table header
 
   const ensureBldAtIdx = (i) => {
     while (buildings.length <= i) buildings.push({
@@ -1889,11 +1902,76 @@ function parseSurveyXlsx(wb) {
     const isIndented = /^\s{2,}/.test(String(row[0] || ''));
 
     // ---- Footer detection ----
-    if (/^google maps cross-reference notes$/i.test(labelRaw)) { inNotes = true; inDiscrepancies = false; continue; }
-    if (/^discrepancies/i.test(labelRaw)) { inNotes = false; inDiscrepancies = true; continue; }
+    if (/^google maps cross-reference notes$/i.test(labelRaw)) { inNotes = true; inDiscrepancies = false; tableMode = null; continue; }
+    if (/^discrepancies/i.test(labelRaw)) { inNotes = false; inDiscrepancies = true; tableMode = null; continue; }
     if (inNotes) { if (labelRaw && labelRaw !== '—') notes.push(labelRaw); continue; }
     if (inDiscrepancies) {
       if (labelRaw && labelRaw !== '—') discrepancies.push(labelRaw.replace(/^•\s*/, ''));
+      continue;
+    }
+
+    // ---- BUILDINGS & SECTIONS table (v3 layout) ----
+    if (/^BUILDINGS\s*&\s*SECTIONS/i.test(labelRaw)) { tableMode = 'header'; currentSection = null; continue; }
+    if (tableMode === 'header') {
+      if (/^Building\s*\/?\s*Section/i.test(labelRaw)) {
+        tcol = {};
+        for (let c = 1; c < row.length; c++) {
+          const h = _surveyStr(row[c]).toLowerCase();
+          if (!h) continue;
+          // Anchored: "Gross SF (footprint × floors)" contains the words
+          // "footprint" and "floors" — only prefix matches are safe.
+          if (/^width/.test(h)) tcol.width = c;
+          else if (/^length/.test(h)) tcol.length = c;
+          else if (/^footprint/.test(h)) tcol.footprint = c;
+          else if (/^#?\s*floors|^stories/.test(h)) tcol.floors = c;
+          else if (/^gross/.test(h)) tcol.gross = c;
+          else if (/height/.test(h)) tcol.height = c;
+          else if (/^roof\s*sf/.test(h)) tcol.roof = c;
+          else if (/^facade/.test(h)) tcol.facade = c;
+          else if (/pitch/.test(h)) tcol.pitch = c;
+          else if (/notes|shape/.test(h)) tcol.notes = c;
+        }
+        tableMode = 'rows';
+      }
+      continue;
+    }
+    if (tableMode === 'rows') {
+      // "Roof connectivity: <text>" ends the table (free text, no field).
+      if (/^roof\s*connectivity/i.test(labelRaw)) { tableMode = null; continue; }
+      // "↳ … connected-building subtotal" rollups are display-only.
+      if (/↳/.test(labelRaw) || /subtotal/i.test(labelRaw)) continue;
+      // "TOTAL — all buildings/sections" carries the flat site totals.
+      if (/^TOTAL\s*[—–-]/i.test(labelRaw)) {
+        if (tcol.footprint != null) flat.total_footprint_sf = _surveyNum(row[tcol.footprint]);
+        if (tcol.roof != null) flat.total_roof_sf = _surveyNum(row[tcol.roof]);
+        if (tcol.facade != null) flat.total_facade_sf = _surveyNum(row[tcol.facade]);
+        continue;
+      }
+      // Anything else is one building/section row. Non-numeric Width/Length
+      // (e.g. "irregular" / "see notes") parse to '' — the description lives
+      // in the Notes/shape column, which fills `dimensions`.
+      const numCell = (v) => {
+        const s = _surveyStr(v);
+        return /\d/.test(s) ? _surveyNum(s) : '';   // text-only cells → blank, not 0
+      };
+      const b = {
+        label: labelRaw, footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
+        stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
+      };
+      if (tcol.width != null) b.width_ft = numCell(row[tcol.width]);
+      if (tcol.length != null) b.length_ft = numCell(row[tcol.length]);
+      if (tcol.footprint != null) b.footprint_sf = numCell(row[tcol.footprint]);
+      if (tcol.floors != null) b.stories = numCell(row[tcol.floors]);
+      if (tcol.height != null) b.height_ft = numCell(row[tcol.height]);
+      if (tcol.roof != null) b.roof_sf = numCell(row[tcol.roof]);
+      if (tcol.facade != null) b.facade_sf = numCell(row[tcol.facade]);
+      if (tcol.pitch != null) b.roof_pitch = _surveyStr(row[tcol.pitch]).replace(/\s*\([\d.x×:]+\)\s*$/, '');
+      if (tcol.notes != null) b.dimensions = _surveyStr(row[tcol.notes]);
+      if (tcol.gross != null) {
+        const g = _surveyNum(row[tcol.gross]);
+        if (g !== '') b.gross_sf = g;
+      }
+      buildings.push(b);
       continue;
     }
 
@@ -1904,14 +1982,23 @@ function parseSurveyXlsx(wb) {
     if (/^2\.\s*Land\s*area\s*\(SF\)/i.test(labelRaw)) { flat.land_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^2\.\s*Land\s*area\s*\(acres\)/i.test(labelRaw)) { flat.land_acres = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^3\.\s*Perimeter\s*[—-]+\s*TOTAL/i.test(labelRaw)) { flat.site_perimeter_lf = _surveyNum(siteVal); currentSection = null; continue; }
+    // v3 numeric fencing/gates rows — map straight onto the Basics number
+    // fields (fence_feet / vehicle_gates / pedestrian_gates; 0 = none).
+    // "# Curb Cuts" has no Basics field yet — recognized but skipped.
+    if (/^4\.\s*Fencing\s*[—–-]+\s*total/i.test(labelRaw)) { flat.fence_feet = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Vehicle/i.test(labelRaw)) { flat.vehicle_gates = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Pedestrian/i.test(labelRaw)) { flat.pedestrian_gates = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Curb/i.test(labelRaw)) { currentSection = null; continue; }
     if (/^4\.\s*Fencing/i.test(labelRaw)) {
-      // Fencing/gates have free-text per-tract; take the first non-"n/a" cell.
+      // Legacy free-text row: per-tract cells, else the single Value column.
       const txts = tractCols.map(t => _surveyStr(row[t.col])).filter(s => s && s.toLowerCase() !== 'n/a');
+      if (!txts.length) { const sv = _surveyStr(siteVal); if (sv && sv.toLowerCase() !== 'n/a') txts.push(sv); }
       flat.fencing_notes = txts.length ? txts.join(' / ') : 'n/a';
       currentSection = null; continue;
     }
     if (/^4\.\s*Gates/i.test(labelRaw)) {
       const txts = tractCols.map(t => _surveyStr(row[t.col])).filter(s => s && s.toLowerCase() !== 'n/a');
+      if (!txts.length) { const sv = _surveyStr(siteVal); if (sv && sv.toLowerCase() !== 'n/a') txts.push(sv); }
       flat.gates_notes = txts.length ? txts.join(' / ') : 'n/a';
       currentSection = null; continue;
     }
@@ -1928,7 +2015,7 @@ function parseSurveyXlsx(wb) {
     if (/^8\.\s*Roof\s*SF/i.test(labelRaw)) { flat.total_roof_sf = _surveyNum(siteVal); currentSection = '8'; bldIdx = 0; continue; }
     if (/^9\.\s*Facade\s*SF/i.test(labelRaw)) { flat.total_facade_sf = _surveyNum(siteVal); currentSection = '9'; bldIdx = 0; continue; }
     if (/^10\.\s*Landscaping/i.test(labelRaw)) { flat.landscaping_sf = _surveyNum(siteVal); currentSection = null; continue; }
-    if (/^\s*as\s*%\s*of\s*tract/i.test(labelRaw)) { currentSection = null; continue; }
+    if (/^\s*as\s*%\s*of\s*(tract|site)/i.test(labelRaw)) { currentSection = null; continue; }
     if (/^3\.\s*Perimeter\s*[—-]+\s*per side/i.test(labelRaw)) { currentSection = null; continue; }
     // Any OTHER numbered item we don't specifically handle (e.g. a future "7c.",
     // "8b. Roofs connected") must still END the current per-building section —
@@ -2023,6 +2110,7 @@ function applySurveyParsedData(parsed, sourcePdf) {
     'site_perimeter_lf', 'parking_lot_sf', 'other_impervious_sf', 'num_buildings',
     'total_footprint_sf', 'total_roof_sf', 'total_facade_sf', 'landscaping_sf',
     'fencing_notes', 'gates_notes',
+    'fence_feet', 'vehicle_gates', 'pedestrian_gates',   // v3 numeric fencing/gates
   ];
   let filled = 0;
   for (const k of flatKeys) {
@@ -2361,10 +2449,11 @@ async function processSurveyWithClaude(rebuild) {
 
 // ---------- SHIR survey workbook regeneration ----------
 // Rebuild the standard <Property>_SurveyBreakdownSpecs_<date>.xlsx from the
-// parsed survey object (AI path). Layout mirrors the survey-breakdown-specs
-// skill export closely enough that parseSurveyXlsx() re-imports it: title +
-// subtitle rows, an "Item | Unit | Tract 1 | Site Total" header, numbered item
-// rows, 4-space-indented per-building sub-rows under items 7/8/9, and the
+// parsed survey object (AI path). Mirrors the v3 (2026-07-08) skill layout —
+// which parseSurveyXlsx() re-imports: title + subtitle rows, a SITE SUMMARY
+// table ("Item | Source / Confidence | Value"), a BUILDINGS & SECTIONS table
+// (one row per building/section: Width | Length | Footprint | # Floors |
+// Gross | Height | Roof | Facade | Pitch | Notes) with a TOTAL row, and the
 // Google Maps notes + Discrepancies footer.
 async function generateSurveyBreakdownXlsx(parsed) {
   if (typeof ExcelJS === 'undefined') throw new Error('ExcelJS not loaded yet — try again');
@@ -2380,108 +2469,111 @@ async function generateSurveyBreakdownXlsx(parsed) {
   wb.creator = 'Capex Builder';
   wb.created = new Date();
   const ws = wb.addWorksheet('Survey Breakdown Specs');
-  ws.columns = [{ width: 48 }, { width: 10 }, { width: 28 }, { width: 16 }];
+  ws.columns = [
+    { width: 48 }, { width: 24 }, { width: 34 }, { width: 13 }, { width: 9 },
+    { width: 15 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 20 }, { width: 50 },
+  ];
 
   const title = ws.addRow([`${propName} — Survey Breakdown Specs — ${dateStr}`]);
   title.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   title.height = 24;
   title.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${title.number}:D${title.number}`);
+  ws.mergeCells(`A${title.number}:K${title.number}`);
 
   const subParts = [meta.address || '—'];
   if (meta.scale_paper) subParts.push(`Paper scale: ${meta.scale_paper}`);
   if (meta.ft_per_pixel != null && meta.ft_per_pixel !== '') subParts.push(`ft/pixel: ${meta.ft_per_pixel}`);
   const sub = ws.addRow([subParts.join('    |    ')]);
   sub.font = { italic: true, size: 10 };
-  ws.mergeCells(`A${sub.number}:D${sub.number}`);
-  ws.addRow([]);
+  ws.mergeCells(`A${sub.number}:K${sub.number}`);
 
-  const header = ws.addRow(['Item', 'Unit', 'Tract 1', 'Site Total']);
-  header.font = { bold: true };
-  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-  header.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
+  const banner = (text) => {
+    const r = ws.addRow([text]);
+    r.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+    ws.mergeCells(`A${r.number}:K${r.number}`);
+    return r;
+  };
 
   const num = (v) => {
     if (v == null || v === '') return '';
     const n = Number(v);
     return isFinite(n) ? n : '';
   };
-  // Numeric items carry their value in Site Total (col D — what the parser
-  // reads); free-text items (fencing/gates) carry it in the tract col (C).
-  const addItem = (label, unit, siteVal, opts = {}) => {
-    const r = ws.addRow([label, unit || '', opts.tractText || '', siteVal == null ? '' : siteVal]);
+  const has = (v) => v != null && v !== '';
+
+  // ---- SITE SUMMARY table: Item | Source / Confidence | Value ----
+  banner('SITE SUMMARY   (fee tracts; not broken out by parcel)');
+  const header = ws.addRow(['Item', 'Source / Confidence', 'Value']);
+  header.font = { bold: true };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+  header.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
+
+  const addItem = (label, value, opts = {}) => {
+    const r = ws.addRow([label, opts.source || '', value == null ? '' : value]);
     if (opts.bold) r.font = { bold: true };
-    if (typeof r.getCell(4).value === 'number') r.getCell(4).numFmt = '#,##0';
+    if (typeof r.getCell(3).value === 'number' && !opts.noFmt) r.getCell(3).numFmt = '#,##0';
     return r;
   };
 
-  addItem('1. Parking — Regular', 'spots', num(flat.parking_regular));
-  addItem('1. Parking — Handicapped', 'spots', num(flat.parking_spots_hc));
-  addItem('1. Parking — Total', 'spots', num(flat.parking_spots_existing), { bold: true });
-  addItem('2. Land area (SF)', 'SF', num(flat.land_sf));
-  addItem('2. Land area (acres)', 'acres', num(flat.land_acres));
-  addItem('3. Perimeter — TOTAL', 'LF', num(flat.site_perimeter_lf));
-  addItem('4. Fencing', 'notes', '', { tractText: flat.fencing_notes || 'n/a' });
-  addItem('4. Gates', 'notes', '', { tractText: flat.gates_notes || 'n/a' });
-  addItem('5. Parking lot SF', 'SF', num(flat.parking_lot_sf));
-  addItem('5b. Sidewalk / concrete flatwork SF', 'SF', num(flat.other_impervious_sf));
-  addItem('6. Building count', 'count', num(flat.num_buildings));
-
-  // The "(N Story, Ht X')" / "(pitch X:Y)" suffixes are what parseSurveyXlsx()
-  // extracts stories/height/pitch from — keep the exact shapes.
-  addItem('7. Building footprint', 'SF', num(flat.total_footprint_sf), { bold: true });
-  buildings.forEach((b, i) => {
-    const lbl = b.label || `Building ${i + 1}`;
-    let suffix = '';
-    if (b.stories != null && b.stories !== '') {
-      suffix = (b.height_ft != null && b.height_ft !== '')
-        ? ` (${b.stories} Story, Ht ${b.height_ft}')`
-        : ` (${b.stories} Story)`;
-    }
-    addItem(`    ${lbl}${suffix}`, 'SF', num(b.footprint_sf));
-  });
-  // 7a. Per-building dimensions — numeric Width/Length as their own attribute
-  // rows plus a "Footprint shape" free-text row (2026-07-08 skill format).
-  // Values ride in the tract column (col C), where parseSurveyXlsx() reads
-  // them back (matched to buildings by label).
-  if (buildings.some(b => b.dimensions || b.width_ft || b.length_ft)) {
-    addItem('7a. Dimensions (per building)', '', '', { bold: true });
-    buildings.forEach((b, i) => {
-      const lbl = b.label || `Building ${i + 1}`;
-      if (b.width_ft != null && b.width_ft !== '') addItem(`    ${lbl} — Width (ft)`, 'ft', '', { tractText: num(b.width_ft) });
-      if (b.length_ft != null && b.length_ft !== '') addItem(`    ${lbl} — Length (ft)`, 'ft', '', { tractText: num(b.length_ft) });
-      if (b.dimensions) addItem(`    ${lbl} — Footprint shape`, '', '', { tractText: b.dimensions });
-    });
+  addItem('1. Parking — Regular', num(flat.parking_regular));
+  addItem('1. Parking — Handicapped', num(flat.parking_spots_hc));
+  addItem('1. Parking — Total', num(flat.parking_spots_existing), { bold: true });
+  addItem('2. Land area (SF)', num(flat.land_sf));
+  addItem('2. Land area (acres)', num(flat.land_acres), { noFmt: true });
+  addItem('3. Perimeter — TOTAL (LF)', num(flat.site_perimeter_lf));
+  // Fencing/gates: numeric Basics-field rows (v3) when present, else the
+  // legacy free-text notes rows.
+  if (has(flat.fence_feet)) addItem('4. Fencing — total (LF shown on survey; 0 if none)', num(flat.fence_feet));
+  else addItem('4. Fencing — type / LF / location', flat.fencing_notes || 'n/a');
+  if (has(flat.vehicle_gates) || has(flat.pedestrian_gates)) {
+    addItem('4. Gates — # Vehicle Gates', num(flat.vehicle_gates));
+    addItem('4. Gates — # Pedestrian Gates', num(flat.pedestrian_gates));
+  } else {
+    addItem('4. Gates — count / type / location', flat.gates_notes || 'n/a');
   }
-  // 7d. Gross building area (footprint × floors) per building + TOTAL,
-  // mirroring the skill; a parsed 7d value is used when the two factors
-  // aren't both present.
+  addItem('5. Parking lot SF', num(flat.parking_lot_sf));
+  addItem('5b. Sidewalk / concrete flatwork SF', num(flat.other_impervious_sf));
+  addItem('6. Building count (physical structures)', num(flat.num_buildings));
+  addItem('10. Landscaping / dirt / grass SF (pervious)', num(flat.landscaping_sf));
+
+  // ---- BUILDINGS & SECTIONS table (one row per building/section) ----
   const grossOf = (b) => {
     const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
     return (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
   };
-  if (buildings.some(b => grossOf(b) > 0)) {
-    addItem('7d. Gross building area (footprint × floors)', 'SF', '', { bold: true });
-    let grossTotal = 0;
-    buildings.forEach((b, i) => {
-      const g = grossOf(b);
-      grossTotal += g;
-      addItem(`    ${b.label || `Building ${i + 1}`}`, 'SF', g || '');
-    });
-    addItem('7d. Gross building area — TOTAL (all floors, all buildings)', 'SF', grossTotal, { bold: true });
-  }
-  addItem('8. Roof SF', 'SF', num(flat.total_roof_sf), { bold: true });
+  ws.addRow([]);
+  banner('BUILDINGS & SECTIONS   (each building/section = one row; footprint, floors & gross SF together)');
+  const bHeader = ws.addRow([
+    'Building / Section', 'Width (ft)', 'Length (ft)', 'Footprint SF', '# Floors',
+    'Gross SF\n(footprint × floors)', 'Bldg Height (ft)', 'Roof SF', 'Facade SF', 'Roof Pitch', 'Notes / shape',
+  ]);
+  bHeader.font = { bold: true };
+  bHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+  bHeader.alignment = { wrapText: true, vertical: 'middle' };
+  bHeader.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
+  const tot = { fp: 0, gross: 0, roof: 0, facade: 0 };
   buildings.forEach((b, i) => {
-    const lbl = b.label || `Building ${i + 1}`;
-    const pitch = b.roof_pitch ? ` (pitch ${b.roof_pitch})` : '';
-    addItem(`    Roof — ${lbl}${pitch}`, 'SF', num(b.roof_sf));
+    const g = grossOf(b);
+    tot.fp += Number(b.footprint_sf) || 0;
+    tot.gross += g;
+    tot.roof += Number(b.roof_sf) || 0;
+    tot.facade += Number(b.facade_sf) || 0;
+    const r = ws.addRow([
+      b.label || `Building ${i + 1}`, num(b.width_ft), num(b.length_ft), num(b.footprint_sf),
+      num(b.stories), g || '', num(b.height_ft), num(b.roof_sf), num(b.facade_sf),
+      b.roof_pitch || '', b.dimensions || '',
+    ]);
+    [4, 6, 8, 9].forEach(c => { if (typeof r.getCell(c).value === 'number') r.getCell(c).numFmt = '#,##0'; });
   });
-  addItem('9. Facade SF', 'SF', num(flat.total_facade_sf), { bold: true });
-  buildings.forEach((b, i) => {
-    addItem(`    Facade — ${b.label || `Building ${i + 1}`}`, 'SF', num(b.facade_sf));
-  });
-  addItem('10. Landscaping', 'SF', num(flat.landscaping_sf));
+  const totRow = ws.addRow([
+    'TOTAL — all buildings/sections', '', '', num(flat.total_footprint_sf) || tot.fp || '',
+    '', tot.gross || '', '', num(flat.total_roof_sf) || tot.roof || '',
+    num(flat.total_facade_sf) || tot.facade || '', '', '',
+  ]);
+  totRow.font = { bold: true };
+  [4, 6, 8, 9].forEach(c => { if (typeof totRow.getCell(c).value === 'number') totRow.getCell(c).numFmt = '#,##0'; });
 
   ws.addRow([]);
   const notesHdr = ws.addRow(['Google Maps Cross-Reference Notes']);
