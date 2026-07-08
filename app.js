@@ -1556,8 +1556,8 @@ function ensureSurveyState() {
 }
 function addSurveyBuilding(row) {
   ensureSurveyState().buildings.push(row || {
-    label: '', footprint_sf: '', dimensions: '', stories: '', height_ft: '', roof_pitch: '',
-    roof_sf: '', facade_sf: '',
+    label: '', footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
+    stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
   });
   saveState();
 }
@@ -1644,10 +1644,15 @@ function renderSurveyBlock() {
     const totalFp = blds.reduce((a, b) => a + (Number(b.footprint_sf) || 0), 0);
     const totalRoof = blds.reduce((a, b) => a + (Number(b.roof_sf) || 0), 0);
     const totalFac = blds.reduce((a, b) => a + (Number(b.facade_sf) || 0), 0);
+    const totalGross = blds.reduce((a, b) => {
+      const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
+      return a + ((fp && st) ? fp * st : (Number(b.gross_sf) || 0));
+    }, 0);
     const summaryBits = [];
     if (blds.length) {
       summaryBits.push(`${blds.length} building${blds.length === 1 ? '' : 's'}`);
       if (totalFp) summaryBits.push(`${totalFp.toLocaleString()} sf footprint`);
+      if (totalGross && totalGross !== totalFp) summaryBits.push(`${totalGross.toLocaleString()} sf gross`);
       if (totalRoof) summaryBits.push(`${totalRoof.toLocaleString()} sf roof`);
       if (totalFac) summaryBits.push(`${totalFac.toLocaleString()} sf facade`);
     }
@@ -1703,6 +1708,7 @@ function renderSurveyBuildingRow(b, i, rebuild) {
   const metaText = (bb) => {
     const bits = [];
     if (bb.footprint_sf) bits.push(`${Number(bb.footprint_sf).toLocaleString()} sf fp`);
+    if (bb.width_ft && bb.length_ft) bits.push(`${bb.width_ft}'×${bb.length_ft}'`);
     if (bb.stories) bits.push(`${bb.stories} story`);
     if (bb.roof_pitch) bits.push(`${bb.roof_pitch} pitch`);
     return bits.join(' · ');
@@ -1726,7 +1732,16 @@ function renderSurveyBuildingRow(b, i, rebuild) {
       onClick: (e) => { e.stopPropagation(); removeSurveyBuilding(i); rebuild(); } }, '✕')
   ));
 
-  const updateMeta = () => { metaSpan.textContent = metaText(b); };
+  // Live gross-area line under the grid: footprint × stories (matches the
+  // survey's 7d definition); falls back to a parsed 7d value when the two
+  // factors aren't both filled in.
+  const grossLine = el('div', { class: 'muted small', style: 'padding:6px 2px 0' });
+  const refreshGross = () => {
+    const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
+    const g = (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
+    grossLine.textContent = g > 0 ? `Gross building area (footprint × floors): ${g.toLocaleString()} sf` : '';
+  };
+  const updateMeta = () => { metaSpan.textContent = metaText(b); refreshGross(); };
   const numField = (label, key, step) => el('div', { class: 'field' },
     el('label', {}, label),
     makeNumberInput(b[key], (v) => { updateSurveyBuilding(i, { [key]: v }); b[key] = v; updateMeta(); }, { min: 0, step })
@@ -1745,18 +1760,22 @@ function renderSurveyBuildingRow(b, i, rebuild) {
     })()
   );
 
-  // Dimensions is a free-text description (W × L, envelope shape) — often a full
-  // sentence — so it gets its own full-width row above the numeric grid.
-  details.appendChild(textField('Dimensions (W × L)', 'dimensions', "e.g. ~219' x 87'; irregular / stepped plan"));
+  // Numeric Width/Length live in the grid; irregular plans keep a free-text
+  // shape description on its own full-width row above it.
+  details.appendChild(textField('Dimensions / Shape Notes', 'dimensions', "e.g. irregular L-shape wrapping courtyard; envelope ~219' x 87'"));
 
   details.appendChild(el('div', { class: 'unit-grid' },
     numField('Footprint SF', 'footprint_sf'),
+    numField('Width (ft)', 'width_ft'),
+    numField('Length (ft)', 'length_ft'),
     numField('Stories', 'stories'),
     numField('Height (ft)', 'height_ft'),
     textField('Roof Pitch', 'roof_pitch', 'e.g. 4:12'),
     numField('Roof SF (pitch-adj)', 'roof_sf'),
     numField('Facade SF', 'facade_sf')
   ));
+  refreshGross();
+  details.appendChild(grossLine);
   return wrap;
 }
 
@@ -1832,10 +1851,24 @@ function parseSurveyXlsx(wb) {
 
   const ensureBldAtIdx = (i) => {
     while (buildings.length <= i) buildings.push({
-      label: '', footprint_sf: '', dimensions: '', stories: '', height_ft: '',
-      roof_pitch: '', roof_sf: '', facade_sf: '',
+      label: '', footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
+      stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
     });
     return buildings[i];
+  };
+  // Find a building (created under item 7) by its label — 7a/7b/7d sub-rows
+  // repeat the building label (7a may span several rows per building, e.g.
+  // "<label> — Width (ft)"), so index-based mapping doesn't work there.
+  const _normBldLabel = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const findBldByLabel = (lbl) => {
+    const nl = _normBldLabel(lbl);
+    if (!nl) return null;
+    let hit = buildings.find(b => _normBldLabel(b.label) === nl);
+    if (!hit) hit = buildings.find(b => {
+      const nb = _normBldLabel(b.label);
+      return nb && (nb.startsWith(nl) || nl.startsWith(nb));
+    });
+    return hit || null;
   };
   // Extract "(N Story, Ht X.X')" → {stories, height_ft}; strip from label.
   const extractStoryHeight = (label) => {
@@ -1883,17 +1916,26 @@ function parseSurveyXlsx(wb) {
       currentSection = null; continue;
     }
     if (/^5\.\s*Parking\s*lot\s*SF/i.test(labelRaw)) { flat.parking_lot_sf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^5b\.\s*Sidewalk/i.test(labelRaw)) { flat.other_impervious_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^6\.\s*Building\s*count/i.test(labelRaw)) { flat.num_buildings = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^7\.\s*Building\s*footprint/i.test(labelRaw)) { flat.total_footprint_sf = _surveyNum(siteVal); currentSection = '7'; bldIdx = 0; continue; }
     if (/^7a\.\s*Dimensions/i.test(labelRaw)) { currentSection = '7a'; bldIdx = 0; continue; }
     if (/^7b\.\s*Stories/i.test(labelRaw)) { currentSection = '7b'; bldIdx = 0; continue; }
+    // 7d appears twice: the per-building block header AND a "— TOTAL" summary
+    // row (Σ footprint × floors). Same regex handles both; the TOTAL row has no
+    // indented rows after it before item 8 resets the section.
+    if (/^7d\.\s*Gross\s*building\s*area/i.test(labelRaw)) { currentSection = '7d'; bldIdx = 0; continue; }
     if (/^8\.\s*Roof\s*SF/i.test(labelRaw)) { flat.total_roof_sf = _surveyNum(siteVal); currentSection = '8'; bldIdx = 0; continue; }
     if (/^9\.\s*Facade\s*SF/i.test(labelRaw)) { flat.total_facade_sf = _surveyNum(siteVal); currentSection = '9'; bldIdx = 0; continue; }
     if (/^10\.\s*Landscaping/i.test(labelRaw)) { flat.landscaping_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^\s*as\s*%\s*of\s*tract/i.test(labelRaw)) { currentSection = null; continue; }
     if (/^3\.\s*Perimeter\s*[—-]+\s*per side/i.test(labelRaw)) { currentSection = null; continue; }
+    // Any OTHER numbered item we don't specifically handle (e.g. a future "7c.",
+    // "8b. Roofs connected") must still END the current per-building section —
+    // otherwise its indented sub-rows would be misread as extra buildings.
+    if (!isIndented && /^\d+[a-z]?\.\s/i.test(labelRaw)) { currentSection = null; continue; }
 
-    // ---- Indented sub-rows under sections 7/7a/7b/8/9 ----
+    // ---- Indented sub-rows under sections 7/7a/7b/7d/8/9 ----
     if (isIndented && currentSection) {
       const trimmed = labelRaw.trim();
       // 7a (Dimensions) and 7b (Stories/height) carry free text in the tract
@@ -1912,17 +1954,48 @@ function parseSurveyXlsx(wb) {
         b.footprint_sf = _surveyNum(siteVal);
         bldIdx++;
       } else if (currentSection === '7a') {
-        const b = ensureBldAtIdx(bldIdx);
-        if (freeText) b.dimensions = freeText;
-        bldIdx++;
+        // New format (2026-07-08 skill): one row PER ATTRIBUTE — "<label> —
+        // Width (ft)" / "<label> — Length (ft)" / "<label> — Footprint shape
+        // (…)" — so a building spans several rows and rows are matched to
+        // buildings BY LABEL, never by index. Greedy (.*) strips only the LAST
+        // dash-delimited suffix (labels themselves contain dashes).
+        // Old format: a single free-text dimensions row per building.
+        const wM = trimmed.match(/^(.*)\s*[—–-]\s*Width\s*\(ft\)\s*$/i);
+        const lM = trimmed.match(/^(.*)\s*[—–-]\s*Length\s*\(ft\)\s*$/i);
+        const sM = trimmed.match(/^(.*)\s*[—–-]\s*Footprint\s*shape/i);
+        if (wM || lM || sM) {
+          const b = findBldByLabel((wM || lM || sM)[1]);
+          if (b) {
+            if (wM) b.width_ft = _surveyNum(freeText);
+            else if (lM) b.length_ft = _surveyNum(freeText);
+            else if (freeText) b.dimensions = freeText;
+          }
+          // no bldIdx++ — attribute rows aren't 1:1 with buildings, and an
+          // unmatched label must NOT create a phantom building.
+        } else {
+          const b = findBldByLabel(trimmed) || ensureBldAtIdx(bldIdx);
+          if (freeText) b.dimensions = freeText;
+          bldIdx++;
+        }
       } else if (currentSection === '7b') {
-        const b = ensureBldAtIdx(bldIdx);
+        const b = findBldByLabel(trimmed) || ensureBldAtIdx(bldIdx);
         // e.g. "4-story / 57.5 ft" | "1-story" — pull the story count and height.
         const sm = freeText.match(/(\d+)\s*-?\s*story/i);
         const hm = freeText.match(/([\d.]+)\s*(?:ft\b|feet\b|['′])/i);
         if (sm) b.stories = Number(sm[1]);
         if (hm) b.height_ft = Number(hm[1]);
         bldIdx++;
+      } else if (currentSection === '7d') {
+        // Per-building gross area (footprint × floors). Skip the "↳ …
+        // connected-building subtotal" rollup rows; match by label only —
+        // never create phantom buildings here.
+        if (!/↳|subtotal/i.test(trimmed)) {
+          const b = findBldByLabel(trimmed);
+          if (b) {
+            const g = _surveyNum(siteVal);
+            b.gross_sf = g !== '' ? g : _surveyNum(freeText);
+          }
+        }
       } else if (currentSection === '8') {
         // "Roof — <name>  (pitch X:Y (...))"
         const pitchM = trimmed.match(/\(\s*pitch\s+([^)]+?)(?:\s*\(.*\))?\s*\)/i);
@@ -1947,8 +2020,8 @@ function applySurveyParsedData(parsed, sourcePdf) {
   ensureSurveyState();
   const flatKeys = [
     'parking_spots_hc', 'parking_spots_existing', 'land_sf', 'land_acres',
-    'site_perimeter_lf', 'parking_lot_sf', 'num_buildings', 'total_footprint_sf',
-    'total_roof_sf', 'total_facade_sf', 'landscaping_sf',
+    'site_perimeter_lf', 'parking_lot_sf', 'other_impervious_sf', 'num_buildings',
+    'total_footprint_sf', 'total_roof_sf', 'total_facade_sf', 'landscaping_sf',
     'fencing_notes', 'gates_notes',
   ];
   let filled = 0;
@@ -2352,6 +2425,7 @@ async function generateSurveyBreakdownXlsx(parsed) {
   addItem('4. Fencing', 'notes', '', { tractText: flat.fencing_notes || 'n/a' });
   addItem('4. Gates', 'notes', '', { tractText: flat.gates_notes || 'n/a' });
   addItem('5. Parking lot SF', 'SF', num(flat.parking_lot_sf));
+  addItem('5b. Sidewalk / concrete flatwork SF', 'SF', num(flat.other_impervious_sf));
   addItem('6. Building count', 'count', num(flat.num_buildings));
 
   // The "(N Story, Ht X')" / "(pitch X:Y)" suffixes are what parseSurveyXlsx()
@@ -2367,14 +2441,35 @@ async function generateSurveyBreakdownXlsx(parsed) {
     }
     addItem(`    ${lbl}${suffix}`, 'SF', num(b.footprint_sf));
   });
-  // 7a. Per-building dimensions — free text carried in the tract column (col C),
-  // the same place parseSurveyXlsx() reads it back from. Only emitted when at
-  // least one building has a dimensions value.
-  if (buildings.some(b => b.dimensions)) {
-    addItem('7a. Dimensions (W × L, per building)', '', '', { bold: true });
+  // 7a. Per-building dimensions — numeric Width/Length as their own attribute
+  // rows plus a "Footprint shape" free-text row (2026-07-08 skill format).
+  // Values ride in the tract column (col C), where parseSurveyXlsx() reads
+  // them back (matched to buildings by label).
+  if (buildings.some(b => b.dimensions || b.width_ft || b.length_ft)) {
+    addItem('7a. Dimensions (per building)', '', '', { bold: true });
     buildings.forEach((b, i) => {
-      addItem(`    ${b.label || `Building ${i + 1}`}`, '', '', { tractText: b.dimensions || '' });
+      const lbl = b.label || `Building ${i + 1}`;
+      if (b.width_ft != null && b.width_ft !== '') addItem(`    ${lbl} — Width (ft)`, 'ft', '', { tractText: num(b.width_ft) });
+      if (b.length_ft != null && b.length_ft !== '') addItem(`    ${lbl} — Length (ft)`, 'ft', '', { tractText: num(b.length_ft) });
+      if (b.dimensions) addItem(`    ${lbl} — Footprint shape`, '', '', { tractText: b.dimensions });
     });
+  }
+  // 7d. Gross building area (footprint × floors) per building + TOTAL,
+  // mirroring the skill; a parsed 7d value is used when the two factors
+  // aren't both present.
+  const grossOf = (b) => {
+    const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
+    return (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
+  };
+  if (buildings.some(b => grossOf(b) > 0)) {
+    addItem('7d. Gross building area (footprint × floors)', 'SF', '', { bold: true });
+    let grossTotal = 0;
+    buildings.forEach((b, i) => {
+      const g = grossOf(b);
+      grossTotal += g;
+      addItem(`    ${b.label || `Building ${i + 1}`}`, 'SF', g || '');
+    });
+    addItem('7d. Gross building area — TOTAL (all floors, all buildings)', 'SF', grossTotal, { bold: true });
   }
   addItem('8. Roof SF', 'SF', num(flat.total_roof_sf), { bold: true });
   buildings.forEach((b, i) => {
