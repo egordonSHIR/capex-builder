@@ -1557,7 +1557,7 @@ function ensureSurveyState() {
 function addSurveyBuilding(row) {
   ensureSurveyState().buildings.push(row || {
     label: '', footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
-    stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
+    stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '', envelope_cf: '',
   });
   saveState();
 }
@@ -1732,14 +1732,18 @@ function renderSurveyBuildingRow(b, i, rebuild) {
       onClick: (e) => { e.stopPropagation(); removeSurveyBuilding(i); rebuild(); } }, '✕')
   ));
 
-  // Live gross-area line under the grid: footprint × stories (matches the
-  // survey's 7d definition); falls back to a parsed 7d value when the two
-  // factors aren't both filled in.
+  // Live gross-area + envelope line under the grid: gross = footprint × floors,
+  // envelope = footprint × height (both fall back to a parsed value when the
+  // factors aren't both filled in).
   const grossLine = el('div', { class: 'muted small', style: 'padding:6px 2px 0' });
   const refreshGross = () => {
-    const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
+    const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0, ht = Number(b.height_ft) || 0;
     const g = (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
-    grossLine.textContent = g > 0 ? `Gross building area (footprint × floors): ${g.toLocaleString()} sf` : '';
+    const env = (fp && ht) ? fp * ht : (Number(b.envelope_cf) || 0);
+    const bits = [];
+    if (g > 0) bits.push(`Gross area (footprint × floors): ${g.toLocaleString()} sf`);
+    if (env > 0) bits.push(`Envelope (footprint × height): ${env.toLocaleString()} cf`);
+    grossLine.textContent = bits.join('  ·  ');
   };
   const updateMeta = () => { metaSpan.textContent = metaText(b); refreshGross(); };
   const numField = (label, key, step) => el('div', { class: 'field' },
@@ -1865,7 +1869,7 @@ function parseSurveyXlsx(wb) {
   const ensureBldAtIdx = (i) => {
     while (buildings.length <= i) buildings.push({
       label: '', footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
-      stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
+      stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '', envelope_cf: '',
     });
     return buildings[i];
   };
@@ -1918,14 +1922,17 @@ function parseSurveyXlsx(wb) {
         for (let c = 1; c < row.length; c++) {
           const h = _surveyStr(row[c]).toLowerCase();
           if (!h) continue;
-          // Anchored: "Gross SF (footprint × floors)" contains the words
-          // "footprint" and "floors" — only prefix matches are safe.
+          // Prefix-anchored: several headers embed other field words in
+          // parenthetical formulas — "Gross SF (fp × floors)" contains
+          // "floors", "Envelope CF (fp × height)" contains "height" — so only
+          // start-of-string matches are safe.
           if (/^width/.test(h)) tcol.width = c;
           else if (/^length/.test(h)) tcol.length = c;
           else if (/^footprint/.test(h)) tcol.footprint = c;
           else if (/^#?\s*floors|^stories/.test(h)) tcol.floors = c;
           else if (/^gross/.test(h)) tcol.gross = c;
-          else if (/height/.test(h)) tcol.height = c;
+          else if (/^envelope/.test(h)) tcol.envelope = c;   // Envelope CF (fp × height) — cubic ft
+          else if (/^(bldg\s*)?height/.test(h)) tcol.height = c;
           else if (/^roof\s*sf/.test(h)) tcol.roof = c;
           else if (/^facade/.test(h)) tcol.facade = c;
           else if (/pitch/.test(h)) tcol.pitch = c;
@@ -1936,16 +1943,19 @@ function parseSurveyXlsx(wb) {
       continue;
     }
     if (tableMode === 'rows') {
-      // "Roof connectivity: <text>" ends the table (free text, no field).
-      if (/^roof\s*connectivity/i.test(labelRaw)) { tableMode = null; continue; }
-      // "↳ … connected-building subtotal" rollups are display-only.
-      if (/↳/.test(labelRaw) || /subtotal/i.test(labelRaw)) continue;
-      // "TOTAL — all buildings/sections" carries the flat site totals.
+      // "Roof connectivity: <text>" / a "Gross SF = …" legend line end the table.
+      if (/^roof\s*connectivity/i.test(labelRaw) || /^gross\s*sf\s*=/i.test(labelRaw)) { tableMode = null; continue; }
+      // "▼ <group> — connected building (N sections)" group-header rows and
+      // "↳ … building subtotal" rollups are display-only — never buildings.
+      if (/^▼/.test(labelRaw) || /↳/.test(labelRaw) || /subtotal/i.test(labelRaw)) continue;
+      // "TOTAL — all buildings/sections" carries the flat site totals; it is
+      // the last data row — stop table parsing so trailing legend/notes rows
+      // can't be misread as buildings.
       if (/^TOTAL\s*[—–-]/i.test(labelRaw)) {
         if (tcol.footprint != null) flat.total_footprint_sf = _surveyNum(row[tcol.footprint]);
         if (tcol.roof != null) flat.total_roof_sf = _surveyNum(row[tcol.roof]);
         if (tcol.facade != null) flat.total_facade_sf = _surveyNum(row[tcol.facade]);
-        continue;
+        tableMode = null; continue;
       }
       // Anything else is one building/section row. Non-numeric Width/Length
       // (e.g. "irregular" / "see notes") parse to '' — the description lives
@@ -1956,7 +1966,7 @@ function parseSurveyXlsx(wb) {
       };
       const b = {
         label: labelRaw, footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
-        stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '',
+        stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '', envelope_cf: '',
       };
       if (tcol.width != null) b.width_ft = numCell(row[tcol.width]);
       if (tcol.length != null) b.length_ft = numCell(row[tcol.length]);
@@ -1965,13 +1975,18 @@ function parseSurveyXlsx(wb) {
       if (tcol.height != null) b.height_ft = numCell(row[tcol.height]);
       if (tcol.roof != null) b.roof_sf = numCell(row[tcol.roof]);
       if (tcol.facade != null) b.facade_sf = numCell(row[tcol.facade]);
+      if (tcol.envelope != null) b.envelope_cf = numCell(row[tcol.envelope]);
       if (tcol.pitch != null) b.roof_pitch = _surveyStr(row[tcol.pitch]).replace(/\s*\([\d.x×:]+\)\s*$/, '');
       if (tcol.notes != null) b.dimensions = _surveyStr(row[tcol.notes]);
       if (tcol.gross != null) {
         const g = _surveyNum(row[tcol.gross]);
         if (g !== '') b.gross_sf = g;
       }
-      buildings.push(b);
+      // Skip label/group/legend rows that carry no dimensional data at all —
+      // a real building/section always has at least a footprint or gross SF.
+      const hasData = [b.footprint_sf, b.gross_sf, b.width_ft, b.length_ft, b.roof_sf, b.facade_sf]
+        .some(v => v !== '' && v != null);
+      if (hasData) buildings.push(b);
       continue;
     }
 
@@ -2260,7 +2275,8 @@ async function _listSurveyReportCandidates() {
   const files = await driveListFilesInFolder(ts.id);
   const matches = files.filter(f =>
     /\.xlsx?$/i.test(f.name) &&
-    /survey(breakdown|layout)specs/i.test(f.name.replace(/[\s_\-]/g, ''))
+    // matches SurveySpecs (2026-07-08 naming) + legacy SurveyBreakdownSpecs / SurveyLayoutSpecs
+    /survey(breakdown|layout)?specs/i.test(f.name.replace(/[\s_\-]/g, ''))
   );
   const dateOf = (name) => {
     const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
@@ -2470,8 +2486,8 @@ async function generateSurveyBreakdownXlsx(parsed) {
   wb.created = new Date();
   const ws = wb.addWorksheet('Survey Breakdown Specs');
   ws.columns = [
-    { width: 48 }, { width: 24 }, { width: 34 }, { width: 13 }, { width: 9 },
-    { width: 15 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 20 }, { width: 50 },
+    { width: 48 }, { width: 12 }, { width: 12 }, { width: 13 }, { width: 9 },
+    { width: 13 }, { width: 15 }, { width: 16 }, { width: 11 }, { width: 11 }, { width: 20 }, { width: 50 },
   ];
 
   const title = ws.addRow([`${propName} — Survey Breakdown Specs — ${dateStr}`]);
@@ -2479,20 +2495,20 @@ async function generateSurveyBreakdownXlsx(parsed) {
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   title.height = 24;
   title.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${title.number}:K${title.number}`);
+  ws.mergeCells(`A${title.number}:L${title.number}`);
 
   const subParts = [meta.address || '—'];
   if (meta.scale_paper) subParts.push(`Paper scale: ${meta.scale_paper}`);
   if (meta.ft_per_pixel != null && meta.ft_per_pixel !== '') subParts.push(`ft/pixel: ${meta.ft_per_pixel}`);
   const sub = ws.addRow([subParts.join('    |    ')]);
   sub.font = { italic: true, size: 10 };
-  ws.mergeCells(`A${sub.number}:K${sub.number}`);
+  ws.mergeCells(`A${sub.number}:L${sub.number}`);
 
   const banner = (text) => {
     const r = ws.addRow([text]);
     r.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
-    ws.mergeCells(`A${r.number}:K${r.number}`);
+    ws.mergeCells(`A${r.number}:L${r.number}`);
     return r;
   };
 
@@ -2543,37 +2559,42 @@ async function generateSurveyBreakdownXlsx(parsed) {
     const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
     return (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
   };
+  const envelopeOf = (b) => {
+    const fp = Number(b.footprint_sf) || 0, ht = Number(b.height_ft) || 0;
+    return (fp && ht) ? fp * ht : (Number(b.envelope_cf) || 0);
+  };
   ws.addRow([]);
-  banner('BUILDINGS & SECTIONS   (each building/section = one row; footprint, floors & gross SF together)');
+  banner('BUILDINGS & SECTIONS   (every building = 1+ sections; each section has its own W × L × H, floors, gross SF & envelope CF)');
   const bHeader = ws.addRow([
-    'Building / Section', 'Width (ft)', 'Length (ft)', 'Footprint SF', '# Floors',
-    'Gross SF\n(footprint × floors)', 'Bldg Height (ft)', 'Roof SF', 'Facade SF', 'Roof Pitch', 'Notes / shape',
+    'Building / Section', 'Width (ft)', 'Length (ft)', 'Height (ft)', '# Floors', 'Footprint SF',
+    'Gross SF\n(fp × floors)', 'Envelope CF\n(fp × height)', 'Roof SF', 'Facade SF', 'Roof Pitch', 'Notes / shape',
   ]);
   bHeader.font = { bold: true };
   bHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
   bHeader.alignment = { wrapText: true, vertical: 'middle' };
   bHeader.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
-  const tot = { fp: 0, gross: 0, roof: 0, facade: 0 };
+  const numFmtRow = (r) => r.eachCell((c) => { if (typeof c.value === 'number') c.numFmt = '#,##0.##'; });
+  const tot = { fp: 0, gross: 0, env: 0, roof: 0, facade: 0 };
   buildings.forEach((b, i) => {
-    const g = grossOf(b);
+    const g = grossOf(b), env = envelopeOf(b);
     tot.fp += Number(b.footprint_sf) || 0;
     tot.gross += g;
+    tot.env += env;
     tot.roof += Number(b.roof_sf) || 0;
     tot.facade += Number(b.facade_sf) || 0;
-    const r = ws.addRow([
-      b.label || `Building ${i + 1}`, num(b.width_ft), num(b.length_ft), num(b.footprint_sf),
-      num(b.stories), g || '', num(b.height_ft), num(b.roof_sf), num(b.facade_sf),
+    numFmtRow(ws.addRow([
+      b.label || `Building ${i + 1}`, num(b.width_ft), num(b.length_ft), num(b.height_ft),
+      num(b.stories), num(b.footprint_sf), g || '', env || '', num(b.roof_sf), num(b.facade_sf),
       b.roof_pitch || '', b.dimensions || '',
-    ]);
-    [4, 6, 8, 9].forEach(c => { if (typeof r.getCell(c).value === 'number') r.getCell(c).numFmt = '#,##0'; });
+    ]));
   });
   const totRow = ws.addRow([
-    'TOTAL — all buildings/sections', '', '', num(flat.total_footprint_sf) || tot.fp || '',
-    '', tot.gross || '', '', num(flat.total_roof_sf) || tot.roof || '',
+    'TOTAL — all buildings/sections', '', '', '', '', num(flat.total_footprint_sf) || tot.fp || '',
+    tot.gross || '', tot.env || '', num(flat.total_roof_sf) || tot.roof || '',
     num(flat.total_facade_sf) || tot.facade || '', '', '',
   ]);
   totRow.font = { bold: true };
-  [4, 6, 8, 9].forEach(c => { if (typeof totRow.getCell(c).value === 'number') totRow.getCell(c).numFmt = '#,##0'; });
+  numFmtRow(totRow);
 
   ws.addRow([]);
   const notesHdr = ws.addRow(['Google Maps Cross-Reference Notes']);
