@@ -1556,7 +1556,7 @@ function ensureSurveyState() {
 }
 function addSurveyBuilding(row) {
   ensureSurveyState().buildings.push(row || {
-    label: '', footprint_sf: '', stories: '', height_ft: '', roof_pitch: '',
+    label: '', footprint_sf: '', dimensions: '', stories: '', height_ft: '', roof_pitch: '',
     roof_sf: '', facade_sf: '',
   });
   saveState();
@@ -1745,6 +1745,10 @@ function renderSurveyBuildingRow(b, i, rebuild) {
     })()
   );
 
+  // Dimensions is a free-text description (W × L, envelope shape) — often a full
+  // sentence — so it gets its own full-width row above the numeric grid.
+  details.appendChild(textField('Dimensions (W × L)', 'dimensions', "e.g. ~219' x 87'; irregular / stepped plan"));
+
   details.appendChild(el('div', { class: 'unit-grid' },
     numField('Footprint SF', 'footprint_sf'),
     numField('Stories', 'stories'),
@@ -1828,7 +1832,7 @@ function parseSurveyXlsx(wb) {
 
   const ensureBldAtIdx = (i) => {
     while (buildings.length <= i) buildings.push({
-      label: '', footprint_sf: '', stories: '', height_ft: '',
+      label: '', footprint_sf: '', dimensions: '', stories: '', height_ft: '',
       roof_pitch: '', roof_sf: '', facade_sf: '',
     });
     return buildings[i];
@@ -1881,15 +1885,24 @@ function parseSurveyXlsx(wb) {
     if (/^5\.\s*Parking\s*lot\s*SF/i.test(labelRaw)) { flat.parking_lot_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^6\.\s*Building\s*count/i.test(labelRaw)) { flat.num_buildings = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^7\.\s*Building\s*footprint/i.test(labelRaw)) { flat.total_footprint_sf = _surveyNum(siteVal); currentSection = '7'; bldIdx = 0; continue; }
+    if (/^7a\.\s*Dimensions/i.test(labelRaw)) { currentSection = '7a'; bldIdx = 0; continue; }
+    if (/^7b\.\s*Stories/i.test(labelRaw)) { currentSection = '7b'; bldIdx = 0; continue; }
     if (/^8\.\s*Roof\s*SF/i.test(labelRaw)) { flat.total_roof_sf = _surveyNum(siteVal); currentSection = '8'; bldIdx = 0; continue; }
     if (/^9\.\s*Facade\s*SF/i.test(labelRaw)) { flat.total_facade_sf = _surveyNum(siteVal); currentSection = '9'; bldIdx = 0; continue; }
     if (/^10\.\s*Landscaping/i.test(labelRaw)) { flat.landscaping_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^\s*as\s*%\s*of\s*tract/i.test(labelRaw)) { currentSection = null; continue; }
     if (/^3\.\s*Perimeter\s*[—-]+\s*per side/i.test(labelRaw)) { currentSection = null; continue; }
 
-    // ---- Indented sub-rows under sections 7/8/9 ----
+    // ---- Indented sub-rows under sections 7/7a/7b/8/9 ----
     if (isIndented && currentSection) {
       const trimmed = labelRaw.trim();
+      // 7a (Dimensions) and 7b (Stories/height) carry free text in the tract
+      // column(s), not the numeric Site Total column — grab the first non-empty.
+      const freeText = (() => {
+        const t = tractCols.map(tc => _surveyStr(row[tc.col])).filter(Boolean);
+        if (t.length) return t.join(' / ');
+        return _surveyStr(siteVal);
+      })();
       if (currentSection === '7') {
         const info = extractStoryHeight(trimmed);
         const b = ensureBldAtIdx(bldIdx);
@@ -1897,6 +1910,18 @@ function parseSurveyXlsx(wb) {
         if (info.stories !== '') b.stories = info.stories;
         if (info.height_ft !== '') b.height_ft = info.height_ft;
         b.footprint_sf = _surveyNum(siteVal);
+        bldIdx++;
+      } else if (currentSection === '7a') {
+        const b = ensureBldAtIdx(bldIdx);
+        if (freeText) b.dimensions = freeText;
+        bldIdx++;
+      } else if (currentSection === '7b') {
+        const b = ensureBldAtIdx(bldIdx);
+        // e.g. "4-story / 57.5 ft" | "1-story" — pull the story count and height.
+        const sm = freeText.match(/(\d+)\s*-?\s*story/i);
+        const hm = freeText.match(/([\d.]+)\s*(?:ft\b|feet\b|['′])/i);
+        if (sm) b.stories = Number(sm[1]);
+        if (hm) b.height_ft = Number(hm[1]);
         bldIdx++;
       } else if (currentSection === '8') {
         // "Roof — <name>  (pitch X:Y (...))"
@@ -2342,6 +2367,15 @@ async function generateSurveyBreakdownXlsx(parsed) {
     }
     addItem(`    ${lbl}${suffix}`, 'SF', num(b.footprint_sf));
   });
+  // 7a. Per-building dimensions — free text carried in the tract column (col C),
+  // the same place parseSurveyXlsx() reads it back from. Only emitted when at
+  // least one building has a dimensions value.
+  if (buildings.some(b => b.dimensions)) {
+    addItem('7a. Dimensions (W × L, per building)', '', '', { bold: true });
+    buildings.forEach((b, i) => {
+      addItem(`    ${b.label || `Building ${i + 1}`}`, '', '', { tractText: b.dimensions || '' });
+    });
+  }
   addItem('8. Roof SF', 'SF', num(flat.total_roof_sf), { bold: true });
   buildings.forEach((b, i) => {
     const lbl = b.label || `Building ${i + 1}`;
