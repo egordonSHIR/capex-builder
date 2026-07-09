@@ -414,6 +414,7 @@ function openProperty(id) {
   // Kick off the auto-sync loop for this property — pushes dirty changes,
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
+  if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();   // resume an in-flight survey job
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
   reconcileFromDrive();   // Drive-authoritative: adopt a newer remote copy if this device is clean
 }
@@ -445,6 +446,7 @@ function closeProperty() {
   // heartbeat. Fire-and-forget on the lock release; the heartbeat goes stale
   // (>2.5 min) anyway, so an inflight failure here is harmless.
   if (typeof stopAutoSync === 'function') stopAutoSync();
+  if (typeof stopSurveyPoll === 'function') stopSurveyPoll();
   if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
   STORE.currentPropertyId = null;
   STATE = null;
@@ -1552,6 +1554,8 @@ function ensureSurveyState() {
   if (!Array.isArray(STATE.survey.buildings)) STATE.survey.buildings = [];
   if (!Array.isArray(STATE.survey.tracts)) STATE.survey.tracts = [];
   if (!Array.isArray(STATE.survey.discrepancies)) STATE.survey.discrepancies = [];
+  // Active "Process Survey" job pointer (see the survey-job queue below). null when idle.
+  if (STATE.survey.job === undefined) STATE.survey.job = null;
   return STATE.survey;
 }
 function addSurveyBuilding(row) {
@@ -1596,10 +1600,12 @@ function renderSurveyBlock() {
         onClick: () => importSurveyFromDrive(rebuild) }, '📥 Import Survey'),
       el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
         onClick: () => fileInput.click() }, '⬆ Upload XLSX'),
-      el('button', { class: 'um-btn secondary', style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-        onClick: () => processSurveyWithClaude(rebuild) }, '🛰 Process Survey'),
+      surveyJobButton(rebuild),
       fileInput
     );
+
+    // Resume polling if a survey job is still in flight for this property.
+    maybeStartSurveyPoll();
 
     // Survey status chips, inline with the action buttons: does a survey PDF
     // exist in the deal folder, and does a processed SurveyBreakdownSpecs
@@ -1639,6 +1645,10 @@ function renderSurveyBlock() {
     loadChips(false);
 
     body.appendChild(actions);
+
+    // Active survey-job status (only while queued/processing).
+    const jobLine = surveyJobStatusLine(rebuild);
+    if (jobLine) body.appendChild(jobLine);
 
     // Summary / meta line
     const totalFp = blds.reduce((a, b) => a + (Number(b.footprint_sf) || 0), 0);
@@ -2333,317 +2343,267 @@ async function findSurveyPdfInDrive() {
   return null;
 }
 
-// Call the Anthropic Messages API with the survey PDF as a base64 document block.
-// Returns a parsed object matching the shape expected by applySurveyParsedData().
-async function callClaudeWithSurveyPdf(apiKey, pdfBase64, filename) {
-  // Survey-extraction system prompt lives in survey_extraction_prompt.md
-  // (parent folder, next to capex_schema.json) and is injected into schema.js
-  // by build_schema.py as window.SURVEY_EXTRACTION_PROMPT. To tune the
-  // extraction, edit the .md → python build_schema.py → push.
-  const system = window.SURVEY_EXTRACTION_PROMPT;
-  if (!system) throw new Error('SURVEY_EXTRACTION_PROMPT missing — rebuild schema.js (python build_schema.py)');
+// ---------- Process Survey via the survey-breakdown-specs skill (job queue) ----------
+// A static browser page CANNOT run the real skill: measuring an ALTA survey needs
+// Python raster tiling (pypdfium2/PIL), an agentic Claude-vision loop to read the
+// dimension callouts, and a Google-Maps cross-reference via Chrome. So the button
+// ENQUEUES a job instead of doing the work itself: it drops a job_<id>.json into the
+// shared Drive "Survey Jobs" folder (a subfolder of SYNC_FOLDER_ID, visible org-wide,
+// same channel as the manifest). A Cowork scheduled routine ("survey-job worker") on
+// a team machine polls that folder, runs survey-breakdown-specs end-to-end for the
+// deal's survey PDF, writes <Deal>_SurveySpecs_<date>.xlsx into the deal's
+// 7. Title_Survey/ folder, and flips the job's status to done (or error). This app
+// polls the job file and, on done, auto-imports the resulting workbook via the SAME
+// path as 📥 Import Survey (parseSurveyXlsx → applySurveyParsedData).
+const SURVEY_JOBS_FOLDER_NAME = 'Survey Jobs';   // subfolder of SYNC_FOLDER_ID
+const SURVEY_JOB_POLL_MS = 15_000;               // active-job status poll cadence
+const SURVEY_JOB_STALE_MS = 45 * 60_000;         // a job idle this long looks stuck (worker runs ~every 15 min)
+let SURVEY_POLL_ID = null;                        // setInterval handle for the active-job poll
+let SURVEY_JOBS_FOLDER_ID = null;                 // cached id of the Survey Jobs folder
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-opus-4-8',
-      max_tokens: 4096,
-      system,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
-          { type: 'text', text: `Extract all site specs from this survey file ("${filename}") and return the JSON object.` },
-        ],
-      }],
-    }),
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '');
-    throw new Error(`Anthropic ${resp.status}: ${errText.slice(0, 300)}`);
-  }
-
-  const data = await resp.json();
-  const text = (data.content && data.content[0] && data.content[0].text) || '';
-  if (!text) throw new Error('Empty response from Claude');
-
-  // Strip optional markdown code fences then parse.
-  const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  try {
-    return JSON.parse(clean);
-  } catch {
-    const m = clean.match(/\{[\s\S]*\}/);
-    if (m) return JSON.parse(m[0]);
-    throw new Error('Could not parse JSON from Claude response — check the browser console');
-  }
+function newSurveyJobId() {
+  return 'sj_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+// The active-job pointer lives on the (Drive-synced) property state so ANY device
+// that opens the property can resume polling and auto-import. null when idle.
+function getSurveyJob() { return (STATE && STATE.survey && STATE.survey.job) || null; }
+function setSurveyJob(job) {
+  ensureSurveyState();
+  STATE.survey.job = job || null;
+  saveState();
+}
+function surveyJobIsActive(job) {
+  return !!job && (job.status === 'queued' || job.status === 'processing');
+}
+async function ensureSurveyJobsFolder() {
+  if (SURVEY_JOBS_FOLDER_ID) return SURVEY_JOBS_FOLDER_ID;
+  SURVEY_JOBS_FOLDER_ID = await driveEnsureSubfolder(SYNC_FOLDER_ID, SURVEY_JOBS_FOLDER_NAME);
+  return SURVEY_JOBS_FOLDER_ID;
 }
 
-// Main entry point for the 🛰 Process Survey button.
-async function processSurveyWithClaude(rebuild) {
+// Main entry point for the 🛰 Process Survey button — enqueue a job for this property.
+async function submitSurveyJob(rebuild) {
   if (!STATE) return;
   if (!STATE.drive.folderId) {
     toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error');
     return;
   }
-
-  // Personal key first, then the org-shared key from the Drive sync folder.
-  let usingSharedKey = false;
-  let apiKey = getAnthropicKey();
-  if (!apiKey) {
-    apiKey = await fetchSharedAnthropicKey();
-    usingSharedKey = !!apiKey;
+  if (!getDriveToken()) { toast('Connect Google Drive first (☰ → Connect).', 'error'); return; }
+  if (surveyJobIsActive(getSurveyJob())) {
+    toast('A survey job is already ' + getSurveyJob().status + ' for this property.', '');
+    return;
   }
-  if (!apiKey) {
-    const entered = prompt(
-      'No org-shared API key found on Drive.\n\n' +
-      'Enter an Anthropic API key to process surveys with Claude AI.\n' +
-      'The key will be stored in this browser\'s localStorage only.\n' +
-      'Get one at console.anthropic.com → API Keys.',
-      'sk-ant-...'
-    );
-    if (!entered || !entered.trim()) return;
-    const trimmed = entered.trim();
-    if (!trimmed.startsWith('sk-ant-')) {
-      toast('API key must start with sk-ant-', 'error');
-      return;
-    }
-    setAnthropicKey(trimmed);
-    updateAnthropicKeyStatus();
-    apiKey = trimmed;
-  }
-
   try {
-    toast('Searching for survey PDF in Drive…');
+    // Confirm which survey PDF the worker should read (same confirm-walk as the
+    // legacy path). Passing its id/name lets the worker skip re-discovery.
+    toast('Finding the survey PDF in Drive…');
     const pdfFile = await findSurveyPdfInDrive();
     if (!pdfFile) {
       toast('No survey PDF found in 7. Title_Survey or 1. Offering Materials.', 'error');
       return;
     }
-
-    toast('Downloading survey PDF…');
-    const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${pdfFile.id}?alt=media`);
-    const buf = await r.arrayBuffer();
-    const b64 = arrayBufferToBase64(buf);
-
-    toast('Sending to Claude AI — this may take 1–3 minutes…');
-    const parsed = await callClaudeWithSurveyPdf(apiKey, b64, pdfFile.name);
-
-    const summary = applySurveyParsedData(parsed, pdfFile.name);
+    if (!CURRENT_USER) { try { await fetchCurrentUser(); } catch {} }
+    const jobId = newSurveyJobId();
+    const requestedAt = new Date().toISOString();
+    const job = {
+      jobId,
+      schemaVersion: 1,
+      status: 'queued',
+      property: {
+        id: STATE.id,
+        name: STATE.name || (STATE.phase1 && STATE.phase1.prop_name) || 'Property',
+        hash: propertyHash(STATE),
+      },
+      deal: { folderId: STATE.drive.folderId },   // worker resolves the folder name/paths from this id
+      surveyPdf: { id: pdfFile.id, name: pdfFile.name },
+      requestedBy: { email: (CURRENT_USER || {}).email || '', name: (CURRENT_USER || {}).name || '' },
+      requestedAt,
+      startedAt: null, finishedAt: null, worker: null,
+      output: null, error: null, attempts: 0,
+    };
+    toast('Queuing survey job…');
+    const jobsFolderId = await ensureSurveyJobsFolder();
+    const uploaded = await driveUploadJson(jobsFolderId, `job_${jobId}.json`, job);
+    setSurveyJob({
+      jobId, fileId: uploaded.id, jobsFolderId,
+      status: 'queued', submittedAt: requestedAt,
+      pdfName: pdfFile.name, outputName: null,
+    });
+    delete SURVEY_STATUS_CACHE[STATE.id];
+    startSurveyPoll();
     if (rebuild) rebuild();
-    renderShell();
-    toast(`Survey processed by AI — ${summary}`, 'success');
-
-    // Final leg: regenerate the SHIR workbook into 7. Title_Survey/ so
-    // the deal folder carries the standard artifact and 📥 Import Survey works
-    // for every teammate/device. Re-render after — the upload invalidates the
-    // survey-status cache, so the chips flip to "processed ✓".
-    await uploadSurveyWorkbookToDrive(parsed);
-    renderShell();
+    toast('✅ Survey queued — a processing agent runs the survey-breakdown skill on a schedule (typically within ~15–20 min) and the breakdown imports here automatically. You can leave this page.', 'success');
   } catch (e) {
-    if (/401|invalid.*key|auth/i.test(e.message)) {
-      if (usingSharedKey) {
-        // Shared key may have been rotated — drop the session cache so the
-        // next attempt refetches from Drive.
-        SHARED_ANTHROPIC_KEY_CACHE = null;
-        toast('Org-shared API key rejected — ask the key owner to re-share it (☰ → Share Key Org-Wide), or set a personal key.', 'error');
-      } else {
-        toast('API key rejected — update it via ☰ → Set Anthropic API Key.', 'error');
-      }
-    } else {
-      toast('Survey processing failed: ' + e.message, 'error');
-    }
-    console.error('processSurveyWithClaude:', e);
+    console.error('submitSurveyJob:', e);
+    toast('Could not queue the survey job: ' + e.message, 'error');
   }
 }
 
-// ---------- SHIR survey workbook regeneration ----------
-// Rebuild the standard <Property>_SurveyBreakdownSpecs_<date>.xlsx from the
-// parsed survey object (AI path). Mirrors the v3 (2026-07-08) skill layout —
-// which parseSurveyXlsx() re-imports: title + subtitle rows, a SITE SUMMARY
-// table ("Item | Source / Confidence | Value"), a BUILDINGS & SECTIONS table
-// (one row per building/section: Width | Length | Footprint | # Floors |
-// Gross | Height | Roof | Facade | Pitch | Notes) with a TOTAL row, and the
-// Google Maps notes + Discrepancies footer.
-async function generateSurveyBreakdownXlsx(parsed) {
-  if (typeof ExcelJS === 'undefined') throw new Error('ExcelJS not loaded yet — try again');
-  const NAVY = 'FF1E3A8A', LIGHT = 'FFF1F5F9';
-  const flat = parsed.flat || {};
-  const meta = parsed.meta || {};
-  const buildings = parsed.buildings || [];
-  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(meta.survey_date || ''))
-    ? meta.survey_date : new Date().toISOString().slice(0, 10);
-  const propName = String(meta.property_name || (STATE && STATE.name) || 'Property').trim();
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'Capex Builder';
-  wb.created = new Date();
-  const ws = wb.addWorksheet('Survey Breakdown Specs');
-  ws.columns = [
-    { width: 48 }, { width: 12 }, { width: 12 }, { width: 13 }, { width: 9 },
-    { width: 13 }, { width: 15 }, { width: 16 }, { width: 11 }, { width: 11 }, { width: 20 }, { width: 50 },
-  ];
-
-  const title = ws.addRow([`${propName} — Survey Breakdown Specs — ${dateStr}`]);
-  title.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
-  title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
-  title.height = 24;
-  title.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${title.number}:L${title.number}`);
-
-  const subParts = [meta.address || '—'];
-  if (meta.scale_paper) subParts.push(`Paper scale: ${meta.scale_paper}`);
-  if (meta.ft_per_pixel != null && meta.ft_per_pixel !== '') subParts.push(`ft/pixel: ${meta.ft_per_pixel}`);
-  const sub = ws.addRow([subParts.join('    |    ')]);
-  sub.font = { italic: true, size: 10 };
-  ws.mergeCells(`A${sub.number}:L${sub.number}`);
-
-  const banner = (text) => {
-    const r = ws.addRow([text]);
-    r.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
-    ws.mergeCells(`A${r.number}:L${r.number}`);
-    return r;
-  };
-
-  const num = (v) => {
-    if (v == null || v === '') return '';
-    const n = Number(v);
-    return isFinite(n) ? n : '';
-  };
-  const has = (v) => v != null && v !== '';
-
-  // ---- SITE SUMMARY table: Item | Source / Confidence | Value ----
-  banner('SITE SUMMARY   (fee tracts; not broken out by parcel)');
-  const header = ws.addRow(['Item', 'Source / Confidence', 'Value']);
-  header.font = { bold: true };
-  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-  header.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
-
-  const addItem = (label, value, opts = {}) => {
-    const r = ws.addRow([label, opts.source || '', value == null ? '' : value]);
-    if (opts.bold) r.font = { bold: true };
-    if (typeof r.getCell(3).value === 'number' && !opts.noFmt) r.getCell(3).numFmt = '#,##0';
-    return r;
-  };
-
-  addItem('1. Parking — Regular', num(flat.parking_regular));
-  addItem('1. Parking — Handicapped', num(flat.parking_spots_hc));
-  addItem('1. Parking — Total', num(flat.parking_spots_existing), { bold: true });
-  addItem('2. Land area (SF)', num(flat.land_sf));
-  addItem('2. Land area (acres)', num(flat.land_acres), { noFmt: true });
-  addItem('3. Perimeter — TOTAL (LF)', num(flat.site_perimeter_lf));
-  // Fencing/gates: numeric Basics-field rows (v3) when present, else the
-  // legacy free-text notes rows.
-  if (has(flat.fence_feet)) addItem('4. Fencing — total (LF shown on survey; 0 if none)', num(flat.fence_feet));
-  else addItem('4. Fencing — type / LF / location', flat.fencing_notes || 'n/a');
-  if (has(flat.vehicle_gates) || has(flat.pedestrian_gates)) {
-    addItem('4. Gates — # Vehicle Gates', num(flat.vehicle_gates));
-    addItem('4. Gates — # Pedestrian Gates', num(flat.pedestrian_gates));
-  } else {
-    addItem('4. Gates — count / type / location', flat.gates_notes || 'n/a');
-  }
-  addItem('5. Parking lot SF', num(flat.parking_lot_sf));
-  addItem('5b. Sidewalk / concrete flatwork SF', num(flat.other_impervious_sf));
-  addItem('6. Building count (physical structures)', num(flat.num_buildings));
-  addItem('10. Landscaping / dirt / grass SF (pervious)', num(flat.landscaping_sf));
-
-  // ---- BUILDINGS & SECTIONS table (one row per building/section) ----
-  const grossOf = (b) => {
-    const fp = Number(b.footprint_sf) || 0, st = Number(b.stories) || 0;
-    return (fp && st) ? fp * st : (Number(b.gross_sf) || 0);
-  };
-  const envelopeOf = (b) => {
-    const fp = Number(b.footprint_sf) || 0, ht = Number(b.height_ft) || 0;
-    return (fp && ht) ? fp * ht : (Number(b.envelope_cf) || 0);
-  };
-  ws.addRow([]);
-  banner('BUILDINGS & SECTIONS   (every building = 1+ sections; each section has its own W × L × H, floors, gross SF & envelope CF)');
-  const bHeader = ws.addRow([
-    'Building / Section', 'Width (ft)', 'Length (ft)', 'Height (ft)', '# Floors', 'Footprint SF',
-    'Gross SF\n(fp × floors)', 'Envelope CF\n(fp × height)', 'Roof SF', 'Facade SF', 'Roof Pitch', 'Notes / shape',
-  ]);
-  bHeader.font = { bold: true };
-  bHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
-  bHeader.alignment = { wrapText: true, vertical: 'middle' };
-  bHeader.eachCell((c) => { c.border = { bottom: { style: 'medium', color: { argb: NAVY } } }; });
-  const numFmtRow = (r) => r.eachCell((c) => { if (typeof c.value === 'number') c.numFmt = '#,##0.##'; });
-  const tot = { fp: 0, gross: 0, env: 0, roof: 0, facade: 0 };
-  buildings.forEach((b, i) => {
-    const g = grossOf(b), env = envelopeOf(b);
-    tot.fp += Number(b.footprint_sf) || 0;
-    tot.gross += g;
-    tot.env += env;
-    tot.roof += Number(b.roof_sf) || 0;
-    tot.facade += Number(b.facade_sf) || 0;
-    numFmtRow(ws.addRow([
-      b.label || `Building ${i + 1}`, num(b.width_ft), num(b.length_ft), num(b.height_ft),
-      num(b.stories), num(b.footprint_sf), g || '', env || '', num(b.roof_sf), num(b.facade_sf),
-      b.roof_pitch || '', b.dimensions || '',
-    ]));
-  });
-  const totRow = ws.addRow([
-    'TOTAL — all buildings/sections', '', '', '', '', num(flat.total_footprint_sf) || tot.fp || '',
-    tot.gross || '', tot.env || '', num(flat.total_roof_sf) || tot.roof || '',
-    num(flat.total_facade_sf) || tot.facade || '', '', '',
-  ]);
-  totRow.font = { bold: true };
-  numFmtRow(totRow);
-
-  ws.addRow([]);
-  const notesHdr = ws.addRow(['Google Maps Cross-Reference Notes']);
-  notesHdr.font = { bold: true };
-  const noteLines = String(parsed.notes || '').split(/\n+/).map(s => s.trim()).filter(Boolean);
-  if (noteLines.length) noteLines.forEach(n => ws.addRow([n]));
-  else ws.addRow(['—']);
-  ws.addRow([]);
-  const discHdr = ws.addRow(['Discrepancies (Survey vs Google Maps)']);
-  discHdr.font = { bold: true };
-  const discs = (parsed.discrepancies || []).map(s => String(s).trim()).filter(Boolean);
-  if (discs.length) discs.forEach(d => ws.addRow([`• ${d}`]));
-  else ws.addRow(['—']);
-
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const filename = `${propName.replace(/[^a-z0-9]+/gi, '')}_SurveyBreakdownSpecs_${dateStr}.xlsx`;
-  return { blob, filename };
-}
-
-// Upload the regenerated survey workbook to <deal>/7. Title_Survey/ (folder
-// created if missing). Falls back to a local download if the Drive upload
-// fails so the artifact isn't lost.
-async function uploadSurveyWorkbookToDrive(parsed) {
-  let wbOut = null;
+// Cancel/withdraw the active job (deletes the job file so the worker skips it).
+async function cancelSurveyJob(rebuild) {
+  const ptr = getSurveyJob();
+  if (!ptr) return;
+  if (!confirm('Cancel the queued survey job?')) return;
   try {
-    toast('Generating SHIR survey workbook…');
-    wbOut = await generateSurveyBreakdownXlsx(parsed);
-    const subs = await listSubfolders(STATE.drive.folderId);
-    const ts = subs.find(f => /^\s*7\.?\s*title[\s_\-]*survey/i.test(f.name))
-            || subs.find(f => /title[\s_\-]*survey/i.test(f.name));
-    const tsId = ts ? ts.id : await driveEnsureSubfolder(STATE.drive.folderId, '7. Title_Survey');
-    await driveUploadBinary(tsId, wbOut.filename, wbOut.blob,
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    delete SURVEY_STATUS_CACHE[STATE.id];   // breakdown file just changed — re-check chips on next render
-    toast(`Saved ${wbOut.filename} to 7. Title_Survey/`, 'success');
-  } catch (e) {
-    console.error('uploadSurveyWorkbookToDrive:', e);
-    if (wbOut) {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(wbOut.blob);
-      a.download = wbOut.filename;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-      toast(`Drive upload failed (${e.message}) — workbook downloaded locally instead.`, 'error');
-    } else {
-      toast('Survey workbook generation failed: ' + e.message, 'error');
+    // Resolve the current file by name (the worker may have replaced our fileId).
+    let fileId = ptr.fileId;
+    if (ptr.jobsFolderId) {
+      const f = await driveFindFile(ptr.jobsFolderId, `job_${ptr.jobId}.json`).catch(() => null);
+      if (f) fileId = f.id;
     }
+    if (fileId) {
+      await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: 'DELETE' }).catch(() => {});
+    }
+  } finally {
+    setSurveyJob(null);
+    stopSurveyPoll();
+    if (rebuild) rebuild();
+    toast('Survey job cancelled.', '');
   }
+}
+
+// Start/stop the active-job poll. checkSurveyJob() self-stops when idle.
+function startSurveyPoll() {
+  stopSurveyPoll();
+  checkSurveyJob().catch(() => {});
+  SURVEY_POLL_ID = setInterval(() => { checkSurveyJob().catch(() => {}); }, SURVEY_JOB_POLL_MS);
+}
+function stopSurveyPoll() {
+  if (SURVEY_POLL_ID) clearInterval(SURVEY_POLL_ID);
+  SURVEY_POLL_ID = null;
+}
+// Resume polling when a property with an active job is (re)opened.
+function maybeStartSurveyPoll() {
+  if (surveyJobIsActive(getSurveyJob()) && !SURVEY_POLL_ID) startSurveyPoll();
+}
+
+// Read the current job file. The worker rewrites the file as it transitions the
+// status (which can change the Drive fileId), so resolve BY NAME in the jobs folder
+// — falling back from the last-known fileId. Returns {job, fileId} or null if gone.
+async function fetchSurveyJobFile(ptr) {
+  // Fast path: the fileId we last knew.
+  if (ptr.fileId) {
+    try {
+      const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${ptr.fileId}?alt=media`);
+      if (r.ok) return { job: await r.json(), fileId: ptr.fileId };
+      if (r.status !== 404) return null;   // transient (5xx/auth) — caller retries next tick
+    } catch { return null; }
+  }
+  // fileId 404'd (worker replaced the file) or unknown — re-find by name.
+  if (!ptr.jobsFolderId) return null;
+  const f = await driveFindFile(ptr.jobsFolderId, `job_${ptr.jobId}.json`);
+  if (!f) return { job: null, fileId: null };   // truly gone (cancelled/removed)
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+  if (!r.ok) return null;
+  return { job: await r.json(), fileId: f.id };
+}
+
+// One poll pass: read the job file, react to a status change, auto-import on done.
+async function checkSurveyJob() {
+  const ptr = getSurveyJob();
+  if (!surveyJobIsActive(ptr)) { stopSurveyPoll(); return; }
+  if (!getDriveToken()) return;   // retry next tick once connected
+  const pid = STATE && STATE.id;
+  let res = null;
+  try {
+    res = await fetchSurveyJobFile(ptr);
+  } catch (e) {
+    console.warn('checkSurveyJob fetch failed:', e);
+    return;   // transient — retry next tick
+  }
+  if (res === null) return;                 // transient error — retry next tick
+  if (!STATE || STATE.id !== pid) return;   // navigated away mid-poll
+  const job = res.job;
+  if (job === null) {   // job file gone (cancelled/removed elsewhere)
+    setSurveyJob(null); refreshSurveyUI(); stopSurveyPoll();
+    return;
+  }
+
+  const status = job && job.status;
+  const newFileId = res.fileId || ptr.fileId;
+  if ((status && status !== ptr.status) || newFileId !== ptr.fileId) {   // persist transition + refreshed id
+    setSurveyJob({ ...ptr, fileId: newFileId, status: status || ptr.status, outputName: (job.output && job.output.fileName) || ptr.outputName });
+    if (status !== ptr.status) refreshSurveyUI();
+  }
+
+  if (status === 'done') {
+    stopSurveyPoll();
+    try {
+      toast('Survey processed — importing the breakdown…');
+      const wb = await downloadSurveyOutputWorkbook(job);
+      if (!wb) throw new Error('output workbook not found in 7. Title_Survey');
+      const parsed = parseSurveyXlsx(wb);
+      const summary = applySurveyParsedData(parsed, (job.output && job.output.fileName) || ptr.pdfName || '');
+      setSurveyJob(null);
+      delete SURVEY_STATUS_CACHE[STATE.id];
+      refreshSurveyUI();
+      toast(`✅ Survey imported — ${summary}`, 'success');
+    } catch (e) {
+      console.error('auto-import after job done failed:', e);
+      setSurveyJob(null);   // clear so the button is usable; the workbook is on Drive regardless
+      refreshSurveyUI();
+      toast('Survey finished but auto-import failed (' + e.message + ') — click 📥 Import Survey.', 'error');
+    }
+  } else if (status === 'error') {
+    stopSurveyPoll();
+    setSurveyJob(null);
+    refreshSurveyUI();
+    toast('Survey processing failed: ' + (job.error || 'unknown error') + ' — you can retry 🛰 Process Survey.', 'error');
+  }
+}
+
+// Fetch the workbook the worker produced. Prefer the explicit output file id in the
+// job; fall back to the newest SurveySpecs workbook in 7. Title_Survey/.
+async function downloadSurveyOutputWorkbook(job) {
+  let fileId = job && job.output && job.output.fileId;
+  if (!fileId) {
+    const cands = await _listSurveyReportCandidates();
+    if (!cands.length) return null;
+    fileId = cands[0].id;
+  }
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  const buf = await r.arrayBuffer();
+  return XLSX.read(new Uint8Array(buf), { type: 'array' });
+}
+
+// Re-render the current phase if the user is viewing this property (status change,
+// auto-import). renderShell() rebuilds #phase-content, recreating the survey block.
+function refreshSurveyUI() {
+  if (CURRENT_VIEW === 'property') renderShell();
+}
+
+// The 🛰 button — a submit control when idle, a disabled progress chip while a job runs.
+function surveyJobButton(rebuild) {
+  const job = getSurveyJob();
+  if (surveyJobIsActive(job)) {
+    const btn = el('button', { class: 'um-btn secondary',
+      style: 'white-space:nowrap;font-size:13px;padding:8px 10px;opacity:0.7;cursor:default' },
+      job.status === 'processing' ? '⏳ Processing survey…' : '⏳ Survey queued…');
+    btn.disabled = true;
+    return btn;
+  }
+  return el('button', { class: 'um-btn secondary',
+    style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
+    onClick: () => submitSurveyJob(rebuild), title: 'Run the survey-breakdown-specs skill for this deal and import the result' },
+    '🛰 Process Survey');
+}
+
+// Status line shown beneath the action buttons while a survey job is active.
+function surveyJobStatusLine(rebuild) {
+  const job = getSurveyJob();
+  if (!surveyJobIsActive(job)) return null;
+  const since = job.submittedAt ? relativeTime(job.submittedAt) : '';
+  const stale = job.submittedAt && (Date.now() - Date.parse(job.submittedAt) > SURVEY_JOB_STALE_MS);
+  const msg =
+    (job.status === 'processing'
+      ? '⏳ A processing agent is running the survey-breakdown skill'
+      : '⏳ Survey queued — waiting for a processing agent') +
+    (since ? ` (submitted ${since})` : '') +
+    '. The breakdown imports here automatically when done.' +
+    (stale ? ' ⚠ Taking longer than usual — is the survey-job worker running?' : '');
+  return el('div', { class: 'muted small', style: 'padding:0 16px 6px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap' },
+    el('span', { style: 'flex:1;min-width:220px' }, msg),
+    el('button', { class: 'um-btn secondary', style: 'font-size:11px;padding:3px 8px', onClick: () => cancelSurveyJob(rebuild) }, '✕ Cancel'));
 }
 
 // Shared helpers for proforma parsing.
@@ -6810,6 +6770,8 @@ async function syncTick() {
     // 3. Write our heartbeat + lastModified to the manifest.
     await upsertManifestEntry(buildManifestEntry({ asEditor: true }));
     updateSyncBar();
+    // 4. Backstop the survey-job poll (restart it if the dedicated interval died).
+    if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();
   } catch (e) {
     console.warn('syncTick failed:', e);
   }
@@ -6902,7 +6864,7 @@ HOME SCREEN
 - TO UNARCHIVE / RESTORE a property: click the "🗄 Archived" toggle on the home screen to see archived properties, open that property's ⋮ menu, and choose "Unarchive (move to Live)". It returns to the main list.
 
 THE FOUR TABS
-1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" reads the survey PDF with AI and fills every site field; "📥 Import Survey" loads an already-processed survey workbook; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
+1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and a few minutes later the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Two export buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder. The workbook mirrors the proforma's capex tab.
