@@ -6877,8 +6877,184 @@ async function refreshHomeIndex() {
 }
 
 // ---------- Init ----------
+// ============ Help chat: "Ask Claude" in-app assistant ============
+// A floating chat widget (bottom-right) that answers "how do I use this app"
+// questions via the Anthropic Messages API — reusing the SAME key resolution as
+// Process Survey (personal localStorage key → org-shared key in the Drive sync
+// folder). Knowledge lives in HELP_SYSTEM_PROMPT below; keep it in sync with the
+// user guide (GUIDE/Capex Builder - User Guide.docx) when app behavior changes.
+const HELP_MODEL = 'claude-haiku-4-5-20251001';   // fast + cheap for Q&A over a fixed KB
+const HELP_SYSTEM_PROMPT = `You are the in-app help assistant for "Capex Builder", a mobile-first web app used by SHIR Capital's real-estate acquisitions team. Users ask you how to use the app while they're inside it. Answer ONLY questions about using Capex Builder. Be concise and practical — a couple of sentences or a short bullet list, plain language, no jargon. If you don't know or the feature doesn't exist, say so and suggest the full user guide (in the deal team's GUIDE folder) or asking the team lead. Never invent features or buttons. Do not answer questions unrelated to Capex Builder (politely redirect).
+
+WHAT THE APP DOES
+Capex Builder captures what you observe on a property tour and turns it into a capital-expenditure (capex) budget you paste into the underwriting proforma. It runs in the browser (nothing to install) and saves automatically to the deal's Google Drive folder, so teammates and your other devices stay in sync.
+
+GETTING IN
+- Open https://capex-builder.pages.dev and sign in by connecting Google Drive with your SHIR company account (shircapital.com, pghnexus.com, signaturenexus.com, or avasconstruction.com — personal Gmail is declined). You only connect once per device.
+- On a phone, use the browser's "Add to Home Screen" so it opens like an app.
+
+HOME SCREEN
+- Your list of properties. "+ New Property" creates one — use the same name as the deal so the app can find its Drive folder and Asana task (names cap at 25 characters).
+- After creating a property you're asked to link its Drive deal folder: search pipelines by name (recommended), paste a folder URL/ID, or skip and link later from the ☰ menu ("Find Drive Folder"). Linking is what enables auto-save, imports, and export.
+- Sort by Name / Date Created / Date Modified. Card icons: ● saved to Drive, ⊘ no folder linked, ☁ stored in the team index (click to load), 📐 survey processed, 🏠 unit mix imported.
+
+THE FOUR TABS
+1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" reads the survey PDF with AI and fills every site field; "📥 Import Survey" loads an already-processed survey workbook; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
+2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
+3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
+4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Two export buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder. The workbook mirrors the proforma's capex tab.
+
+SAVING & SYNC
+- You never press Save — it auto-saves to Drive a couple seconds after you stop typing. Google Drive is the source of truth. A status bar shows "Saving…" then "✓ Saved to Drive".
+- If a teammate edits the same property at once, a banner warns you. If the Drive copy is newer, the status bar becomes a one-click prompt to load it or keep yours. The ☰ menu has "↻ Re-sync from Drive".
+- Each property has its own web address you can copy from the browser bar to share.
+
+TROUBLESHOOTING
+- Import buttons say to link a folder → ☰ → Find Drive Folder (or Link by URL).
+- Proforma import pulls 0 units → the newest model may be an empty shell; use ⬆ Upload XLS with the right file.
+- A section won't show a green check → a required field is blank; use 📋 Export Missing Fields.
+- Export buttons grayed out → give the property a name and check at least one item.
+- Status stuck on "Saving…" → click it to resolve, or ☰ → Re-sync from Drive.
+- Help chat itself needs the shared AI key, which loads once Google Drive is connected.`;
+
+let HELP_CHAT = [];      // [{ role:'user'|'assistant', text }]
+let HELP_BUSY = false;
+
+function _helpEscape(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// Minimal, SAFE markdown: escape first, then apply **bold**, `- ` bullets, and line breaks.
+function formatHelpText(t) {
+  const lines = String(t).replace(/\r/g, '').split('\n');
+  let html = '', inList = false;
+  const inline = (s) => _helpEscape(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  for (let raw of lines) {
+    const line = raw.trimEnd();
+    const m = line.match(/^\s*(?:[-•*]|\d+\.)\s+(.*)$/);
+    if (m) { if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(m[1]) + '</li>'; }
+    else {
+      if (inList) { html += '</ul>'; inList = false; }
+      if (line.trim() === '') html += '<br>'; else html += '<div>' + inline(line) + '</div>';
+    }
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
+function _helpMsgsNode() { return document.getElementById('help-msgs'); }
+function _helpScroll() { const n = _helpMsgsNode(); if (n) n.scrollTop = n.scrollHeight; }
+function appendHelpBubble(role, text, cls) {
+  const n = _helpMsgsNode(); if (!n) return null;
+  const div = el('div', { class: 'help-msg ' + (role === 'user' ? 'user' : 'bot') + (cls ? ' ' + cls : '') });
+  if (role === 'user') div.textContent = text; else div.innerHTML = formatHelpText(text);
+  n.appendChild(div); _helpScroll(); return div;
+}
+
+function openHelp() {
+  const p = document.getElementById('help-panel'), f = document.getElementById('help-fab');
+  if (!p) return;
+  p.classList.remove('hidden'); if (f) f.classList.add('hidden');
+  if (!HELP_CHAT.length && _helpMsgsNode() && !_helpMsgsNode().children.length) {
+    appendHelpBubble('assistant', "Hi! I'm Claude. Ask me anything about using Capex Builder — importing a proforma, pricing the budget, exporting to the deal folder, and so on.");
+  }
+  setTimeout(() => { const ta = document.getElementById('help-input'); if (ta) ta.focus(); }, 50);
+}
+function closeHelp() {
+  const p = document.getElementById('help-panel'), f = document.getElementById('help-fab');
+  if (p) p.classList.add('hidden'); if (f) f.classList.remove('hidden');
+}
+
+async function sendHelpMessage() {
+  const ta = document.getElementById('help-input');
+  if (!ta || HELP_BUSY) return;
+  const text = ta.value.trim();
+  if (!text) return;
+  ta.value = '';
+  HELP_BUSY = true;
+  const sendBtn = document.getElementById('help-send'); if (sendBtn) sendBtn.disabled = true;
+  HELP_CHAT.push({ role: 'user', text });
+  appendHelpBubble('user', text);
+  const typing = appendHelpBubble('assistant', 'Claude is typing…', 'typing');
+
+  // Same key resolution as Process Survey: personal key → org-shared (Drive).
+  let usingShared = false;
+  let apiKey = getAnthropicKey();
+  if (!apiKey) { apiKey = await fetchSharedAnthropicKey(); usingShared = !!apiKey; }
+  const fail = (msg) => {
+    if (typing) { typing.classList.remove('typing'); typing.innerHTML = formatHelpText(msg); }
+    HELP_BUSY = false; if (sendBtn) sendBtn.disabled = false;
+  };
+  if (!apiKey) {
+    return fail(getDriveToken()
+      ? "I can't reach the AI help key yet. It's shared through Google Drive — ask a teammate to run “Share Key Org-Wide” from the ☰ menu, or set your own key there."
+      : "Connect Google Drive first (the home screen’s Connect button) — the AI help key loads automatically once you're signed in.");
+  }
+
+  try {
+    const msgs = HELP_CHAT.slice(-12).map(m => ({ role: m.role, content: m.text }));
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({ model: HELP_MODEL, max_tokens: 800, system: HELP_SYSTEM_PROMPT, messages: msgs }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      if (/401|invalid.*key|auth/i.test(String(resp.status) + errText) && usingShared) SHARED_ANTHROPIC_KEY_CACHE = null;
+      throw new Error(`${resp.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await resp.json();
+    const answer = (data.content && data.content[0] && data.content[0].text) || '';
+    if (!answer) throw new Error('empty response');
+    HELP_CHAT.push({ role: 'assistant', text: answer });
+    if (typing) { typing.classList.remove('typing'); typing.innerHTML = formatHelpText(answer); }
+    _helpScroll();
+    HELP_BUSY = false; if (sendBtn) sendBtn.disabled = false;
+  } catch (e) {
+    console.error('help chat:', e);
+    // Remove the failed user turn from history so it isn't re-sent out of context.
+    HELP_CHAT.pop();
+    fail(/401|auth|invalid.*key/i.test(e.message)
+      ? "The AI help key was rejected. Ask the key owner to re-share it (☰ → Share Key Org-Wide) or set a personal key there."
+      : "Sorry — I couldn't reach Claude just now. Check your connection and try again.");
+  }
+}
+
+function renderHelpWidget() {
+  if (document.getElementById('help-fab')) return;   // inject once; lives on document.body, survives re-renders
+  const fab = el('button', { id: 'help-fab', class: 'help-fab', title: 'Ask Claude for help', 'aria-label': 'Ask Claude for help' }, '💬');
+  fab.addEventListener('click', openHelp);
+
+  const input = el('textarea', { id: 'help-input', rows: '1', placeholder: 'Ask how to use Capex Builder…' });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendHelpMessage(); }
+  });
+  const sendBtn = el('button', { id: 'help-send', class: 'help-send' }, 'Send');
+  sendBtn.addEventListener('click', sendHelpMessage);
+  const closeBtn = el('button', { class: 'help-close', title: 'Close', 'aria-label': 'Close help' }, '✕');
+  closeBtn.addEventListener('click', closeHelp);
+
+  const panel = el('div', { id: 'help-panel', class: 'help-panel hidden' },
+    el('div', { class: 'help-header' },
+      el('div', {},
+        el('div', { class: 'help-title' }, 'Ask Claude'),
+        el('div', { class: 'help-sub' }, 'Capex Builder help'),
+      ),
+      closeBtn,
+    ),
+    el('div', { id: 'help-msgs', class: 'help-msgs' }),
+    el('div', { class: 'help-input-row' }, input, sendBtn),
+    el('div', { class: 'help-disclaimer' }, 'AI help — double-check anything important.'),
+  );
+  document.body.appendChild(fab);
+  document.body.appendChild(panel);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   bindShell();
+  renderHelpWidget();
   // Unique-URL routing: react to back/forward + opened links.
   window.addEventListener('hashchange', routeFromHash);
   // Initial route. A #/prop/<slug> (or legacy #/p/<id>) deep link wins over the
