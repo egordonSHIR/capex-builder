@@ -415,6 +415,7 @@ function openProperty(id) {
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
   if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();   // resume an in-flight survey job
+  if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();   // resume an in-flight proforma import
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
   reconcileFromDrive();   // Drive-authoritative: adopt a newer remote copy if this device is clean
 }
@@ -447,6 +448,7 @@ function closeProperty() {
   // (>2.5 min) anyway, so an inflight failure here is harmless.
   if (typeof stopAutoSync === 'function') stopAutoSync();
   if (typeof stopSurveyPoll === 'function') stopSurveyPoll();
+  if (typeof stopProformaPoll === 'function') stopProformaPoll();
   if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
   STORE.currentPropertyId = null;
   STATE = null;
@@ -4902,7 +4904,10 @@ function renderPhase4() {
     ? `flex:1 1 0;min-width:180px;padding:18px;background:${activeBg};color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer`
     : `flex:1 1 0;min-width:180px;padding:18px;background:#cbd5e1;color:#f8fafc;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:not-allowed`;
 
-  // Export actions (side by side): download-only, and place into the deal's 25. Capex Drive folder.
+  // Export actions (side by side): download-only, place into 25. Capex, and import
+  // into a proforma in 2. UW-Analysis (via the Cowork Excel-COM worker).
+  const proformaJob = getProformaJob();
+  const proformaActive = proformaJobIsActive(proformaJob);
   root.appendChild(el('div', { style: 'display:flex;gap:10px;margin-top:8px;flex-wrap:wrap' },
     el('button', {
       style: btnStyle('#1d2d47'), disabled: !exportReady, title: readyTip,
@@ -4911,13 +4916,28 @@ function renderPhase4() {
     el('button', {
       style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip,
       onClick: placeInCapexFolder
-    }, '☁  Place in Capex Folder')
+    }, '☁  Place in Capex Folder'),
+    (() => {
+      const b = el('button', {
+        style: btnStyle('#3477B2'),
+        title: !exportReady ? readyTip : (proformaActive ? 'A proforma import is already running' : 'Copy the capex budget into a proforma in 2. UW-Analysis'),
+        onClick: proformaActive ? null : submitProformaCapexJob,
+      }, proformaActive ? (proformaJob.status === 'processing' ? '⏳  Importing to Proforma…' : '⏳  Import queued…') : '📥  Import to Proforma');
+      b.disabled = !exportReady || proformaActive;
+      if (proformaActive) b.style.cursor = 'default';
+      return b;
+    })()
   ));
+  if (proformaActive) {
+    root.appendChild(el('div', { style: 'margin-top:6px;color:#475569;font-size:12px;font-style:italic' },
+      `⏳ A processing agent is copying "${proformaJob.proformaName || 'the proforma'}" and pasting the capex into its CAPEX tab (Excel COM). The new "${proformaJob.outputName || 'Capex'}" version will appear in 2. UW-Analysis — typically ~30 min–1 hour. You can leave this page.`));
+  }
   if (!exportReady) {
     root.appendChild(el('div', { style: 'margin-top:6px;color:#64748b;font-size:12px;font-style:italic' },
       'Export needs ' + missing.join(' and ') + '.'));
   }
 
+  maybeStartProformaPoll();
   return root;
 }
 
@@ -5245,6 +5265,218 @@ async function placeInCapexFolder() {
     // (intentionally does NOT open the file in a new tab)
   } catch (e) {
     toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+// ---------- Import to Proforma (job queue → Cowork Excel-COM worker) ----------
+// The MFVA/ExStay proformas are formula-heavy with a chart + ~199 array formulas —
+// editing them with any browser xlsx library (SheetJS/ExcelJS) strips those and
+// corrupts the file. So this button does the SAFE parts in the browser (find the
+// proforma in 2. UW-Analysis, let the user pick, build + upload the capex workbook)
+// then ENQUEUES a job; a Cowork routine ("proforma-capex-import worker") copies the
+// chosen proforma (adds "Capex" + bumps the version) and pastes the capex values into
+// its CAPEX tab via Excel COM, preserving the chart/formulas. Mirrors the survey queue.
+const PROFORMA_JOBS_FOLDER_NAME = 'Proforma Capex Jobs';   // subfolder of SYNC_FOLDER_ID
+const PROFORMA_JOB_POLL_MS = 20_000;
+let PROFORMA_POLL_ID = null;
+let PROFORMA_JOBS_FOLDER_ID = null;
+
+// Filename-keyword preference (from the DEALS Asana↔GDrive "Filenames" sheet). The
+// user's rule: prefer the most-advanced working model — Final (step 7) is the top
+// target for a capex import, Init UW (step 1) the least; LOI (step 8, post-decision)
+// is deprioritized below Init UW. Higher rank = more preferred.
+const PROFORMA_KEYWORD_RANK = [
+  { kw: 'Final',    rank: 7 },
+  { kw: 'OwnerRev', rank: 6 },
+  { kw: 'AMRev',    rank: 5 },
+  { kw: 'HOAcqRev', rank: 4 },
+  { kw: 'wCapex',   rank: 3 },
+  { kw: 'AcqRev',   rank: 2 },
+  { kw: 'Init UW',  rank: 1 },
+  { kw: 'LOI',      rank: 0 },
+];
+function proformaKeywordRank(name) {
+  const n = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  let best = -1, kw = '';
+  for (const { kw: k, rank } of PROFORMA_KEYWORD_RANK) {
+    const nk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (n.includes(nk) && rank > best) { best = rank; kw = k; }
+  }
+  return { rank: best, kw };
+}
+function proformaVersion(name) {
+  const m = String(name || '').match(/[vV](\d+(?:\.\d+)?)/);
+  return m ? parseFloat(m[1]) : -1;
+}
+// Suggested output name: bump the version # and inject "Capex" (the worker finalizes).
+function proformaCapexOutputName(name) {
+  const ext = (String(name).match(/\.xlsx?$/i) || ['.xlsx'])[0];
+  let base = String(name).replace(/\.xlsx?$/i, '');
+  const vm = base.match(/^(.*?)([ _][vV])(\d+(?:\.\d+)?)(.*)$/);
+  if (vm) {
+    const num = parseFloat(vm[3]);
+    const bumped = Number.isInteger(num) ? (num + 1) : Math.round((num + 0.1) * 10) / 10;
+    base = `${vm[1]}${vm[2]}${bumped}${vm[4]}`;
+  } else {
+    base = `${base} v2`;
+  }
+  if (!/capex/i.test(base)) base = base + ' Capex';
+  return base + ext;
+}
+
+// List proforma candidates in 2. UW-Analysis, ranked (keyword rank ↓, then version ↓,
+// then modifiedTime ↓). Returns { uwId, list } — list items carry _rank/_ver.
+async function _listUWProformaCandidates() {
+  if (!STATE || !STATE.drive.folderId) return { uwId: null, list: [] };
+  const subs = await listSubfolders(STATE.drive.folderId);
+  const uw = subs.find(f => /uw[\s\-_.]*analysis/i.test(f.name))
+          || subs.find(f => /uw/i.test(f.name) && /analy/i.test(f.name));
+  if (!uw) return { uwId: null, list: [] };
+  const files = await driveListFilesInFolder(uw.id);
+  const isTemp = (f) => /^~\$/.test(String(f.name || ''));
+  // Only real .xlsx files (the worker edits via Excel COM; Google-native sheets can't be).
+  let list = files.filter(f => /\.xlsx$/i.test(f.name) && !isTemp(f))
+    .map(f => ({ ...f, _rank: proformaKeywordRank(f.name), _ver: proformaVersion(f.name) }));
+  list.sort((a, b) => {
+    if (b._rank.rank !== a._rank.rank) return b._rank.rank - a._rank.rank;
+    if (b._ver !== a._ver) return b._ver - a._ver;
+    return (b.modifiedTime || '').localeCompare(a.modifiedTime || '');
+  });
+  return { uwId: uw.id, list };
+}
+
+async function ensureProformaJobsFolder() {
+  if (PROFORMA_JOBS_FOLDER_ID) return PROFORMA_JOBS_FOLDER_ID;
+  PROFORMA_JOBS_FOLDER_ID = await driveEnsureSubfolder(SYNC_FOLDER_ID, PROFORMA_JOBS_FOLDER_NAME);
+  return PROFORMA_JOBS_FOLDER_ID;
+}
+
+// Active-job pointer (per property, localStorage) so the poll survives reloads.
+function proformaJobKey(pid) { return 'capex_proforma_job_' + pid; }
+function getProformaJob() {
+  if (!STATE) return null;
+  try { return JSON.parse(localStorage.getItem(proformaJobKey(STATE.id)) || 'null'); } catch { return null; }
+}
+function setProformaJob(p) {
+  if (!STATE) return;
+  if (p) localStorage.setItem(proformaJobKey(STATE.id), JSON.stringify(p));
+  else localStorage.removeItem(proformaJobKey(STATE.id));
+}
+function proformaJobIsActive(j) { return !!j && (j.status === 'queued' || j.status === 'processing'); }
+
+// Main entry point for the 📥 Import to Proforma button.
+async function submitProformaCapexJob() {
+  if (typeof ExcelJS === 'undefined') { toast('ExcelJS not loaded yet, try again', 'error'); return; }
+  if (!STATE) return;
+  if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
+  if (!getDriveToken()) { toast('Connect Google Drive first (☰ → Connect).', 'error'); return; }
+  if (proformaJobIsActive(getProformaJob())) { toast('A proforma import is already ' + getProformaJob().status + ' for this property.', ''); return; }
+  try {
+    toast('Finding proforma files in 2. UW-Analysis…');
+    const { list } = await _listUWProformaCandidates();
+    if (!list.length) { toast('No .xlsx proforma found in 2. UW-Analysis.', 'error'); return; }
+
+    // Ask the user which proforma to import into — ranked best-first (confirm walk).
+    const fmtD = (iso) => iso ? new Date(iso).toLocaleString() : 'unknown';
+    let chosen = null;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      const remaining = list.length - i - 1;
+      const rankNote = c._rank.rank >= 0 ? `Stage: ${c._rank.kw} (preferred #${c._rank.rank})` : 'Stage: (no keyword match)';
+      const tail = remaining > 0 ? `\n\n[OK = import into this · Cancel = see next (${remaining} more)]`
+                                 : `\n\n[OK = import into this · Cancel = abort]`;
+      const ok = confirm(
+        `Import the capex budget into this proforma?\n\n📄 ${c.name}\n${rankNote}` +
+        `${c._ver >= 0 ? `\nVersion: v${c._ver}` : ''}\nModified: ${fmtD(c.modifiedTime)}` + tail);
+      if (ok) { chosen = c; break; }
+      if (remaining === 0) return;
+    }
+    if (!chosen) return;
+
+    if (!CURRENT_USER) { try { await fetchCurrentUser(); } catch {} }
+
+    // Build the capex workbook and upload it into the jobs folder so the worker can read
+    // the values below the "Copy/Paste Below This Line to Proforma" banner.
+    toast('Building capex workbook…');
+    const { blob } = await buildCapexBlob();
+    const jobsFolderId = await ensureProformaJobsFolder();
+    const jobId = 'pj_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+    const capexName = `job_${jobId}_capex.xlsx`;
+    toast('Uploading capex values…');
+    const capexUp = await driveUploadBinary(jobsFolderId, capexName, blob, XLSX_MIME);
+
+    const requestedAt = new Date().toISOString();
+    const job = {
+      jobId, schemaVersion: 1, type: 'proforma-capex-import', status: 'queued',
+      property: { id: STATE.id, name: STATE.name || (STATE.phase1 && STATE.phase1.prop_name) || 'Property', hash: propertyHash(STATE) },
+      deal: { folderId: STATE.drive.folderId },
+      proforma: { fileId: chosen.id, fileName: chosen.name },
+      suggestedOutputName: proformaCapexOutputName(chosen.name),
+      capex: { fileId: capexUp.id, fileName: capexName },
+      // How the export maps into the proforma CAPEX tab (worker verifies against the file):
+      mapping: { bannerText: 'Copy/Paste Below This Line to Proforma', exportFirstDataRow: 12, capexAnchorRow: 25 },
+      requestedBy: { email: (CURRENT_USER || {}).email || '', name: (CURRENT_USER || {}).name || '' },
+      requestedAt, startedAt: null, finishedAt: null, worker: null,
+      output: null, error: null, attempts: 0,
+    };
+    toast('Queuing proforma import…');
+    const up = await driveUploadJson(jobsFolderId, `job_${jobId}.json`, job);
+    setProformaJob({ jobId, fileId: up.id, jobsFolderId, status: 'queued', submittedAt: requestedAt,
+      proformaName: chosen.name, outputName: job.suggestedOutputName });
+    startProformaPoll();
+    if (CURRENT_VIEW === 'property') renderApp();
+    toast(`✅ Queued — a processing agent will paste the capex into "${chosen.name}" (Excel COM, preserves formulas) and save a new "Capex" version to 2. UW-Analysis (typically ~30 min–1 hour).`, 'success');
+  } catch (e) {
+    console.error('submitProformaCapexJob:', e);
+    toast('Could not queue the proforma import: ' + e.message, 'error');
+  }
+}
+
+function startProformaPoll() {
+  stopProformaPoll();
+  checkProformaJob().catch(() => {});
+  PROFORMA_POLL_ID = setInterval(() => { checkProformaJob().catch(() => {}); }, PROFORMA_JOB_POLL_MS);
+}
+function stopProformaPoll() { if (PROFORMA_POLL_ID) clearInterval(PROFORMA_POLL_ID); PROFORMA_POLL_ID = null; }
+function maybeStartProformaPoll() { if (proformaJobIsActive(getProformaJob()) && !PROFORMA_POLL_ID) startProformaPoll(); }
+
+async function checkProformaJob() {
+  const ptr = getProformaJob();
+  if (!proformaJobIsActive(ptr)) { stopProformaPoll(); return; }
+  if (!getDriveToken()) return;
+  const pid = STATE && STATE.id;
+  let job = null, fileId = ptr.fileId;
+  try {
+    // fileId-first, re-find-by-name fallback (the worker rewrites the job file).
+    let r = fileId ? await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`) : { ok: false, status: 404 };
+    if (!r.ok && r.status === 404 && ptr.jobsFolderId) {
+      const f = await driveFindFile(ptr.jobsFolderId, `job_${ptr.jobId}.json`).catch(() => null);
+      if (!f) { if (STATE && STATE.id === pid) { setProformaJob(null); if (CURRENT_VIEW === 'property') renderApp(); } stopProformaPoll(); return; }
+      fileId = f.id;
+      r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+    }
+    if (!r.ok) return;
+    job = await r.json();
+  } catch (e) { console.warn('checkProformaJob fetch failed:', e); return; }
+  if (!STATE || STATE.id !== pid) return;
+
+  const status = job && job.status;
+  if (status !== ptr.status || fileId !== ptr.fileId) {
+    setProformaJob({ ...ptr, fileId, status: status || ptr.status, outputName: (job.output && job.output.fileName) || ptr.outputName });
+    if (CURRENT_VIEW === 'property') renderApp();
+  }
+  if (status === 'done') {
+    stopProformaPoll();
+    setProformaJob(null);
+    if (CURRENT_VIEW === 'property') renderApp();
+    const outName = (job.output && job.output.fileName) || ptr.outputName || 'the new Capex proforma';
+    const link = (job.output && job.output.fileId) ? `\nOpen: https://drive.google.com/open?id=${job.output.fileId}` : '';
+    toast(`✅ Capex imported into "${outName}" (saved in 2. UW-Analysis).${link}`, 'success');
+  } else if (status === 'error') {
+    stopProformaPoll();
+    setProformaJob(null);
+    if (CURRENT_VIEW === 'property') renderApp();
+    toast('Proforma import failed: ' + (job.error || 'unknown error') + ' — you can retry 📥 Import to Proforma.', 'error');
   }
 }
 
@@ -6889,8 +7121,9 @@ async function syncTick() {
     // 3. Write our heartbeat + lastModified to the manifest.
     await upsertManifestEntry(buildManifestEntry({ asEditor: true }));
     updateSyncBar();
-    // 4. Backstop the survey-job poll (restart it if the dedicated interval died).
+    // 4. Backstop the survey-job + proforma-import polls (restart if the interval died).
     if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();
+    if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();
   } catch (e) {
     console.warn('syncTick failed:', e);
   }
@@ -6986,7 +7219,7 @@ THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
-4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Two export buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder. The workbook mirrors the proforma's capex tab.
+4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Import to Proforma" copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
 - You never press Save — it auto-saves to Drive a couple seconds after you stop typing. Google Drive is the source of truth. A status bar shows "Saving…" then "✓ Saved to Drive".
