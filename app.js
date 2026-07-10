@@ -1646,9 +1646,16 @@ function renderSurveyBlock() {
 
     body.appendChild(actions);
 
-    // Persistent expectation-setting note (shown even when idle).
-    body.appendChild(el('div', { class: 'muted small', style: 'padding:2px 16px 6px;font-style:italic' },
-      '🛰 Process Survey runs the full survey-breakdown skill in the background — processing takes about 30 minutes to 1 hour. You can leave this page; the site fields fill in automatically when it’s done.'));
+    // Once a survey has been processed, drop the how-it-works explanation and the
+    // buildings roll-up summary — the per-building rows + the "Last processed" line
+    // below carry the result. Show the explanation only before the first process.
+    const processed = !!s.processed_at;
+
+    // Persistent expectation-setting note (hidden once processed).
+    if (!processed) {
+      body.appendChild(el('div', { class: 'muted small', style: 'padding:2px 16px 6px;font-style:italic' },
+        '🛰 Process Survey runs the full survey-breakdown skill in the background — processing takes about 30 minutes to 1 hour. You can leave this page; the site fields fill in automatically when it’s done.'));
+    }
 
     // Active survey-job status (only while queued/processing).
     const jobLine = surveyJobStatusLine(rebuild);
@@ -1674,8 +1681,12 @@ function renderSurveyBlock() {
       ? `Last processed: ${new Date(s.processed_at).toLocaleString()}` +
         (s.source_pdf ? ` · from ${s.source_pdf.split(/[\\/]/).pop()}` : '')
       : 'No survey processed yet.';
-    body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 4px' },
-      summaryBits.length ? summaryBits.join(' · ') : 'No buildings logged.'));
+    // Buildings roll-up summary — hidden once processed (the per-building rows show it).
+    if (!processed) {
+      body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 4px' },
+        summaryBits.length ? summaryBits.join(' · ') : 'No buildings logged.'));
+    }
+    // "Last processed" note — always kept.
     body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px;font-style:italic' }, metaLine));
 
     blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
