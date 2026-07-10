@@ -2168,6 +2168,9 @@ async function importSurveyFromFile(file, rebuild) {
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
     const parsed = parseSurveyXlsx(wb);
     const summary = applySurveyParsedData(parsed, file.name);
+    // A manual upload fulfills any pending survey job — clear it so the section
+    // stops showing "queued/processing".
+    await clearActiveSurveyJob({ deleteRemote: true });
     if (rebuild) rebuild();
     renderShell();   // refresh the whole form so flat fields show new values
     toast(`Survey imported — ${summary}`, 'success');
@@ -2217,6 +2220,9 @@ async function importSurveyFromDrive(rebuild) {
     const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
     const parsed = parseSurveyXlsx(wb);
     const summary = applySurveyParsedData(parsed, chosen.name);
+    // A manual import fulfills any pending survey job — clear it (and drop the Drive
+    // job file so the worker skips it) so the section stops showing "queued".
+    await clearActiveSurveyJob({ deleteRemote: true });
     if (rebuild) rebuild();
     renderShell();
     toast(`Survey imported from ${chosen.name} — ${summary}`, 'success');
@@ -2469,8 +2475,29 @@ async function cancelSurveyJob(rebuild) {
 // Start/stop the active-job poll. checkSurveyJob() self-stops when idle.
 function startSurveyPoll() {
   stopSurveyPoll();
+  _lastSurveyOutputCheckAt = 0;   // allow an immediate output-file check on (re)start
   checkSurveyJob().catch(() => {});
   SURVEY_POLL_ID = setInterval(() => { checkSurveyJob().catch(() => {}); }, SURVEY_JOB_POLL_MS);
+}
+
+// Clear the active survey-job pointer (stops the "queued/processing" UI) and, optionally,
+// delete its Drive job file so the worker skips it. Used when survey data is loaded by
+// another path (manual 📥 Import Survey / ⬆ Upload XLSX) so a stale job doesn't linger.
+async function clearActiveSurveyJob({ deleteRemote = false } = {}) {
+  const ptr = getSurveyJob();
+  stopSurveyPoll();
+  if (!ptr) return;
+  if (deleteRemote && getDriveToken()) {
+    try {
+      let fileId = ptr.fileId;
+      if (ptr.jobsFolderId) {
+        const f = await driveFindFile(ptr.jobsFolderId, `job_${ptr.jobId}.json`).catch(() => null);
+        if (f) fileId = f.id;
+      }
+      if (fileId) await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: 'DELETE' }).catch(() => {});
+    } catch { /* best-effort */ }
+  }
+  if (getSurveyJob()) setSurveyJob(null);
 }
 function stopSurveyPoll() {
   if (SURVEY_POLL_ID) clearInterval(SURVEY_POLL_ID);
@@ -2530,29 +2557,63 @@ async function checkSurveyJob() {
     if (status !== ptr.status) refreshSurveyUI();
   }
 
-  if (status === 'done') {
-    stopSurveyPoll();
-    try {
-      toast('Survey processed — importing the breakdown…');
-      const wb = await downloadSurveyOutputWorkbook(job);
-      if (!wb) throw new Error('output workbook not found in 7. Title_Survey');
-      const parsed = parseSurveyXlsx(wb);
-      const summary = applySurveyParsedData(parsed, (job.output && job.output.fileName) || ptr.pdfName || '');
-      setSurveyJob(null);
-      delete SURVEY_STATUS_CACHE[STATE.id];
-      refreshSurveyUI();
-      toast(`✅ Survey imported — ${summary}`, 'success');
-    } catch (e) {
-      console.error('auto-import after job done failed:', e);
-      setSurveyJob(null);   // clear so the button is usable; the workbook is on Drive regardless
-      refreshSurveyUI();
-      toast('Survey finished but auto-import failed (' + e.message + ') — click 📥 Import Survey.', 'error');
-    }
+  // Completion is signalled EITHER by the worker flipping status to "done", OR by a
+  // fresh SurveySpecs workbook appearing in 7. Title_Survey/ — the latter covers a
+  // survey run manually (in Claude) that never touched the job file, or a worker that
+  // produced the file but failed to update the status. Either way: import + clear.
+  let done = (status === 'done');
+  let outputFileId = job.output && job.output.fileId;
+  let outputName = (job.output && job.output.fileName) || ptr.pdfName || '';
+  if (!done && (status === 'queued' || status === 'processing')) {
+    const fresh = await findFreshSurveyOutput(ptr.submittedAt || job.requestedAt);
+    if (fresh) { done = true; outputFileId = fresh.id; outputName = fresh.name; }
+  }
+
+  if (done) {
+    await completeSurveyJobWithImport(outputFileId, outputName);
   } else if (status === 'error') {
     stopSurveyPoll();
     setSurveyJob(null);
     refreshSurveyUI();
     toast('Survey processing failed: ' + (job.error || 'unknown error') + ' — you can retry 🛰 Process Survey.', 'error');
+  }
+}
+
+// Look for a SurveySpecs workbook in 7. Title_Survey/ that is newer than the job
+// submission (i.e. produced by THIS job). Throttled to ~once/min to bound Drive load
+// while a job is in flight. Returns the file candidate or null.
+let _lastSurveyOutputCheckAt = 0;
+async function findFreshSurveyOutput(submittedIso) {
+  const now = Date.now();
+  if (now - _lastSurveyOutputCheckAt < 60_000) return null;   // throttle
+  _lastSurveyOutputCheckAt = now;
+  const sub = Date.parse(submittedIso || '') || 0;
+  const cands = await _listSurveyReportCandidates().catch(() => []);
+  return cands.find(c => {
+    const mt = Date.parse(c.modifiedTime || '');
+    return isFinite(mt) ? (mt >= sub - 5 * 60_000) : true;   // 5-min skew; undated file => accept
+  }) || null;
+}
+
+// Download the finished workbook, apply it, and clear the active job. Shared by the
+// poll's completion path. outputFileId may be null → newest SurveySpecs is used.
+async function completeSurveyJobWithImport(outputFileId, sourceName) {
+  stopSurveyPoll();
+  try {
+    toast('Survey processed — importing the breakdown…');
+    const wb = await downloadSurveyOutputWorkbook(outputFileId ? { output: { fileId: outputFileId } } : {});
+    if (!wb) throw new Error('output workbook not found in 7. Title_Survey');
+    const parsed = parseSurveyXlsx(wb);
+    const summary = applySurveyParsedData(parsed, sourceName || '');
+    setSurveyJob(null);
+    if (STATE) delete SURVEY_STATUS_CACHE[STATE.id];
+    refreshSurveyUI();
+    toast(`✅ Survey processed — ${summary}`, 'success');
+  } catch (e) {
+    console.error('auto-import after job completion failed:', e);
+    setSurveyJob(null);   // clear so the section returns to normal; the workbook is on Drive regardless
+    refreshSurveyUI();
+    toast('Survey finished but auto-import failed (' + e.message + ') — click 📥 Import Survey.', 'error');
   }
 }
 
