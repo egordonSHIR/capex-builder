@@ -1646,6 +1646,10 @@ function renderSurveyBlock() {
 
     body.appendChild(actions);
 
+    // Persistent expectation-setting note (shown even when idle).
+    body.appendChild(el('div', { class: 'muted small', style: 'padding:2px 16px 6px;font-style:italic' },
+      '🛰 Process Survey runs the full survey-breakdown skill in the background — processing takes about 30 minutes to 1 hour. You can leave this page; the site fields fill in automatically when it’s done.'));
+
     // Active survey-job status (only while queued/processing).
     const jobLine = surveyJobStatusLine(rebuild);
     if (jobLine) body.appendChild(jobLine);
@@ -2357,7 +2361,7 @@ async function findSurveyPdfInDrive() {
 // path as 📥 Import Survey (parseSurveyXlsx → applySurveyParsedData).
 const SURVEY_JOBS_FOLDER_NAME = 'Survey Jobs';   // subfolder of SYNC_FOLDER_ID
 const SURVEY_JOB_POLL_MS = 15_000;               // active-job status poll cadence
-const SURVEY_JOB_STALE_MS = 45 * 60_000;         // a job idle this long looks stuck (worker runs ~every 15 min)
+const SURVEY_JOB_STALE_MS = 75 * 60_000;         // normal processing is 30–60 min; warn only past this
 let SURVEY_POLL_ID = null;                        // setInterval handle for the active-job poll
 let SURVEY_JOBS_FOLDER_ID = null;                 // cached id of the Survey Jobs folder
 
@@ -2432,7 +2436,7 @@ async function submitSurveyJob(rebuild) {
     delete SURVEY_STATUS_CACHE[STATE.id];
     startSurveyPoll();
     if (rebuild) rebuild();
-    toast('✅ Survey queued — a processing agent runs the survey-breakdown skill on a schedule (typically within ~15–20 min) and the breakdown imports here automatically. You can leave this page.', 'success');
+    toast('✅ Survey queued — a processing agent runs the survey-breakdown skill (typically 30 min to 1 hour) and the breakdown imports here automatically. You can leave this page.', 'success');
   } catch (e) {
     console.error('submitSurveyJob:', e);
     toast('Could not queue the survey job: ' + e.message, 'error');
@@ -2599,7 +2603,7 @@ function surveyJobStatusLine(rebuild) {
       ? '⏳ A processing agent is running the survey-breakdown skill'
       : '⏳ Survey queued — waiting for a processing agent') +
     (since ? ` (submitted ${since})` : '') +
-    '. The breakdown imports here automatically when done.' +
+    '. Processing usually takes 30 min to 1 hour; the breakdown imports here automatically when done — you can leave the page.' +
     (stale ? ' ⚠ Taking longer than usual — is the survey-job worker running?' : '');
   return el('div', { class: 'muted small', style: 'padding:0 16px 6px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap' },
     el('span', { style: 'flex:1;min-width:220px' }, msg),
@@ -6864,7 +6868,7 @@ HOME SCREEN
 - TO UNARCHIVE / RESTORE a property: click the "🗄 Archived" toggle on the home screen to see archived properties, open that property's ⋮ menu, and choose "Unarchive (move to Live)". It returns to the main list.
 
 THE FOUR TABS
-1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and a few minutes later the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
+1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Two export buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder. The workbook mirrors the proforma's capex tab.
