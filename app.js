@@ -4904,34 +4904,57 @@ function renderPhase4() {
     ? `flex:1 1 0;min-width:180px;padding:18px;background:${activeBg};color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer`
     : `flex:1 1 0;min-width:180px;padding:18px;background:#cbd5e1;color:#f8fafc;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:not-allowed`;
 
-  // Export actions (side by side): download-only, place into 25. Capex, and import
-  // into a proforma in 2. UW-Analysis (via the Cowork Excel-COM worker).
+  // Export actions (side by side): download-only, place into 25. Capex, and place/refresh
+  // the capex into a proforma in 2. UW-Analysis (via the Cowork Excel-COM worker).
   const proformaJob = getProformaJob();
   const proformaActive = proformaJobIsActive(proformaJob);
+
+  // The proforma button label depends on an async Drive check: if a "CapexB" (Capex
+  // Builder) import already exists in 2. UW-Analysis, the button becomes "Update CapexB
+  // in Proforma" and a line shows that file + when it was processed. Render with the
+  // cached answer, then refresh asynchronously.
+  const proformaBtn = el('button', {});
+  const proformaStatus = el('div', { style: 'margin-top:6px;font-size:12px;font-style:italic' });
+  const paintProforma = (capexbFile) => {
+    if (proformaActive) {
+      proformaBtn.textContent = proformaJob.status === 'processing' ? '⏳  Working in Proforma…' : '⏳  Proforma queued…';
+      proformaBtn.disabled = true; proformaBtn.style.cssText = btnStyle('#3477B2') + ';cursor:default'; proformaBtn.onclick = null;
+      proformaBtn.title = 'A proforma import is already running';
+      proformaStatus.style.color = '#475569';
+      proformaStatus.textContent = `⏳ A processing agent is ${proformaJob.outputName && /capexb/i.test(proformaJob.outputName) && proformaJob.proformaName === proformaJob.outputName ? `refreshing "${proformaJob.proformaName}"` : `building "${proformaJob.outputName || 'the CapexB proforma'}" from "${proformaJob.proformaName || 'the proforma'}"`} via Excel COM. It will appear in 2. UW-Analysis — typically ~30 min–1 hour. You can leave this page.`;
+      proformaStatus.style.display = '';
+      return;
+    }
+    proformaBtn.style.cssText = btnStyle('#3477B2');
+    proformaBtn.disabled = !exportReady;
+    proformaBtn.onclick = exportReady ? submitProformaCapexJob : null;
+    if (capexbFile) {
+      proformaBtn.textContent = '🔄  Update CapexB in Proforma';
+      proformaBtn.title = exportReady ? `Refresh the Capex Builder budget in ${capexbFile.name} (or import into another proforma)` : readyTip;
+      const d = capexbFile.modifiedTime ? new Date(capexbFile.modifiedTime).toLocaleString() : 'unknown';
+      proformaStatus.style.color = '#166534';
+      proformaStatus.textContent = `📄 Capex Builder already imported → ${capexbFile.name}  ·  processed ${d}.  "Update" overwrites it (or pick another proforma).`;
+      proformaStatus.style.display = '';
+    } else {
+      proformaBtn.textContent = '📥  Place In Proforma';
+      proformaBtn.title = exportReady ? 'Place the capex budget into a proforma in 2. UW-Analysis' : readyTip;
+      proformaStatus.style.display = 'none';
+    }
+  };
+  paintProforma((PROFORMA_CAPEXB_CACHE[STATE.id] || {}).file || null);
+
   root.appendChild(el('div', { style: 'display:flex;gap:10px;margin-top:8px;flex-wrap:wrap' },
-    el('button', {
-      style: btnStyle('#1d2d47'), disabled: !exportReady, title: readyTip,
-      onClick: exportXlsx
-    }, '⬇  Export to Excel'),
-    el('button', {
-      style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip,
-      onClick: placeInCapexFolder
-    }, '☁  Place in Capex Folder'),
-    (() => {
-      const b = el('button', {
-        style: btnStyle('#3477B2'),
-        title: !exportReady ? readyTip : (proformaActive ? 'A proforma import is already running' : 'Copy the capex budget into a proforma in 2. UW-Analysis'),
-        onClick: proformaActive ? null : submitProformaCapexJob,
-      }, proformaActive ? (proformaJob.status === 'processing' ? '⏳  Importing to Proforma…' : '⏳  Import queued…') : '📥  Import to Proforma');
-      b.disabled = !exportReady || proformaActive;
-      if (proformaActive) b.style.cursor = 'default';
-      return b;
-    })()
+    el('button', { style: btnStyle('#1d2d47'), disabled: !exportReady, title: readyTip, onClick: exportXlsx }, '⬇  Export to Excel'),
+    el('button', { style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip, onClick: placeInCapexFolder }, '☁  Place in Capex Folder'),
+    proformaBtn
   ));
-  if (proformaActive) {
-    root.appendChild(el('div', { style: 'margin-top:6px;color:#475569;font-size:12px;font-style:italic' },
-      `⏳ A processing agent is copying "${proformaJob.proformaName || 'the proforma'}" and pasting the capex into its CAPEX tab (Excel COM). The new "${proformaJob.outputName || 'Capex'}" version will appear in 2. UW-Analysis — typically ~30 min–1 hour. You can leave this page.`));
+  root.appendChild(proformaStatus);
+
+  // Async: check Drive for an existing CapexB proforma and repaint the button/label.
+  if (!proformaActive) {
+    getExistingCapexBProforma(false).then((f) => { if (proformaBtn.isConnected) paintProforma(f); }).catch(() => {});
   }
+
   if (!exportReady) {
     root.appendChild(el('div', { style: 'margin-top:6px;color:#64748b;font-size:12px;font-style:italic' },
       'Export needs ' + missing.join(' and ') + '.'));
@@ -5308,20 +5331,37 @@ function proformaVersion(name) {
   const m = String(name || '').match(/[vV](\d+(?:\.\d+)?)/);
   return m ? parseFloat(m[1]) : -1;
 }
-// Suggested output name: bump the version # and inject "Capex" (the worker finalizes).
+// Suggested output name (the worker finalizes/deduplicates). "CapexB" marks a Capex
+// BUILDER import (vs a manual Capex edit in Excel). If the chosen file is ALREADY a
+// CapexB file, the name is kept unchanged — that's an in-place OVERWRITE (refresh).
+// Otherwise inject "CapexB" as a stage keyword before the version and bump the version #.
+function isCapexBProforma(name) { return /capexb/i.test(String(name || '')); }
 function proformaCapexOutputName(name) {
+  if (isCapexBProforma(name)) return String(name);   // overwrite in place → same name
   const ext = (String(name).match(/\.xlsx?$/i) || ['.xlsx'])[0];
   let base = String(name).replace(/\.xlsx?$/i, '');
   const vm = base.match(/^(.*?)([ _][vV])(\d+(?:\.\d+)?)(.*)$/);
   if (vm) {
     const num = parseFloat(vm[3]);
     const bumped = Number.isInteger(num) ? (num + 1) : Math.round((num + 0.1) * 10) / 10;
-    base = `${vm[1]}${vm[2]}${bumped}${vm[4]}`;
-  } else {
-    base = `${base} v2`;
+    const pre = vm[1].replace(/\s+$/, '');
+    return `${pre} CapexB${vm[2]}${bumped}${vm[4]}${ext}`;   // "… Final v6" → "… Final CapexB v7"
   }
-  if (!/capex/i.test(base)) base = base + ' Capex';
-  return base + ext;
+  return `${base} CapexB v2${ext}`;
+}
+
+// Find an existing "CapexB" proforma already in the deal's 2. UW-Analysis (newest by
+// version then modifiedTime). Cached per property. Returns {id,name,modifiedTime} or null.
+const PROFORMA_CAPEXB_CACHE = {};
+async function getExistingCapexBProforma(force) {
+  if (!STATE || !STATE.drive.folderId || !getDriveToken()) return null;
+  const pid = STATE.id;
+  if (!force && PROFORMA_CAPEXB_CACHE[pid]) return PROFORMA_CAPEXB_CACHE[pid].file;
+  const { list } = await _listUWProformaCandidates();
+  const capexb = list.filter(f => isCapexBProforma(f.name));   // list is already sorted (version ↓, mtime ↓)
+  const file = capexb.length ? { id: capexb[0].id, name: capexb[0].name, modifiedTime: capexb[0].modifiedTime } : null;
+  PROFORMA_CAPEXB_CACHE[pid] = { file, checkedAt: Date.now() };
+  return file;
 }
 
 // List proforma candidates in 2. UW-Analysis, ranked (keyword rank ↓, then version ↓,
@@ -5412,6 +5452,9 @@ async function submitProformaCapexJob() {
       deal: { folderId: STATE.drive.folderId },
       proforma: { fileId: chosen.id, fileName: chosen.name },
       suggestedOutputName: proformaCapexOutputName(chosen.name),
+      // If the chosen file is already a CapexB import, overwrite it in place (refresh);
+      // otherwise create a new "CapexB" copy from the base proforma.
+      overwriteExisting: isCapexBProforma(chosen.name),
       capex: { fileId: capexUp.id, fileName: capexName },
       // How the export maps into the proforma CAPEX tab (worker verifies against the file):
       mapping: { bannerText: 'Copy/Paste Below This Line to Proforma', exportFirstDataRow: 12, capexAnchorRow: 25 },
@@ -5423,9 +5466,11 @@ async function submitProformaCapexJob() {
     const up = await driveUploadJson(jobsFolderId, `job_${jobId}.json`, job);
     setProformaJob({ jobId, fileId: up.id, jobsFolderId, status: 'queued', submittedAt: requestedAt,
       proformaName: chosen.name, outputName: job.suggestedOutputName });
+    delete PROFORMA_CAPEXB_CACHE[STATE.id];
     startProformaPoll();
     if (CURRENT_VIEW === 'property') renderApp();
-    toast(`✅ Queued — a processing agent will paste the capex into "${chosen.name}" (Excel COM, preserves formulas) and save a new "Capex" version to 2. UW-Analysis (typically ~30 min–1 hour).`, 'success');
+    const verb = job.overwriteExisting ? `refresh the capex in "${chosen.name}"` : `paste the capex into a new "CapexB" copy of "${chosen.name}"`;
+    toast(`✅ Queued — a processing agent will ${verb} via Excel COM (preserves the chart/formulas) and save it to 2. UW-Analysis (typically ~30 min–1 hour).`, 'success');
   } catch (e) {
     console.error('submitProformaCapexJob:', e);
     toast('Could not queue the proforma import: ' + e.message, 'error');
@@ -5468,8 +5513,9 @@ async function checkProformaJob() {
   if (status === 'done') {
     stopProformaPoll();
     setProformaJob(null);
+    delete PROFORMA_CAPEXB_CACHE[pid];   // a new/updated CapexB proforma now exists → re-detect
     if (CURRENT_VIEW === 'property') renderApp();
-    const outName = (job.output && job.output.fileName) || ptr.outputName || 'the new Capex proforma';
+    const outName = (job.output && job.output.fileName) || ptr.outputName || 'the new CapexB proforma';
     const link = (job.output && job.output.fileId) ? `\nOpen: https://drive.google.com/open?id=${job.output.fileId}` : '';
     toast(`✅ Capex imported into "${outName}" (saved in 2. UW-Analysis).${link}`, 'success');
   } else if (status === 'error') {
