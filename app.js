@@ -918,28 +918,33 @@ function updateBasicsTabCheck() {
   }
 }
 
-// Pastel per-section color scheme for the Basics tab. Each section header gets a
-// soft tint + a matching deeper left-border accent (text stays dark/readable).
-const BASICS_SECTION_TINTS = [
-  { bg: '#FDE2E4', bar: '#F2A1AD' }, // pink
-  { bg: '#E3F0E5', bar: '#9FD2A8' }, // mint
-  { bg: '#DCEBF7', bar: '#97C0E6' }, // sky
-  { bg: '#FFF1E6', bar: '#F4BE86' }, // peach
-  { bg: '#F1E7FB', bar: '#C4A3E8' }, // lavender
-  { bg: '#E0F4F3', bar: '#97D6D2' }, // aqua
-  { bg: '#FCEFD6', bar: '#EACB6E' }, // butter
-  { bg: '#E7EDFF', bar: '#A6BCEF' }, // periwinkle
-  { bg: '#EFE6F7', bar: '#C2A6DC' }, // mauve
-  { bg: '#E9F5E0', bar: '#AFD993' }, // sage
-  { bg: '#FBE4EC', bar: '#ECA3C0' }, // rose
-  { bg: '#E6F2EC', bar: '#9ED2B6' }, // seafoam
+// Per-section header colors for the Basics tab — mirrors the CAPEX group-header
+// palette (the Excel-matched trade colors) PLUS three neutral variations: black,
+// gray, and white. Solid backgrounds with auto-picked readable text (was: pastel
+// tints). Cycled across the Basics sections in order.
+const BASICS_SECTION_COLORS = [
+  '#417B85', // teal (green-blue)
+  '#78697B', // mauve-gray
+  '#B2BCCB', // blue-gray
+  '#A64D79', // magenta
+  '#3477B2', // blue
+  '#242852', // navy
+  '#FFCC66', // gold
+  '#111827', // variation: black bg / white font
+  '#cbd5e1', // variation: gray bg / black font
+  '#ffffff', // variation: white bg / black font
 ];
 let _basicsColorMap = null;
 function basicsSectionColor(name) {
   if (!_basicsColorMap) {
     _basicsColorMap = {};
     const secs = [...(SCHEMA.phase1 || []), ...(SCHEMA.phase2 || [])];
-    secs.forEach((s, i) => { _basicsColorMap[s.section] = BASICS_SECTION_TINTS[i % BASICS_SECTION_TINTS.length]; });
+    secs.forEach((s, i) => {
+      const hex = BASICS_SECTION_COLORS[i % BASICS_SECTION_COLORS.length];
+      // bg = solid header color, bar = same hue for the section's left-border accent,
+      // fg = readable text color (white on dark, near-black on light).
+      _basicsColorMap[s.section] = { bg: hex, bar: hex, fg: textOn(hex) };
+    });
   }
   return _basicsColorMap[name] || null;
 }
@@ -1087,7 +1092,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
       style: tint ? `border-left:4px solid ${tint.bar}` : ''
     },
       el('header', { class: 'section-header',
-        style: tint ? `background:${tint.bg}` : '',
+        style: tint ? `background:${tint.bg};color:${tint.fg}` : '',
         onClick: (e) => {
           e.currentTarget.parentElement.classList.toggle('collapsed');
           window['_collapsed_' + sec.section] = e.currentTarget.parentElement.classList.contains('collapsed');
@@ -1096,7 +1101,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
         el('span', {}, sec.section),
         el('span', { style: 'display:flex;align-items:center;gap:8px' },
           el('span', { class: 'section-check', style: 'color:#dc2626;font-weight:700' }, '✗'),
-          el('span', { class: 'chev' }, '▼')
+          el('span', { class: 'chev', style: tint ? `color:${tint.fg}` : '' }, '▼')
         )
       ),
       body
@@ -1607,41 +1612,30 @@ function renderSurveyBlock() {
     // Resume polling if a survey job is still in flight for this property.
     maybeStartSurveyPoll();
 
-    // Survey status chips, inline with the action buttons: does a survey PDF
-    // exist in the deal folder, and does a processed SurveyBreakdownSpecs
-    // workbook exist in 7. Title_Survey/? Checked via Drive (cached
-    // per property); click the chips to re-check.
-    const chipStyle = (on) =>
-      'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 10px;border-radius:999px;align-self:center;cursor:pointer;' +
-      (on ? 'background:#dcfce7;color:#166534' : 'background:#f1f5f9;color:#64748b');
-    const statusHolder = el('span', { style: 'display:flex;gap:6px;align-items:center;margin-left:auto', title: 'Survey status — click to re-check Drive' });
-    actions.appendChild(statusHolder);
-    const renderChips = (st) => {
-      statusHolder.innerHTML = '';
-      if (st === undefined) {
-        statusHolder.appendChild(el('span', { style: chipStyle(false) }, '⏳ survey status…'));
-        return;
-      }
-      if (st === null) {
-        statusHolder.appendChild(el('span', { style: chipStyle(false), title: 'Connect Drive and link a deal folder to check survey status' }, '🔗 link Drive to check'));
-        return;
-      }
-      statusHolder.appendChild(el('span', {
-        style: chipStyle(!!st.pdf),
-        title: st.pdf ? `Survey PDF on file: ${st.pdf.name}` : 'No survey PDF found in 7. Title_Survey or 1. Offering Materials',
-      }, st.pdf ? '📄 survey ✓' : '📄 no survey'));
-      statusHolder.appendChild(el('span', {
-        style: chipStyle(!!st.report),
-        title: st.report ? `Breakdown workbook on file: ${st.report.name}` : 'No SurveyBreakdownSpecs workbook in 7. Title_Survey — run 🛰 Process Survey',
-      }, st.report ? '📐 processed ✓' : '📐 not processed'));
+    // "Survey on file" indicator — same button size/shape as the actions, pushed ALL
+    // THE WAY RIGHT. Reflects whether a survey PDF exists in the deal folder (async
+    // Drive check, cached per property); click to re-check. The "Processed" indicator
+    // lives in the Process Survey slot (see surveyJobButton), not here.
+    const surveyChip = el('span', { class: 'um-btn secondary',
+      style: 'white-space:nowrap;font-size:13px;padding:8px 10px;cursor:pointer;margin-left:auto' });
+    actions.appendChild(surveyChip);
+    const renderSurveyChip = (st) => {
+      let text, bg, fg, border, title;
+      if (st === undefined)      { text = '⏳ Checking…';   bg = '#f1f5f9'; fg = '#64748b'; border = 'var(--border)'; title = 'Checking Drive…'; }
+      else if (st === null)      { text = '🔗 Link Drive';  bg = '#f1f5f9'; fg = '#64748b'; border = 'var(--border)'; title = 'Connect Drive + link a deal folder to check survey status'; }
+      else if (st.pdf)           { text = '📄 Survey on file'; bg = '#dcfce7'; fg = '#166534'; border = '#86efac'; title = `Survey PDF on file: ${st.pdf.name}`; }
+      else                       { text = '📄 No survey';    bg = '#f1f5f9'; fg = '#64748b'; border = 'var(--border)'; title = 'No survey PDF found in 7. Title_Survey or 1. Offering Materials'; }
+      surveyChip.textContent = text;
+      surveyChip.style.background = bg; surveyChip.style.color = fg;
+      surveyChip.style.borderColor = border; surveyChip.title = title;
     };
     const loadChips = (force) => {
-      if (!STATE.drive.folderId || !getDriveToken()) { renderChips(null); return; }
-      renderChips(undefined);
-      getSurveyFileStatus(force).then(st => { if (statusHolder.isConnected) renderChips(st); })
-        .catch(() => { if (statusHolder.isConnected) renderChips(null); });
+      if (!STATE.drive.folderId || !getDriveToken()) { renderSurveyChip(null); return; }
+      renderSurveyChip(undefined);
+      getSurveyFileStatus(force).then(st => { if (surveyChip.isConnected) renderSurveyChip(st); })
+        .catch(() => { if (surveyChip.isConnected) renderSurveyChip(null); });
     };
-    statusHolder.addEventListener('click', () => loadChips(true));
+    surveyChip.addEventListener('click', () => loadChips(true));
     loadChips(false);
 
     body.appendChild(actions);
@@ -2695,9 +2689,15 @@ function surveyJobButton(rebuild) {
     btn.disabled = true;
     return btn;
   }
-  // Once the survey has been processed (and nothing is in flight), the "📐 processed ✓"
-  // status chip stands in for the button — show one OR the other, not both.
-  if (STATE && STATE.survey && STATE.survey.processed_at) return null;
+  // Once the survey has been processed (and nothing is in flight), a "Processed"
+  // indicator takes the SAME slot as the Process Survey button — same size/shape,
+  // green, non-interactive. Show one OR the other, never both.
+  if (STATE && STATE.survey && STATE.survey.processed_at) {
+    return el('span', { class: 'um-btn secondary',
+      style: 'white-space:nowrap;font-size:13px;padding:8px 10px;cursor:default;background:#dcfce7;color:#166534;border-color:#86efac',
+      title: 'Survey processed — the fields below are filled in. Use 📥 Import Survey to re-load or replace.' },
+      '📐 Processed ✓');
+  }
   return el('button', { class: 'um-btn secondary',
     style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
     onClick: () => submitSurveyJob(rebuild), title: 'Run the survey-breakdown-specs skill for this deal and import the result' },
@@ -3441,23 +3441,11 @@ function countChecked() {
   return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
 }
 
-// CAPEX group header colors — SHIR Capital brand palette (navy / green-blue / blue /
-// slate) plus three neutral variations (black-on-white, gray-on-black, white-on-black
-// text is auto-picked by textOn()): black bg, gray bg, white bg.
+// CAPEX group header colors, matched to the source Excel "CAPEX" tab. Used by the
+// Questionnaire + Budget group headers AND the Excel export (so the pasted section
+// looks like the proforma). The Basics-page section headers reuse these hues plus
+// three neutral variations — see BASICS_SECTION_COLORS.
 const GROUP_COLORS = {
-  'Soft Costs': '#1d2d47',                // SHIR navy (white text)
-  'Base Work': SHIR_GREEN_BLUE,           // SHIR green-blue / teal (white text)
-  'Building Work': '#3b82f6',             // SHIR blue (white text)
-  'Interior': '#7d8a9c',                  // SHIR slate (white text)
-  'Exterior': '#111827',                  // variation: black background, white font
-  'Amenities': '#cbd5e1',                 // variation: gray background, black font
-  'Commercial Tenant Costs': '#ffffff',   // variation: white background, black font
-};
-
-// The Excel export deliberately keeps the ORIGINAL palette that matches the MFVA/ExStay
-// proforma CAPEX tab (so the pasted section looks like the proforma) — it is NOT rethemed
-// to the on-screen SHIR group colors above.
-const EXPORT_GROUP_COLORS = {
   'Soft Costs': '#417B85',
   'Base Work': '#78697B',
   'Building Work': '#B2BCCB',
@@ -5004,7 +4992,7 @@ async function buildCapexWorkbook() {
     styleCurrency(row.getCell(COL_TOTAL));
     return row;
   };
-  const commHex = EXPORT_GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
+  const commHex = GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
   const rowTotal = mkSummary('Total Capex Budget', NAVY, WHITE, true);
   const rowFee   = mkSummary('Construction Mgmt Fee', LIGHT, NAVY, false);
   const rowCont  = mkSummary('Contingency', LIGHT, NAVY, false);
@@ -5050,7 +5038,7 @@ async function buildCapexWorkbook() {
   const groupSubtotalAddrs = []; // Cell addresses like "J42" for the final grand-sum formula.
 
   exportGroups.forEach(({ group, gi, sections }) => {
-    const groupColorHex = EXPORT_GROUP_COLORS[group.name] || '#1E3A8A';
+    const groupColorHex = GROUP_COLORS[group.name] || '#1E3A8A';
     const groupFillArgb = argb(groupColorHex);
     const groupFontArgb = argb(textOn(groupColorHex));
     const rowTintArgb = argb(lightenHex(groupColorHex, 0.9));
