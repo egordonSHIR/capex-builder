@@ -2130,6 +2130,26 @@ function parseSurveyXlsx(wb) {
   return { flat, buildings, meta, notes: notes.join('\n'), discrepancies };
 }
 
+// Combine per-building/section story counts into one "# Floors (Per Bldg)" value:
+// a footprint-weighted average of stories — Σ(stories × footprint) / Σ(footprint).
+// Weighting by footprint means a big low-rise wing counts more than a small tower,
+// so the number reflects the typical floor count across the built area. Uniform-height
+// deals return the exact story count. Falls back to a plain average of stories when no
+// footprints are present. Returns a number rounded to 1 decimal, or null if no stories.
+function surveyWeightedFloors(buildings) {
+  let wSum = 0, fpSum = 0;      // Σ(stories×footprint), Σ(footprint)
+  let stSum = 0, n = 0;         // plain-average fallback
+  for (const b of (buildings || [])) {
+    const st = Number(b.stories);
+    if (!isFinite(st) || st <= 0) continue;
+    stSum += st; n++;
+    const fp = Number(b.footprint_sf) || 0;
+    if (fp > 0) { wSum += st * fp; fpSum += fp; }
+  }
+  const avg = fpSum > 0 ? (wSum / fpSum) : (n > 0 ? (stSum / n) : null);
+  return avg == null ? null : Math.round(avg * 10) / 10;
+}
+
 // Apply parsed survey data to STATE.phase1 (flat fields) and STATE.survey
 // (per-building + meta). Overwrites existing values. Returns a summary string.
 function applySurveyParsedData(parsed, sourcePdf) {
@@ -2150,6 +2170,18 @@ function applySurveyParsedData(parsed, sourcePdf) {
     }
   }
   STATE.survey.buildings = parsed.buildings || [];
+
+  // "# Floors (Per Bldg)" (vertical_floors) = the buildings' story counts, combined
+  // into ONE number: a footprint-weighted average of stories across all building/
+  // sections (Σ stories×footprint / Σ footprint). Uniform-height deals collapse to the
+  // exact story count; mixed-height deals get the size-weighted average. Falls back to
+  // a plain average when no footprints are given.
+  const vf = surveyWeightedFloors(STATE.survey.buildings);
+  if (vf != null) {
+    STATE.phase1.vertical_floors = vf;
+    filled++;
+  }
+
   STATE.survey.processed_at = new Date().toISOString();
   STATE.survey.source_pdf = sourcePdf || (parsed.meta && parsed.meta.address) || '';
   STATE.survey.scale_paper = parsed.meta && parsed.meta.scale_paper || '';
