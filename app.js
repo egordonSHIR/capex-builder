@@ -1689,9 +1689,7 @@ function renderSurveyBlock() {
     // "Last processed" note — always kept.
     body.appendChild(el('div', { class: 'muted small', style: 'padding:0 16px 8px;font-style:italic' }, metaLine));
 
-    blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
-
-    // Collapsible one-line "Instructions" (collapsed by default).
+    // Collapsible "Instructions" (collapsed by default) — sits ABOVE the building list.
     const instr = el('details', {
       style: 'margin:8px 16px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;overflow:hidden'
     });
@@ -1706,29 +1704,36 @@ function renderSurveyBlock() {
       ' folder, or ', el('strong', {}, '⬆ Upload XLSX'),
       ' to pick a file manually. Each import overwrites the flat fields below ',
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
-      'and replaces the buildings list with the Site-Total values from the workbook.'
+      'and replaces the buildings list with the Site-Total values from the workbook. ',
+      el('strong', {}, '🛰 Process Survey'),
+      ' button will request Claude to scan the survey and fill in the values below automatically, which can take up to an hour.'
     ));
     body.appendChild(instr);
+
+    blds.forEach((b, i) => body.appendChild(renderSurveyBuildingRow(b, i, rebuild)));
     return body;
   }
   rebuild();
   return body;
 }
 
+// SHIR Capital brand accent — green-blue (teal). Used for the survey building headers.
+const SHIR_GREEN_BLUE = '#417b85';
+
 function renderSurveyBuildingRow(b, i, rebuild) {
   const wrap = el('div', { class: 'unit-row' });
   wrap.style.cssText = 'border:1px solid #e5e7eb;border-radius:8px;margin:6px 16px;background:#fff;overflow:hidden';
 
   const summaryBar = el('div', {
-    style: 'display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;background:#f8fafc',
+    style: `display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;background:${SHIR_GREEN_BLUE};color:#fff`,
     onClick: () => {
       const isOpen = wrap.classList.toggle('expanded');
       details.style.display = isOpen ? 'block' : 'none';
       chev.textContent = isOpen ? '▼' : '▶';
     },
   });
-  const chev = el('span', { style: 'color:#64748b;font-size:11px;width:12px' }, '▶');
-  const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+  const chev = el('span', { style: 'color:#fff;font-size:11px;width:12px' }, '▶');
+  const nameSpan = el('span', { style: 'flex:1;font-weight:600;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
     b.label || `(Building ${i + 1})`);
   const metaText = (bb) => {
     const bits = [];
@@ -1738,7 +1743,7 @@ function renderSurveyBuildingRow(b, i, rebuild) {
     if (bb.roof_pitch) bits.push(`${bb.roof_pitch} pitch`);
     return bits.join(' · ');
   };
-  const metaSpan = el('span', { style: 'color:#64748b;font-size:13px;white-space:nowrap' }, metaText(b));
+  const metaSpan = el('span', { style: 'color:rgba(255,255,255,0.85);font-size:13px;white-space:nowrap' }, metaText(b));
   summaryBar.appendChild(chev); summaryBar.appendChild(nameSpan); summaryBar.appendChild(metaSpan);
   wrap.appendChild(summaryBar);
 
@@ -2690,6 +2695,9 @@ function surveyJobButton(rebuild) {
     btn.disabled = true;
     return btn;
   }
+  // Once the survey has been processed (and nothing is in flight), the "📐 processed ✓"
+  // status chip stands in for the button — show one OR the other, not both.
+  if (STATE && STATE.survey && STATE.survey.processed_at) return null;
   return el('button', { class: 'um-btn secondary',
     style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
     onClick: () => submitSurveyJob(rebuild), title: 'Run the survey-breakdown-specs skill for this deal and import the result' },
@@ -3433,8 +3441,23 @@ function countChecked() {
   return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
 }
 
-// CAPEX group header colors, matched to the source Excel "CAPEX" tab.
+// CAPEX group header colors — SHIR Capital brand palette (navy / green-blue / blue /
+// slate) plus three neutral variations (black-on-white, gray-on-black, white-on-black
+// text is auto-picked by textOn()): black bg, gray bg, white bg.
 const GROUP_COLORS = {
+  'Soft Costs': '#1d2d47',                // SHIR navy (white text)
+  'Base Work': SHIR_GREEN_BLUE,           // SHIR green-blue / teal (white text)
+  'Building Work': '#3b82f6',             // SHIR blue (white text)
+  'Interior': '#7d8a9c',                  // SHIR slate (white text)
+  'Exterior': '#111827',                  // variation: black background, white font
+  'Amenities': '#cbd5e1',                 // variation: gray background, black font
+  'Commercial Tenant Costs': '#ffffff',   // variation: white background, black font
+};
+
+// The Excel export deliberately keeps the ORIGINAL palette that matches the MFVA/ExStay
+// proforma CAPEX tab (so the pasted section looks like the proforma) — it is NOT rethemed
+// to the on-screen SHIR group colors above.
+const EXPORT_GROUP_COLORS = {
   'Soft Costs': '#417B85',
   'Base Work': '#78697B',
   'Building Work': '#B2BCCB',
@@ -4981,7 +5004,7 @@ async function buildCapexWorkbook() {
     styleCurrency(row.getCell(COL_TOTAL));
     return row;
   };
-  const commHex = GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
+  const commHex = EXPORT_GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
   const rowTotal = mkSummary('Total Capex Budget', NAVY, WHITE, true);
   const rowFee   = mkSummary('Construction Mgmt Fee', LIGHT, NAVY, false);
   const rowCont  = mkSummary('Contingency', LIGHT, NAVY, false);
@@ -5027,7 +5050,7 @@ async function buildCapexWorkbook() {
   const groupSubtotalAddrs = []; // Cell addresses like "J42" for the final grand-sum formula.
 
   exportGroups.forEach(({ group, gi, sections }) => {
-    const groupColorHex = GROUP_COLORS[group.name] || '#1E3A8A';
+    const groupColorHex = EXPORT_GROUP_COLORS[group.name] || '#1E3A8A';
     const groupFillArgb = argb(groupColorHex);
     const groupFontArgb = argb(textOn(groupColorHex));
     const rowTintArgb = argb(lightenHex(groupColorHex, 0.9));
