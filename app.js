@@ -4032,8 +4032,9 @@ function renderPhase3() {
   // Running Subtotal / $/Unit) inline with Expand/Collapse all, + column header.
   // Pinned just below the global app-header (top 60px) + phase-tabs (~41px) so the
   // main nav tabs stay visible at all times. z-index 8 stays under the app-header (10)
-  // and phase-tabs (9).
-  const sticky = el('div', { style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
+  // and phase-tabs (9). On phones (≤560px) the .budget-sticky media query makes it
+  // position:static — it scrolls away with the content instead of eating screen space.
+  const sticky = el('div', { class: 'budget-sticky', style: 'position:sticky;top:101px;z-index:8;background:#fff;border-bottom:1px solid #cbd5e1;box-shadow:0 2px 4px rgba(0,0,0,0.05);margin:0 -16px 0' });
   const bar = el('div', {
     style: 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:nowrap;overflow-x:auto;background:var(--primary);color:#fff;padding:10px 14px'
   });
@@ -4082,7 +4083,7 @@ function renderPhase3() {
 
   if (countChecked() === 0) {
     root.appendChild(el('div', { class: 'home-empty' },
-      'No items selected yet. Check items on the Questionnaire tab and they will appear here for pricing.'));
+      'No items selected yet. Check items on the To-Do tab and they will appear here for pricing.'));
     return root;
   }
 
@@ -4678,7 +4679,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
       });
     });
     if (!added) {
-      addSel.appendChild(el('option', { value: '', disabled: true }, 'No eligible items — check more on the Questionnaire'));
+      addSel.appendChild(el('option', { value: '', disabled: true }, 'No eligible items — check more on the To-Do tab'));
     }
   }
   rebuildAddOptions();
@@ -4856,7 +4857,7 @@ function renderPhase4() {
   if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Basics) — per-unit metric will be $0.');
   const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
   if (p2Filled === 0) warnings.push('Physical characteristics (Basics tab) appear empty.');
-  if (countChecked() === 0) warnings.push('No capex items selected on the Questionnaire tab.');
+  if (countChecked() === 0) warnings.push('No capex items selected on the To-Do tab.');
   // Building & Site area-consistency red flag: paved + footprint + impervious + pervious
   // should not exceed the total site area (= Land Sqft).
   {
@@ -4909,7 +4910,7 @@ function renderPhase4() {
   // selected Budget item. (Without either, the export has no real content.)
   const missing = [];
   if (!STATE.phase1.prop_name) missing.push('a property name (Basics)');
-  if (countChecked() === 0) missing.push('at least one selected Budget item (Questionnaire)');
+  if (countChecked() === 0) missing.push('at least one selected Budget item (To-Do tab)');
   const exportReady = missing.length === 0;
   const readyTip = exportReady ? '' : 'Add ' + missing.join(' and ') + ' to enable export.';
   const btnStyle = (activeBg) => exportReady
@@ -5613,8 +5614,8 @@ function renderOnboardingCard() {
   const steps = el('ol', { class: 'onboarding-steps' });
   steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
   steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
-  steps.appendChild(el('li', {}, 'Leave Basics for the Questionnaire tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
-  steps.appendChild(el('li', {}, 'Check items on the Questionnaire, price them on BUDGET $, then sync to Drive (see below).'));
+  steps.appendChild(el('li', {}, 'Leave Basics for the To-Do tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
+  steps.appendChild(el('li', {}, 'Check items on the To-Do tab, price them on BUDGET $, then sync to Drive (see below).'));
   card.appendChild(steps);
 
   // Push / Pull explainer — the core save-and-retrieve workflow.
@@ -6191,8 +6192,16 @@ function promptLinkFolder(p, after) {
 }
 
 // Single Drive-authoritative status: setup / saving / error / saved.
+// "✓ Saved to Drive" auto-hides after 3s (it's a confirmation, not a status the
+// user needs on screen). _syncBarOkShownFor remembers WHICH save was already
+// confirmed, so the frequent updateSyncBar callers (60s tick, re-renders,
+// heartbeats) don't re-flash the bar for a save the user has already seen.
+// Warn / error / conflict / saving states stay visible — those are actionable.
+let _syncBarHideTimer = null;
+let _syncBarOkShownFor = null;
 function updateSyncBar() {
   const bar = $('#sync-bar');
+  if (_syncBarHideTimer) { clearTimeout(_syncBarHideTimer); _syncBarHideTimer = null; }
   if (!STATE) { bar.classList.add('hidden'); return; }
   bar.onclick = null; bar.style.cursor = '';   // reset; the conflict branch re-arms these
   if (!STATE.drive.folderId) {
@@ -6217,8 +6226,20 @@ function updateSyncBar() {
     bar.className = 'sync-bar';
     bar.textContent = 'Saving to Drive…';
   } else {
+    if (_syncBarOkShownFor === (lastPush || '')) {
+      // This save's ✓ was already flashed — stay hidden.
+      bar.classList.add('hidden');
+      return;
+    }
     bar.className = 'sync-bar ok';
     bar.textContent = '✓ Saved to Drive' + (lastPush ? ' · ' + relativeTime(lastPush) : '');
+    bar.classList.remove('hidden');
+    _syncBarHideTimer = setTimeout(() => {
+      _syncBarHideTimer = null;
+      _syncBarOkShownFor = lastPush || '';
+      bar.classList.add('hidden');
+    }, 3000);
+    return;
   }
   bar.classList.remove('hidden');
 }
@@ -7650,7 +7671,7 @@ HOME SCREEN
 
 THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
-2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
+2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's "25. Capex/Photos" Drive folder, named after the line item. A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, add more, open one in Drive, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Import to Proforma" copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.

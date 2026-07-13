@@ -73,10 +73,20 @@ html, body {
   font-weight: 500;
   color: var(--muted);
   cursor: pointer;
-  border-bottom: 3px solid transparent;
+  border-bottom: 2px solid transparent;
   white-space: nowrap;
 }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+/* Phones: keep the tab strip compact — screen real estate goes to content.
+   (Desktop keeps the 12px padding; the Budget sticky panel's top:101px offset
+   is calibrated to the desktop header+tabs heights.) */
+@media (max-width: 560px) {
+  .tab { padding: 6px 6px; font-size: 12px; min-width: 64px; }
+  /* Budget summary panel (# Items / Subtotal / $ per Unit + column header):
+     scrolls away with the content on phones instead of staying pinned —
+     !important because renderPhase3 sets position:sticky inline. */
+  .budget-sticky { position: static !important; }
+}
 
 main {
   padding: 16px;
