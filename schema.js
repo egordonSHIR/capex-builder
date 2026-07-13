@@ -2722,6 +2722,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17423: CIP Exterior - Siding (Stucco)",
             "default_qty_type": "Sqft"
+          },
+          {
+            "name": "Brick Pointing",
+            "default_cost_per_item": 1.5,
+            "notes": null,
+            "gl_account": "17423: CIP Exterior - Siding (Stucco)",
+            "default_qty_type": "Sqft"
           }
         ]
       },
