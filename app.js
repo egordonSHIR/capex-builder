@@ -3958,18 +3958,20 @@ function renderItemConditionalFields(gi, si, ii, item, summaryNode) {
   return wrap;
 }
 
-// Shared 6-col grid for the Details page: item name | Options | # Qty | Qty Type
-// | $/Qty | $ Amt. Options is the Finish picker — dropdown if the item has any
+// Shared 7-col grid for the Details page: item name | Options | # Qty | Qty Type
+// | $/Qty | $ Amt | 📷. Options is the Finish picker — dropdown if the item has any
 // options defined in the schema; gray-disabled cell otherwise. (The old =MF
 // checkbox column was removed 2026-07-07 — use the "MF Unit" Qty Type instead.)
+// The trailing 30px column is the per-item photo capture button (field photos →
+// IndexedDB queue → Drive 25. Capex/Photos, see the "Line-item photos" section).
 // Used by both the sticky column header and each line-item row so columns line up.
-const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px';
+const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px 30px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
-// Interior group: 9 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
+// Interior group: 10 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
 // checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
 // between the status-% block and # Qty so it lines up roughly with the
-// non-Interior Options column.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px';
+// non-Interior Options column. Trailing 30px col = photo button.
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px 30px';
 const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:4px;padding:6px 8px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
@@ -4000,6 +4002,7 @@ function renderInteriorStatusHeader() {
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
     el('div', { style: 'text-align:right' }, '$ Amt'),
+    el('div', { style: 'text-align:center' }, '📷'),
   );
 }
 
@@ -4072,6 +4075,7 @@ function renderPhase3() {
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
     el('div', { style: 'text-align:right' }, '$ Amt'),
+    el('div', { style: 'text-align:center' }, '📷'),
   );
   sticky.appendChild(colHdr);
   root.appendChild(sticky);
@@ -4313,6 +4317,11 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   }, fmtMoney(total));
   itemWrap.appendChild(totalEl);
 
+  // Col 7: 📷 field photos for this line item (must come BEFORE the % sub-row —
+  // the sub-row spans grid-column:1/-1, so anything appended after it drops to
+  // its own grid row).
+  itemWrap.appendChild(renderPhotoCell(gi, si, ii, item));
+
   // --- Sub-row: only visible when unit_type === '%' ---
   // Lets the user pick which CAPEX Group this percentage applies to. Spans all
   // 6 grid columns via grid-column:1/-1 so it sits below the line item.
@@ -4527,11 +4536,14 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   costInp.addEventListener('blur', () => setNumVal(costInp, numVal(costInp)));
   itemWrap.appendChild(costInp);
 
-  // Col 8: $ Amt
+  // Col 9: $ Amt
   itemWrap.appendChild(el('div', {
     'data-total': true,
     style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a'
   }, fmtMoney(total)));
+
+  // Col 10: 📷 field photos for this line item.
+  itemWrap.appendChild(renderPhotoCell(gi, si, ii, item));
 
   return itemWrap;
 }
@@ -5124,7 +5136,9 @@ async function buildCapexWorkbook() {
           const dc = Number(item.default_cost_per_item);
           rate = Number.isFinite(dc) ? dc : '';
         }
-        const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
+        const photoCount = Array.isArray(v.photos) ? v.photos.length : 0;
+        const photoNote = photoCount ? `${photoCount} photo${photoCount === 1 ? '' : 's'} in 25. Capex/Photos` : '';
+        const notesText = [worked ? v.notes : '', noteExtra, photoNote].filter(Boolean).join(' — ');
         const rowFill = worked ? rowTintArgb : GRAY;
 
         // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty | J Total | K GL | L Notes
@@ -6835,6 +6849,377 @@ async function driveUploadBinary(folderId, filename, blob, mimeType) {
   return r.json();
 }
 
+// ============ Line-item photos (field capture → IndexedDB queue → Drive) ============
+// Tour flow: the user taps 📷 on a Budget line item → the phone camera opens
+// (<input type=file capture=environment>) → the FULL-RESOLUTION original is
+// written to IndexedDB instantly (no network wait) and the user moves on. A
+// background drainer uploads queued photos one at a time into the deal's
+// "25. Capex/Photos/" Drive folder (resumable upload — photos routinely exceed
+// the 5MB multipart limit), retrying with backoff and resuming across page
+// reloads (the queue is durable). Row state stores ONLY metadata
+// (phase3[key].photos = [{qid, name, at, fileId}]) so photo counts sync
+// org-wide via capex_builder.json; image bytes never enter the state file.
+// Limitation (by design, web page): uploads run while the app is on-screen and
+// pause when the tab is backgrounded/locked; they resume on return / next open.
+
+const PHOTO_DB_NAME = 'capex_builder_photos';
+const PHOTO_DB_VERSION = 1;
+let _photoDbPromise = null;
+function photoDb() {
+  if (_photoDbPromise) return _photoDbPromise;
+  _photoDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(PHOTO_DB_NAME, PHOTO_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      // queue: full-res blobs awaiting upload. thumbs: small previews kept
+      // AFTER upload too, so the panel stays instant on this device.
+      if (!db.objectStoreNames.contains('queue')) db.createObjectStore('queue', { keyPath: 'qid' });
+      if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'qid' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => { _photoDbPromise = null; reject(req.error || new Error('IndexedDB open failed')); };
+  });
+  return _photoDbPromise;
+}
+function idbReq(r) {
+  return new Promise((resolve, reject) => {
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error || new Error('IndexedDB request failed'));
+  });
+}
+async function idbPut(store, record) {
+  const db = await photoDb();
+  return idbReq(db.transaction(store, 'readwrite').objectStore(store).put(record));
+}
+async function idbGet(store, key) {
+  const db = await photoDb();
+  return idbReq(db.transaction(store, 'readonly').objectStore(store).get(key));
+}
+async function idbDelete(store, key) {
+  const db = await photoDb();
+  return idbReq(db.transaction(store, 'readwrite').objectStore(store).delete(key));
+}
+async function idbAll(store) {
+  const db = await photoDb();
+  return idbReq(db.transaction(store, 'readonly').objectStore(store).getAll());
+}
+
+// ---- capture ----
+let PHOTO_INPUT = null;              // one shared hidden input, retargeted per tap
+let PHOTO_TARGET = null;             // {gi, si, ii, item} of the row that opened the camera
+function ensurePhotoInput() {
+  if (PHOTO_INPUT) return PHOTO_INPUT;
+  PHOTO_INPUT = el('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none' });
+  PHOTO_INPUT.addEventListener('change', () => {
+    const file = PHOTO_INPUT.files && PHOTO_INPUT.files[0];
+    const target = PHOTO_TARGET;
+    PHOTO_INPUT.value = '';           // allow re-capturing the same item immediately
+    if (!file || !target) return;
+    enqueueCapturedPhoto(target, file).catch(e => {
+      console.warn('photo enqueue failed', e);
+      toast('Could not save photo: ' + e.message, 'error');
+    });
+  });
+  document.body.appendChild(PHOTO_INPUT);
+  return PHOTO_INPUT;
+}
+function capturePhotoForItem(gi, si, ii, item) {
+  if (!STATE) return;
+  if (!STATE.drive.folderId) {
+    toast('Link this property’s Drive deal folder first (☰ menu) — photos save into it', 'error');
+    return;
+  }
+  PHOTO_TARGET = { gi, si, ii, item };
+  ensurePhotoInput().click();
+}
+function photoSanitize(s) {
+  return String(s || '').replace(/[\\/:*?"<>|#]+/g, '-').replace(/\s+/g, ' ').trim();
+}
+function photoStamp(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+// Small local preview (longest edge ~240px, JPEG). Best-effort — a photo whose
+// decode fails still queues/uploads fine, it just shows a generic tile.
+function makePhotoThumb(blob) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, 240 / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      } catch { resolve(null); }
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+async function enqueueCapturedPhoto(target, file) {
+  const { gi, si, ii, item } = target;
+  if (!STATE || !STATE.drive.folderId) return;
+  const k = ckKey(gi, si, ii);
+  const now = new Date();
+  const qid = 'ph_' + Math.random().toString(36).slice(2, 10) + '_' + now.getTime().toString(36);
+  const sec = (SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si]) || null;
+  const ext = (file.type === 'image/png') ? 'png' : (file.type === 'image/webp') ? 'webp' : 'jpg';
+  const fileName = `${photoSanitize(item.name)} (${photoSanitize(sec ? sec.name : '')}) - ${photoStamp(now)}.${ext}`;
+  // 1. Durable queue record with the FULL-RES original — this is the instant,
+  //    offline-safe part; everything after is background/best-effort.
+  await idbPut('queue', {
+    qid, propId: STATE.id, dealFolderId: STATE.drive.folderId, ckkey: k,
+    fileName, mimeType: file.type || 'image/jpeg', blob: file,
+    takenAt: now.toISOString(), attempts: 0, nextAttemptAt: 0, lastError: '',
+  });
+  // 2. Local preview thumb (kept after upload so the panel stays instant here).
+  try {
+    const dataUrl = await makePhotoThumb(file);
+    if (dataUrl) await idbPut('thumbs', { qid, dataUrl });
+  } catch {}
+  // 3. Metadata entry on the row → syncs org-wide. fileId fills in on upload.
+  const photos = (getP3(gi, si, ii).photos || []).slice();
+  photos.push({ qid, name: fileName, at: now.toISOString(), fileId: '' });
+  setP3(gi, si, ii, { photos });
+  refreshPhotoBadge(k);
+  updatePhotoQueueChip();
+  toast('📷 Photo saved — uploads in background', 'success');
+  drainPhotoQueue();
+}
+
+// ---- row cell + badge ----
+function renderPhotoCell(gi, si, ii, item) {
+  const k = ckKey(gi, si, ii);
+  const btn = el('button', {
+    type: 'button', class: 'photo-btn', 'data-photo-btn': k,
+    title: 'Take a photo of this item (saved to the deal’s 25. Capex/Photos)',
+  }, '📷');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const photos = getP3(gi, si, ii).photos || [];
+    if (photos.length) openPhotoPanel(gi, si, ii, item);
+    else capturePhotoForItem(gi, si, ii, item);
+  });
+  decoratePhotoBtn(btn, getP3(gi, si, ii).photos || []);
+  // .photo-cell lets the ≤560px media query pull this out of the grid and pin
+  // it to the row's right edge (the fixed grid columns exceed narrow phones,
+  // which would otherwise clip the camera — the one control the field needs).
+  return el('div', { class: 'photo-cell', style: 'text-align:center' }, btn);
+}
+function decoratePhotoBtn(btn, photos) {
+  btn.querySelectorAll('.photo-badge,.photo-pending-dot').forEach(n => n.remove());
+  if (photos.length) {
+    btn.appendChild(el('span', { class: 'photo-badge' }, String(photos.length)));
+    btn.classList.add('has-photos');
+    if (photos.some(p => !p.fileId)) btn.appendChild(el('span', { class: 'photo-pending-dot', title: 'Uploading…' }));
+  } else {
+    btn.classList.remove('has-photos');
+  }
+}
+// Refresh one row's 📷 badge in place (no page re-render). Safe to call for a
+// property/tab that isn't on screen — it just finds no node.
+function refreshPhotoBadge(k, propId) {
+  if (propId && (!STATE || STATE.id !== propId)) return;
+  const btn = document.querySelector(`[data-photo-btn="${CSS.escape(k)}"]`);
+  if (!btn) return;
+  const [gi, si, ii] = k.split('.').map(Number);
+  decoratePhotoBtn(btn, getP3(gi, si, ii).photos || []);
+}
+
+// ---- photo panel (per line item) ----
+function closePhotoPanel() {
+  const ov = $('#photo-overlay');
+  if (ov) ov.remove();
+}
+async function openPhotoPanel(gi, si, ii, item) {
+  closePhotoPanel();
+  const k = ckKey(gi, si, ii);
+  const photos = getP3(gi, si, ii).photos || [];
+  const [queueRecs, thumbRecs] = await Promise.all([idbAll('queue'), idbAll('thumbs')]);
+  const queueByQid = new Map(queueRecs.map(r => [r.qid, r]));
+  const thumbByQid = new Map(thumbRecs.map(r => [r.qid, r.dataUrl]));
+
+  const grid = el('div', { class: 'photo-grid' });
+  photos.forEach((p) => {
+    const thumb = p.qid ? thumbByQid.get(p.qid) : null;
+    const tile = el('div', { class: 'photo-tile' });
+    const img = thumb
+      ? el('img', { src: thumb, alt: p.name })
+      : el('div', { class: 'photo-tile-generic' }, '📷');
+    if (p.fileId) {
+      tile.title = 'Open in Google Drive';
+      tile.addEventListener('click', () => window.open(`https://drive.google.com/file/d/${p.fileId}/view`, '_blank'));
+    } else {
+      tile.title = queueByQid.has(p.qid) ? 'Waiting to upload from this device' : 'Uploading from another device';
+    }
+    tile.appendChild(img);
+    const q = queueByQid.get(p.qid);
+    const status = p.fileId
+      ? el('span', { class: 'photo-chip done' }, '✓')
+      : el('span', { class: 'photo-chip pending' }, q && q.lastError ? '⚠ retrying' : '⬆ pending');
+    tile.appendChild(status);
+    const del = el('button', { type: 'button', class: 'photo-del', title: 'Delete photo' }, '✕');
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this photo? (A Drive copy goes to the Drive trash.)')) return;
+      try {
+        if (p.fileId) {
+          await driveFetch(`https://www.googleapis.com/drive/v3/files/${p.fileId}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }),
+          });
+        }
+        if (p.qid) {
+          await idbDelete('queue', p.qid).catch(() => {});
+          await idbDelete('thumbs', p.qid).catch(() => {});
+        }
+        const next = (getP3(gi, si, ii).photos || []).filter(x => x !== p && (x.qid !== p.qid || x.fileId !== p.fileId));
+        setP3(gi, si, ii, { photos: next });
+        refreshPhotoBadge(k);
+        updatePhotoQueueChip();
+        openPhotoPanel(gi, si, ii, item);   // re-render the panel
+      } catch (err) {
+        toast('Delete failed: ' + err.message, 'error');
+      }
+    });
+    tile.appendChild(del);
+    grid.appendChild(tile);
+  });
+
+  const addBtn = el('button', { type: 'button', class: 'um-btn', style: 'font-weight:600' }, '📷 Add photo');
+  addBtn.addEventListener('click', () => { closePhotoPanel(); capturePhotoForItem(gi, si, ii, item); });
+  const closeBtn = el('button', { type: 'button', class: 'um-btn' }, 'Close');
+  closeBtn.addEventListener('click', closePhotoPanel);
+
+  const pendingCount = photos.filter(p => !p.fileId).length;
+  const panel = el('div', { class: 'photo-panel' },
+    el('div', { class: 'photo-panel-head' },
+      el('div', { style: 'min-width:0' },
+        el('div', { style: 'font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
+        el('div', { style: 'font-size:11px;color:#64748b' },
+          `${photos.length} photo${photos.length === 1 ? '' : 's'}` +
+          (pendingCount ? ` — ${pendingCount} uploading` : ' — in 25. Capex/Photos')),
+      ),
+    ),
+    grid,
+    el('div', { class: 'photo-panel-foot' }, addBtn, closeBtn),
+  );
+  const overlay = el('div', { id: 'photo-overlay', class: 'photo-overlay' }, panel);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closePhotoPanel(); });
+  document.body.appendChild(overlay);
+}
+
+// ---- background uploader ----
+// Resumable upload: 2 requests (init session → PUT bytes). Required for photos —
+// full-res originals routinely exceed the 5MB multipart-upload limit, and this
+// path streams the raw blob (no base64 inflation in memory).
+async function driveUploadResumable(folderId, filename, blob, mimeType) {
+  const initR = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': mimeType,
+      'X-Upload-Content-Length': String(blob.size),
+    },
+    body: JSON.stringify({ name: filename, mimeType, parents: [folderId] }),
+  });
+  const session = initR.headers.get('Location');
+  if (!session) throw new Error('No resumable session URL');
+  const putR = await fetch(session, { method: 'PUT', headers: { 'Content-Type': mimeType }, body: blob });
+  if (!putR.ok) throw new Error('Upload failed: HTTP ' + putR.status);
+  return putR.json();
+}
+// <dealFolderId> → "25. Capex/Photos" folder id (cached per deal for the session).
+const PHOTO_FOLDER_CACHE = new Map();
+async function resolvePhotosFolder(dealFolderId) {
+  if (PHOTO_FOLDER_CACHE.has(dealFolderId)) return PHOTO_FOLDER_CACHE.get(dealFolderId);
+  const capex = await driveEnsureSubfolder(dealFolderId, '25. Capex');
+  const photos = await driveEnsureSubfolder(capex, 'Photos');
+  PHOTO_FOLDER_CACHE.set(dealFolderId, photos);
+  return photos;
+}
+// Update a photo entry on its row — works whether or not that property is the
+// one currently open. For a non-open property we patch its localStorage record
+// and bump `updated`, so the pointer pushes to Drive next time it's opened.
+function patchPhotoEntry(propId, k, qid, patch) {
+  const p = (STATE && STATE.id === propId) ? STATE : STORE.properties[propId];
+  if (!p || !p.phase3 || !p.phase3[k]) return;
+  const entry = (p.phase3[k].photos || []).find(x => x.qid === qid);
+  if (!entry) return;
+  Object.assign(entry, patch);
+  p.updated = new Date().toISOString();
+  if (p === STATE) saveState();                                    // auto-pushes
+  else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));     // pushes when next opened
+  refreshPhotoBadge(k, propId);
+}
+let PHOTO_DRAIN_RUNNING = false;
+async function drainPhotoQueue() {
+  if (PHOTO_DRAIN_RUNNING) return;
+  if (!navigator.onLine) { updatePhotoQueueChip(); return; }
+  // Never pop the Google account chooser from a background drain — only run
+  // with a live token or a successful silent refresh.
+  if (!getDriveToken()) {
+    if (!localStorage.getItem(DRIVE_EVER_CONNECTED_KEY)) return;
+    try { await driveRequestToken({ silent: true }); } catch { return; }
+  }
+  PHOTO_DRAIN_RUNNING = true;
+  try {
+    while (true) {
+      const all = await idbAll('queue');
+      const now = Date.now();
+      const job = all
+        .filter(j => (j.nextAttemptAt || 0) <= now)
+        .sort((a, b) => (a.takenAt < b.takenAt ? -1 : 1))[0];
+      if (!job) break;
+      try {
+        const folderId = await resolvePhotosFolder(job.dealFolderId);
+        const res = await driveUploadResumable(folderId, job.fileName, job.blob, job.mimeType);
+        patchPhotoEntry(job.propId, job.ckkey, job.qid, { fileId: res.id || '' });
+        await idbDelete('queue', job.qid);   // blob released; thumb kept for previews
+      } catch (e) {
+        const attempts = (job.attempts || 0) + 1;
+        // Backoff: 30s, 60s, 2m, 4m … capped at 10 min. Stop this pass — the
+        // next trigger (online / sync tick / interval / new capture) retries.
+        job.attempts = attempts;
+        job.nextAttemptAt = Date.now() + Math.min(30_000 * Math.pow(2, attempts - 1), 600_000);
+        job.lastError = String(e && e.message || e);
+        await idbPut('queue', job).catch(() => {});
+        console.warn('photo upload failed (attempt ' + attempts + '):', e);
+        break;
+      }
+      updatePhotoQueueChip();
+    }
+  } finally {
+    PHOTO_DRAIN_RUNNING = false;
+    updatePhotoQueueChip();
+  }
+}
+// Floating "⬆ N photos uploading…" chip (bottom-left; help FAB owns bottom-right).
+// Doubles as a manual retry button.
+async function updatePhotoQueueChip() {
+  let n = 0;
+  try { n = (await idbAll('queue')).length; } catch {}
+  let chip = $('#photo-queue-chip');
+  if (!n) { if (chip) chip.remove(); return; }
+  if (!chip) {
+    chip = el('button', { id: 'photo-queue-chip', class: 'photo-queue-chip', type: 'button', title: 'Photos waiting to upload — tap to retry now' });
+    chip.addEventListener('click', () => { toast('Retrying photo uploads…'); drainPhotoQueue(); });
+    document.body.appendChild(chip);
+  }
+  chip.textContent = `⬆ ${n} photo${n === 1 ? '' : 's'} uploading…`;
+}
+// Wire the global triggers once at startup: resume pending uploads from prior
+// sessions, retry when connectivity returns, and back-stop with a slow interval.
+function initPhotoQueue() {
+  window.addEventListener('online', () => drainPhotoQueue());
+  setInterval(() => { drainPhotoQueue(); }, 60_000);
+  // Small delay so the on-load silent Drive token attempt can land first.
+  setTimeout(() => { updatePhotoQueueChip(); drainPhotoQueue(); }, 3000);
+}
+
 async function pushToDrive(opts = {}) {
   const { silent = false, force = false } = opts;
   if (!STATE) return;
@@ -7170,6 +7555,8 @@ async function syncTick() {
     // 4. Backstop the survey-job + proforma-import polls (restart if the interval died).
     if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();
     if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();
+    // 5. Nudge the photo-upload queue (cheap no-op when empty).
+    if (typeof drainPhotoQueue === 'function') drainPhotoQueue();
   } catch (e) {
     console.warn('syncTick failed:', e);
   }
@@ -7265,6 +7652,7 @@ THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. QUESTIONNAIRE — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
+- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's "25. Capex/Photos" Drive folder, named after the line item. A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, add more, open one in Drive, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Import to Proforma" copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
@@ -7418,6 +7806,7 @@ function renderHelpWidget() {
 document.addEventListener('DOMContentLoaded', () => {
   bindShell();
   renderHelpWidget();
+  initPhotoQueue();   // resume any field photos still waiting to upload
   // Unique-URL routing: react to back/forward + opened links.
   window.addEventListener('hashchange', routeFromHash);
   // Initial route. A #/prop/<slug> (or legacy #/p/<id>) deep link wins over the

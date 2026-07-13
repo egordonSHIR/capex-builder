@@ -798,3 +798,105 @@ main {
   .help-panel { right: 8px; left: 8px; bottom: 8px; width: auto; height: calc(100vh - 80px); }
   .help-fab { right: 14px; bottom: 14px; }
 }
+
+/* ============ Line-item photos (Budget tab 📷 column) ============ */
+/* Per-row camera button. Idle = muted; .has-photos = navy-tinted with a count
+   badge; an orange dot pulses while any of the row's photos await upload. */
+.photo-btn {
+  position: relative;
+  background: transparent; border: none; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 4px 2px;
+  opacity: .45; -webkit-tap-highlight-color: transparent;
+}
+.photo-btn.has-photos { opacity: 1; }
+.photo-btn:active { transform: translateY(1px); }
+.photo-badge {
+  position: absolute; top: -4px; right: -6px;
+  background: var(--primary); color: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  padding: 2px 4px; border-radius: 8px; min-width: 8px; text-align: center;
+}
+.photo-pending-dot {
+  position: absolute; bottom: -2px; right: -4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #f59e0b; border: 1px solid #fff;
+  animation: photo-pulse 1.4s ease-in-out infinite;
+}
+@keyframes photo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* Photo panel: centered modal over a dim overlay (z95 — above the help panel
+   z90, below the drawer z100 / toast z200). */
+.photo-overlay {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(15,23,42,.45);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.photo-panel {
+  background: var(--surface); border-radius: 14px; border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(15,23,42,.4);
+  width: 420px; max-width: 100%; max-height: calc(100vh - 64px);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.photo-panel-head { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.photo-grid {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px;
+}
+.photo-tile {
+  position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border); background: #f1f5f9; cursor: pointer;
+}
+.photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-tile-generic {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 28px; opacity: .5;
+}
+.photo-chip {
+  position: absolute; left: 4px; bottom: 4px;
+  font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 8px; line-height: 1.2;
+}
+.photo-chip.done { background: #dcfce7; color: #166534; }
+.photo-chip.pending { background: #fef3c7; color: #92400e; }
+.photo-del {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(15,23,42,.55); color: #fff; border: none; cursor: pointer;
+  font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.photo-panel-foot {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+}
+
+/* Global "photos uploading" chip — bottom-left (help FAB owns bottom-right).
+   Tap = retry the queue now. */
+.photo-queue-chip {
+  position: fixed; left: 16px; bottom: 20px; z-index: 80;
+  background: var(--primary); color: #fff; border: none; cursor: pointer;
+  font-size: 12px; font-weight: 600; padding: 8px 12px; border-radius: 18px;
+  box-shadow: 0 4px 14px rgba(15,23,42,.35);
+}
+@media (max-width: 520px) {
+  .photo-queue-chip { left: 10px; bottom: 14px; }
+}
+
+/* Narrow phones: the Budget grid's fixed columns exceed the viewport (pre-
+   existing — pricing happens on desktop), which would clip the trailing 📷
+   cell entirely. Pull the photo cell out of the grid and pin it to the row's
+   right edge as a floating pill so field capture always stays tappable. */
+@media (max-width: 560px) {
+  .detail-item-wrap { position: relative; }
+  .detail-item-wrap .photo-cell {
+    position: absolute; right: 4px; top: 2px; z-index: 2;
+  }
+  .detail-item-wrap .photo-cell .photo-btn {
+    opacity: 1;
+    width: 30px; height: 30px;
+    background: rgba(255,255,255,.92);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(15,23,42,.22);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+}
