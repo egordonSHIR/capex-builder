@@ -890,12 +890,40 @@ main {
   .photo-queue-chip { left: 10px; bottom: 14px; }
 }
 
-/* Narrow phones: the Budget grid's fixed columns exceed the viewport (pre-
-   existing — pricing happens on desktop), which would clip the trailing 📷
-   cell entirely. Pull the photo cell out of the grid and pin it to the row's
-   right edge as a floating pill so field capture always stays tappable. */
+/* Narrow phones: the Budget grid's fixed columns exceed the viewport, so rows
+   reflow to TWO LINES — item name (full width) on top, the input cells on one
+   aligned 5-column line below: Options | # Qty | Qty Type | $/Qty | $ Amt.
+   Interior rows additionally DROP the Orig./Part./Reno % inputs (.pct-input)
+   and their status header — the %s are a desktop pricing tool. The 📷 cell is
+   pulled out of the grid and pinned to the name line's right edge as a
+   floating pill so field capture always stays tappable. !important overrides
+   are needed because renderPhase3/renderDetailItem set the grid inline. */
 @media (max-width: 560px) {
-  .detail-item-wrap { position: relative; }
+  .detail-item-wrap {
+    position: relative;
+    grid-template-columns: 76px 40px 66px 46px minmax(40px, 1fr) !important;
+    row-gap: 4px;
+  }
+  .detail-item-wrap > div:first-child { grid-column: 1 / -1; padding-right: 36px; }
+  /* Compact inputs so values like "Avg # BRs" / "Brushed Nickel" aren't clipped
+     in the narrow tracks (mirrors the interior-row 11px treatment). The finish
+     select needs its own rule — the interior 12px [data-finish-select] rule
+     otherwise out-specifies this one. */
+  .detail-item-wrap input, .detail-item-wrap select,
+  .detail-item-wrap select[data-finish-select] {
+    font-size: 11px !important;
+    padding-left: 3px !important; padding-right: 3px !important;
+  }
+  .detail-item-interior > .pct-input { display: none !important; }
+  .interior-status-header { display: none !important; }
+  /* Sticky-panel column header: same 5 columns as the rows' input line; the
+     Item (first) + 📷 (last) header cells disappear with the one-line layout.
+     Side padding ≈ the section-card inset so labels line up over the columns. */
+  [data-budget-colhdr] {
+    grid-template-columns: 76px 40px 66px 46px minmax(40px, 1fr) !important;
+    padding-left: 34px !important; padding-right: 34px !important;
+  }
+  [data-budget-colhdr] > div:first-child, [data-budget-colhdr] > div:last-child { display: none; }
   .detail-item-wrap .photo-cell {
     position: absolute; right: 4px; top: 2px; z-index: 2;
   }

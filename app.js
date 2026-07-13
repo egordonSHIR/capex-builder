@@ -4067,7 +4067,11 @@ function renderPhase3() {
   bar.appendChild(actions);
   sticky.appendChild(bar);
   // Column header row — same grid template as data rows so cells align.
+  // On phones (≤560px) the rows wrap to two lines (name on top, inputs below);
+  // the [data-budget-colhdr] media query re-templates this header to the same
+  // 5 input columns (hiding the Item + 📷 cells) so the labels still line up.
   const colHdr = el('div', {
+    'data-budget-colhdr': '',
     style: DETAIL_GRID_BASE + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-top:1px solid #e5e7eb'
   },
     el('div', {}, 'Item'),
@@ -4451,6 +4455,7 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
     const inp = el('input', {
       type: 'number', min: 1, max: 100, step: 'any',
       placeholder: '%',
+      class: 'pct-input',   // hidden on phones (≤560px) — %s are edited on desktop
       style: baseStyle
     });
     inp.value = v[field] !== '' && v[field] !== undefined && v[field] !== null ? v[field] : '';

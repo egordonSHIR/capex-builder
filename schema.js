@@ -2201,7 +2201,7 @@ window.SCHEMA = {
             "default_qty_type": "Avg # BRs"
           },
           {
-            "name": "Interior Lighting Fixtures",
+            "name": "Lighting Fixtures",
             "default_cost_per_item": null,
             "notes": null,
             "gl_account": "17175: CIP Interior - Lighting Fixtures (7 Yrs)",
