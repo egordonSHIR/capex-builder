@@ -988,6 +988,16 @@ window.SCHEMA = {
           "Carpet+Vinyl Mix",
           "Hard 1st + Carpet 2nd"
         ]
+      },
+      {
+        "key": "appliances",
+        "type": "select",
+        "label": "Appliances",
+        "options": [
+          "White",
+          "Black",
+          "Stainless Steel"
+        ]
       }
     ]
   },
