@@ -5542,7 +5542,7 @@ async function checkProformaJob() {
     stopProformaPoll();
     setProformaJob(null);
     if (CURRENT_VIEW === 'property') renderApp();
-    toast('Proforma import failed: ' + (job.error || 'unknown error') + ' — you can retry 📥 Import to Proforma.', 'error');
+    toast('Proforma import failed: ' + (job.error || 'unknown error') + ' — you can retry from the Finalize tab (📥 Place In Proforma / 🔄 Update CapexB in Proforma).', 'error');
   }
 }
 
