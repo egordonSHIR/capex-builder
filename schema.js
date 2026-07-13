@@ -803,17 +803,6 @@ window.SCHEMA = {
         "required": true
       },
       {
-        "key": "flooring",
-        "label": "Flooring",
-        "type": "select",
-        "options": [
-          "Vinyl Plank",
-          "Hardwood",
-          "Carpeted",
-          "Hard 1st + Carpet 2nd"
-        ]
-      },
-      {
         "key": "roof_shape",
         "label": "Roof Shape",
         "type": "select",
@@ -982,6 +971,23 @@ window.SCHEMA = {
         "type": "number",
         "label": "Interior Atrium Sqft",
         "hint": "Enter 0 if none"
+      }
+    ]
+  },
+  {
+    "section": "UNIT Interiors",
+    "fields": [
+      {
+        "key": "flooring",
+        "label": "Flooring",
+        "type": "select",
+        "options": [
+          "Vinyl Plank",
+          "Hardwood",
+          "Carpeted",
+          "Carpet+Vinyl Mix",
+          "Hard 1st + Carpet 2nd"
+        ]
       }
     ]
   },
