@@ -5017,11 +5017,13 @@ async function buildCapexWorkbook() {
   // group subtotal row (Excel default, but set explicitly for clarity).
   ws.properties.outlineProperties = { summaryBelow: true, summaryRight: true };
   const COL_TOTAL = 10; // J
+  const COL_PHOTOS = 13; // M — hyperlink to the line item's Drive photo subfolder
   ws.columns = [
     { width: 22 }, { width: 34 }, { width: 18 },
     { width: 8 }, { width: 8 }, { width: 8 },
     { width: 9 }, { width: 12 }, { width: 12 },
     { width: 15 }, { width: 28 }, { width: 30 },
+    { width: 20 },
   ];
 
   const titleRow = ws.addRow(['CAPEX BUDGET' + (propName ? ' — ' + propName.toUpperCase() : '')]);
@@ -5029,7 +5031,7 @@ async function buildCapexWorkbook() {
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${titleRow.number}:L${titleRow.number}`);
+  ws.mergeCells(`A${titleRow.number}:M${titleRow.number}`);
 
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
   const addrRow = ws.addRow(['Address:', [STATE.phase1.mailing_address, STATE.phase1.city, STATE.phase1.state, STATE.phase1.zip].filter(Boolean).join(', ')]);
@@ -5044,7 +5046,7 @@ async function buildCapexWorkbook() {
   // in the proforma — so Total Capex Budget = Multifamily Subtotal here. All $
   // values are backfilled after the detail is built. -----
   const mkSummary = (label, fillArgb, fontArgb, big) => {
-    const row = ws.addRow([label, '', '', '', '', '', '', '', '', '', '', '']);
+    const row = ws.addRow([label, '', '', '', '', '', '', '', '', '', '', '', '']);
     row.eachCell({ includeEmpty: true }, (c) => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
       c.font = { bold: true, color: { argb: fontArgb }, size: big ? 14 : 11 };
@@ -5060,19 +5062,19 @@ async function buildCapexWorkbook() {
   const rowComm  = mkSummary('Commercial Tenant Costs', argb(commHex), argb(textOn(commHex)), false);
 
   // Big banner marking the copy/paste boundary — sits directly above Multifamily Subtotal.
-  const rowBanner = ws.addRow(['Copy/Paste Below This Line to Proforma', '', '', '', '', '', '', '', '', '', '', '']);
+  const rowBanner = ws.addRow(['Copy/Paste Below This Line to Proforma', '', '', '', '', '', '', '', '', '', '', '', '']);
   rowBanner.eachCell({ includeEmpty: true }, (c) => {
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF16A34A' } };
     c.font = { bold: true, size: 13, color: { argb: WHITE } };
     c.alignment = { horizontal: 'center', vertical: 'middle' };
   });
   rowBanner.height = 26;
-  ws.mergeCells(`A${rowBanner.number}:L${rowBanner.number}`);
+  ws.mergeCells(`A${rowBanner.number}:M${rowBanner.number}`);
 
   const stRow = mkSummary('MULTIFAMILY SUBTOTAL', NAVY, WHITE, true);
 
   ws.addRow([]);
-  const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', 'GL Account', 'Notes']);
+  const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', 'GL Account', 'Notes', 'Photos']);
   colHeaderRow.font = { bold: true, color: { argb: WHITE } };
   colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   colHeaderRow.height = 22;
@@ -5104,7 +5106,7 @@ async function buildCapexWorkbook() {
     const groupFontArgb = argb(textOn(groupColorHex));
     const rowTintArgb = argb(lightenHex(groupColorHex, 0.9));
 
-    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '']);
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '', '']);
     gh.eachCell({ includeEmpty: true }, (c) => {
       c.font = { bold: true, size: 12, color: { argb: groupFontArgb } };
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
@@ -5143,17 +5145,17 @@ async function buildCapexWorkbook() {
           rate = Number.isFinite(dc) ? dc : '';
         }
         const photoCount = Array.isArray(v.photos) ? v.photos.length : 0;
-        const photoNote = photoCount ? `${photoCount} photo${photoCount === 1 ? '' : 's'} in 25. Capex/Photos` : '';
-        const notesText = [worked ? v.notes : '', noteExtra, photoNote].filter(Boolean).join(' — ');
+        const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
         const rowFill = worked ? rowTintArgb : GRAY;
 
-        // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty | J Total | K GL | L Notes
+        // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty | J Total | K GL | L Notes | M Photos
         const r = ws.addRow([
           sec.name, item.name, finish,
           pO, pP, pR,
           qty || '', qtyType, (rate === '' ? '' : (rate || 0)),
           '', // Total (col J) — live formula below
           item.gl_account || '', notesText,
+          '', // Photos (col M) — hyperlink set below
         ]);
         // Total never shows an error (blank/text $/Qty) — falls back to 0.
         r.getCell(COL_TOTAL).value = { formula: `IFERROR(G${r.number}*I${r.number},0)`, result: (Number(qty) || 0) * (Number(rate) || 0) };
@@ -5165,6 +5167,19 @@ async function buildCapexWorkbook() {
           c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } };
           c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowFill } };
         });
+        // Photos (col M): a clickable link to the line item's Drive photo
+        // subfolder once photos have uploaded (folder id lands on the row after
+        // the first upload). While photos are still queued, show the count with
+        // an "(uploading…)" hint but no link yet.
+        const photoCell = r.getCell(COL_PHOTOS);
+        if (photoCount) {
+          if (v.photoFolderId) {
+            photoCell.value = { text: `📷 ${photoCount} — View folder`, hyperlink: `https://drive.google.com/drive/folders/${v.photoFolderId}` };
+            photoCell.font = { color: { argb: 'FF2563EB' }, underline: true };
+          } else {
+            photoCell.value = `📷 ${photoCount} (uploading…)`;
+          }
+        }
         // Options cell needs a finish picked (item has finishes but none chosen) → amber.
         const hasOptions = Array.isArray(item.options) && item.options.length > 0;
         if (hasOptions && !finish) {
@@ -5177,7 +5192,7 @@ async function buildCapexWorkbook() {
     });
 
     // Group subtotal row — same coloring as this group's header banner.
-    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '', '', '']);
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '', '', '', '']);
     subr.eachCell({ includeEmpty: true }, (c) => {
       c.font = { bold: true, color: { argb: groupFontArgb } };
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
@@ -6961,10 +6976,6 @@ function capturePhotoForItem(gi, si, ii, item) {
 function photoSanitize(s) {
   return String(s || '').replace(/[\\/:*?"<>|#]+/g, '-').replace(/\s+/g, ' ').trim();
 }
-function photoStamp(d) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
 // Small local preview (longest edge ~240px, JPEG). Best-effort — a photo whose
 // decode fails still queues/uploads fine, it just shows a generic tile.
 function makePhotoThumb(blob) {
@@ -6992,14 +7003,21 @@ async function enqueueCapturedPhoto(target, file) {
   const k = ckKey(gi, si, ii);
   const now = new Date();
   const qid = 'ph_' + Math.random().toString(36).slice(2, 10) + '_' + now.getTime().toString(36);
-  const sec = (SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si]) || null;
   const ext = (file.type === 'image/png') ? 'png' : (file.type === 'image/webp') ? 'webp' : 'jpg';
-  const fileName = `${photoSanitize(item.name)} (${photoSanitize(sec ? sec.name : '')}) - ${photoStamp(now)}.${ext}`;
+  // Each line item that gets photos owns a subfolder under 25. Capex/Photos,
+  // named after the item. Files inside are numbered per row and carry the
+  // property name + "capex" + item name so they're self-describing out of
+  // context. `num` is monotonic per row (max existing + 1) so it survives
+  // deletions without colliding with a live file.
+  const propName = photoSanitize(STATE.phase1.prop_name || STATE.name || 'Property');
+  const itemFolderName = photoSanitize(item.name) || 'Line Item';
+  const num = (getP3(gi, si, ii).photos || []).reduce((m, p) => Math.max(m, p.num || 0), 0) + 1;
+  const fileName = `${propName} - capex - ${itemFolderName} - ${num}.${ext}`;
   // 1. Durable queue record with the FULL-RES original — this is the instant,
   //    offline-safe part; everything after is background/best-effort.
   await idbPut('queue', {
     qid, propId: STATE.id, dealFolderId: STATE.drive.folderId, ckkey: k,
-    fileName, mimeType: file.type || 'image/jpeg', blob: file,
+    itemFolderName, fileName, num, mimeType: file.type || 'image/jpeg', blob: file,
     takenAt: now.toISOString(), attempts: 0, nextAttemptAt: 0, lastError: '',
   });
   // 2. Local preview thumb (kept after upload so the panel stays instant here).
@@ -7009,7 +7027,7 @@ async function enqueueCapturedPhoto(target, file) {
   } catch {}
   // 3. Metadata entry on the row → syncs org-wide. fileId fills in on upload.
   const photos = (getP3(gi, si, ii).photos || []).slice();
-  photos.push({ qid, name: fileName, at: now.toISOString(), fileId: '' });
+  photos.push({ qid, name: fileName, num, at: now.toISOString(), fileId: '' });
   setP3(gi, si, ii, { photos });
   refreshPhotoBadge(k);
   updatePhotoQueueChip();
@@ -7022,7 +7040,7 @@ function renderPhotoCell(gi, si, ii, item) {
   const k = ckKey(gi, si, ii);
   const btn = el('button', {
     type: 'button', class: 'photo-btn', 'data-photo-btn': k,
-    title: 'Take a photo of this item (saved to the deal’s 25. Capex/Photos)',
+    title: 'Take a photo of this item (saved to the deal’s 25. Capex/Photos/<item> folder)',
   }, '📷');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -7119,6 +7137,13 @@ async function openPhotoPanel(gi, si, ii, item) {
   addBtn.addEventListener('click', () => { closePhotoPanel(); capturePhotoForItem(gi, si, ii, item); });
   const closeBtn = el('button', { type: 'button', class: 'um-btn' }, 'Close');
   closeBtn.addEventListener('click', closePhotoPanel);
+  // Once the item's Drive subfolder exists (set after the first upload), offer
+  // a direct link to it.
+  const folderId = getP3(gi, si, ii).photoFolderId;
+  const folderBtn = folderId
+    ? el('button', { type: 'button', class: 'um-btn secondary' }, '📂 Open folder')
+    : null;
+  if (folderBtn) folderBtn.addEventListener('click', () => window.open(`https://drive.google.com/drive/folders/${folderId}`, '_blank'));
 
   const pendingCount = photos.filter(p => !p.fileId).length;
   const panel = el('div', { class: 'photo-panel' },
@@ -7127,11 +7152,11 @@ async function openPhotoPanel(gi, si, ii, item) {
         el('div', { style: 'font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
         el('div', { style: 'font-size:11px;color:#64748b' },
           `${photos.length} photo${photos.length === 1 ? '' : 's'}` +
-          (pendingCount ? ` — ${pendingCount} uploading` : ' — in 25. Capex/Photos')),
+          (pendingCount ? ` — ${pendingCount} uploading` : ` — in 25. Capex/Photos/${photoSanitize(item.name)}`)),
       ),
     ),
     grid,
-    el('div', { class: 'photo-panel-foot' }, addBtn, closeBtn),
+    el('div', { class: 'photo-panel-foot' }, folderBtn, addBtn, closeBtn),
   );
   const overlay = el('div', { id: 'photo-overlay', class: 'photo-overlay' }, panel);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closePhotoPanel(); });
@@ -7158,14 +7183,36 @@ async function driveUploadResumable(folderId, filename, blob, mimeType) {
   if (!putR.ok) throw new Error('Upload failed: HTTP ' + putR.status);
   return putR.json();
 }
-// <dealFolderId> → "25. Capex/Photos" folder id (cached per deal for the session).
+// <dealFolderId> → "25. Capex/Photos" parent folder id (cached per deal).
 const PHOTO_FOLDER_CACHE = new Map();
-async function resolvePhotosFolder(dealFolderId) {
+async function resolvePhotosParent(dealFolderId) {
   if (PHOTO_FOLDER_CACHE.has(dealFolderId)) return PHOTO_FOLDER_CACHE.get(dealFolderId);
   const capex = await driveEnsureSubfolder(dealFolderId, '25. Capex');
   const photos = await driveEnsureSubfolder(capex, 'Photos');
   PHOTO_FOLDER_CACHE.set(dealFolderId, photos);
   return photos;
+}
+// Per-line-item subfolder under 25. Capex/Photos/<item name>. Cached by
+// deal+item so repeat uploads for a row don't re-list Drive.
+const PHOTO_ITEM_FOLDER_CACHE = new Map();
+async function resolveItemPhotoFolder(dealFolderId, itemFolderName) {
+  const cacheKey = dealFolderId + '||' + itemFolderName;
+  if (PHOTO_ITEM_FOLDER_CACHE.has(cacheKey)) return PHOTO_ITEM_FOLDER_CACHE.get(cacheKey);
+  const parent = await resolvePhotosParent(dealFolderId);
+  const sub = await driveEnsureSubfolder(parent, itemFolderName);
+  PHOTO_ITEM_FOLDER_CACHE.set(cacheKey, sub);
+  return sub;
+}
+// Record the line item's photo subfolder id on the row (for the Excel export's
+// folder link). Same open-vs-closed-property handling as patchPhotoEntry.
+function setItemPhotoFolderId(propId, k, folderId) {
+  const p = (STATE && STATE.id === propId) ? STATE : STORE.properties[propId];
+  if (!p || !p.phase3 || !p.phase3[k]) return;
+  if (p.phase3[k].photoFolderId === folderId) return;
+  p.phase3[k].photoFolderId = folderId;
+  p.updated = new Date().toISOString();
+  if (p === STATE) saveState();
+  else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
 }
 // Update a photo entry on its row — works whether or not that property is the
 // one currently open. For a non-open property we patch its localStorage record
@@ -7201,9 +7248,14 @@ async function drainPhotoQueue() {
         .sort((a, b) => (a.takenAt < b.takenAt ? -1 : 1))[0];
       if (!job) break;
       try {
-        const folderId = await resolvePhotosFolder(job.dealFolderId);
+        // Legacy queue jobs (pre per-item folders) have no itemFolderName →
+        // fall back to the flat Photos parent so they still drain.
+        const folderId = job.itemFolderName
+          ? await resolveItemPhotoFolder(job.dealFolderId, job.itemFolderName)
+          : await resolvePhotosParent(job.dealFolderId);
         const res = await driveUploadResumable(folderId, job.fileName, job.blob, job.mimeType);
         patchPhotoEntry(job.propId, job.ckkey, job.qid, { fileId: res.id || '' });
+        if (job.itemFolderName) setItemPhotoFolderId(job.propId, job.ckkey, folderId);
         await idbDelete('queue', job.qid);   // blob released; thumb kept for previews
       } catch (e) {
         const attempts = (job.attempts || 0) + 1;
@@ -7678,7 +7730,7 @@ THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) stays pinned at the top.
-- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's "25. Capex/Photos" Drive folder, named after the line item. A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, add more, open one in Drive, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked.
+- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. Each line item that gets photos has its own subfolder under "25. Capex/Photos" (named after the item), and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
