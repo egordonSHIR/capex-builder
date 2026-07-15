@@ -7087,20 +7087,23 @@ async function enqueueCapturedPhoto(target, file) {
   const now = new Date();
   const qid = 'ph_' + Math.random().toString(36).slice(2, 10) + '_' + now.getTime().toString(36);
   const ext = (file.type === 'image/png') ? 'png' : (file.type === 'image/webp') ? 'webp' : 'jpg';
-  // Each line item that gets photos owns a subfolder under 25. Capex/Photos,
-  // named after the item. Files inside are numbered per row and carry the
-  // property name + "capex" + item name so they're self-describing out of
-  // context. `num` is monotonic per row (max existing + 1) so it survives
-  // deletions without colliding with a live file.
+  // Photos are foldered to MIRROR the Budget page: 25. Capex / <Group> /
+  // <Section> / <Line Item> / file. The path is derived from the row's schema
+  // position (gi/si) so it always matches the group & section the item sits
+  // under. Files are numbered per row and carry the property name + "capex" +
+  // item name so they're self-describing out of context. `num` is monotonic
+  // per row (max existing + 1) so it survives deletions without colliding with
+  // a live file.
   const propName = photoSanitize(STATE.phase1.prop_name || STATE.name || 'Property');
   const itemFolderName = photoSanitize(item.name) || 'Line Item';
+  const photoPath = photoPathFor(gi, si, item);
   const num = (getP3(gi, si, ii).photos || []).reduce((m, p) => Math.max(m, p.num || 0), 0) + 1;
   const fileName = `${propName} - capex - ${itemFolderName} - ${num}.${ext}`;
   // 1. Durable queue record with the FULL-RES original — this is the instant,
   //    offline-safe part; everything after is background/best-effort.
   await idbPut('queue', {
     qid, propId: STATE.id, dealFolderId: STATE.drive.folderId, ckkey: k,
-    itemFolderName, fileName, num, mimeType: file.type || 'image/jpeg', blob: file,
+    photoPath, itemFolderName, fileName, num, mimeType: file.type || 'image/jpeg', blob: file,
     takenAt: now.toISOString(), attempts: 0, nextAttemptAt: 0, lastError: '',
   });
   // 2. Local preview thumb (kept after upload so the panel stays instant here).
@@ -7123,7 +7126,7 @@ function renderPhotoCell(gi, si, ii, item) {
   const k = ckKey(gi, si, ii);
   const btn = el('button', {
     type: 'button', class: 'photo-btn', 'data-photo-btn': k,
-    title: 'Take/view photos of this item — or drag image files here (saved to the deal’s 25. Capex/Photos/<item> folder)',
+    title: 'Take/view photos of this item — or drag image files here (saved to 25. Capex/<Group>/<Section>/<Item> in the deal folder)',
   }, '📷');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -7249,7 +7252,7 @@ async function openPhotoPanel(gi, si, ii, item) {
         el('div', { style: 'font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
         el('div', { style: 'font-size:11px;color:#64748b' },
           `${photos.length} photo${photos.length === 1 ? '' : 's'}` +
-          (pendingCount ? ` — ${pendingCount} uploading` : ` — in 25. Capex/Photos/${photoSanitize(item.name)}`)),
+          (pendingCount ? ` — ${pendingCount} uploading` : ` — in 25. Capex/${photoPathFor(gi, si, item).join('/')}`)),
       ),
     ),
     grid,
@@ -7289,11 +7292,34 @@ async function resolvePhotosParent(dealFolderId) {
   PHOTO_FOLDER_CACHE.set(dealFolderId, photos);
   return photos;
 }
-// Per-line-item subfolder under 25. Capex/Photos/<item name>. Cached by
-// deal+item so repeat uploads for a row don't re-list Drive.
+// Sanitized [Group, Section, Item] path for a row — the photo folder tree
+// mirrors the Budget page (25. Capex / Group / Section / Item). Falls back to
+// safe defaults if the schema position can't be resolved.
+function photoPathFor(gi, si, item) {
+  const group = SCHEMA.phase3[gi];
+  const sec = group && group.sections[si];
+  return [
+    photoSanitize(group && group.name) || 'Group',
+    photoSanitize(sec && sec.name) || 'Section',
+    photoSanitize(item && item.name) || 'Line Item',
+  ];
+}
+// Resolve (creating as needed) the nested 25. Capex/<Group>/<Section>/<Item>
+// folder, returning the deepest (item) folder id. Cached by deal+full-path so
+// repeat uploads for a row don't re-list Drive.
 const PHOTO_ITEM_FOLDER_CACHE = new Map();
+async function resolvePhotoPathFolder(dealFolderId, parts) {
+  const cacheKey = dealFolderId + '||' + parts.join('/');
+  if (PHOTO_ITEM_FOLDER_CACHE.has(cacheKey)) return PHOTO_ITEM_FOLDER_CACHE.get(cacheKey);
+  let parent = await driveEnsureSubfolder(dealFolderId, '25. Capex');
+  for (const name of parts) parent = await driveEnsureSubfolder(parent, name);
+  PHOTO_ITEM_FOLDER_CACHE.set(cacheKey, parent);
+  return parent;
+}
+// Legacy resolver — flat 25. Capex/Photos/<item name> — kept so queue jobs
+// enqueued before the Group/Section/Item change still drain.
 async function resolveItemPhotoFolder(dealFolderId, itemFolderName) {
-  const cacheKey = dealFolderId + '||' + itemFolderName;
+  const cacheKey = dealFolderId + '||Photos||' + itemFolderName;
   if (PHOTO_ITEM_FOLDER_CACHE.has(cacheKey)) return PHOTO_ITEM_FOLDER_CACHE.get(cacheKey);
   const parent = await resolvePhotosParent(dealFolderId);
   const sub = await driveEnsureSubfolder(parent, itemFolderName);
@@ -7345,14 +7371,17 @@ async function drainPhotoQueue() {
         .sort((a, b) => (a.takenAt < b.takenAt ? -1 : 1))[0];
       if (!job) break;
       try {
-        // Legacy queue jobs (pre per-item folders) have no itemFolderName →
-        // fall back to the flat Photos parent so they still drain.
-        const folderId = job.itemFolderName
-          ? await resolveItemPhotoFolder(job.dealFolderId, job.itemFolderName)
-          : await resolvePhotosParent(job.dealFolderId);
+        // New jobs carry photoPath [Group, Section, Item] → nested folder that
+        // mirrors the Budget page. Older jobs fall back to the flat
+        // Photos/<item> resolver, then the flat Photos parent.
+        const folderId = Array.isArray(job.photoPath) && job.photoPath.length
+          ? await resolvePhotoPathFolder(job.dealFolderId, job.photoPath)
+          : job.itemFolderName
+            ? await resolveItemPhotoFolder(job.dealFolderId, job.itemFolderName)
+            : await resolvePhotosParent(job.dealFolderId);
         const res = await driveUploadResumable(folderId, job.fileName, job.blob, job.mimeType);
         patchPhotoEntry(job.propId, job.ckkey, job.qid, { fileId: res.id || '' });
-        if (job.itemFolderName) setItemPhotoFolderId(job.propId, job.ckkey, folderId);
+        if (Array.isArray(job.photoPath) && job.photoPath.length || job.itemFolderName) setItemPhotoFolderId(job.propId, job.ckkey, folderId);
         await idbDelete('queue', job.qid);   // blob released; thumb kept for previews
       } catch (e) {
         const attempts = (job.attempts || 0) + 1;
@@ -7827,7 +7856,7 @@ THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
-- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Each line item that gets photos has its own subfolder under "25. Capex/Photos" (named after the item), and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
+- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos are filed to match the Budget page's layout — "25. Capex/<Group>/<Section>/<Line Item>" in the deal folder (e.g. "25. Capex/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
