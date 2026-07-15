@@ -970,18 +970,23 @@ function renderSchemaForm(sections, bag, onUpdate) {
     // in a flex .field-row (e.g. City / State / ZIP on one line).
     let activeRowGroup = null;
     let activeRowKey = null;
-    const placeInBody = (node, f) => {
+    // Place a field node into `container` (the section body OR an expansion-group),
+    // grouping consecutive same-`row` fields into a shared .field-row so they render
+    // side-by-side. The parentElement check restarts the row-group when the container
+    // changes, so a row tag on conditional fields inside an expansion-group still
+    // groups (and doesn't bleed into a body-level row).
+    const placeIn = (container, node, f) => {
       if (f && f.row) {
-        if (activeRowKey !== f.row) {
+        if (activeRowKey !== f.row || !activeRowGroup || activeRowGroup.parentElement !== container) {
           activeRowGroup = el('div', { class: 'field-row' });
           activeRowGroup.setAttribute('data-row', f.row);
-          body.appendChild(activeRowGroup);
+          container.appendChild(activeRowGroup);
           activeRowKey = f.row;
         }
         activeRowGroup.appendChild(node);
       } else {
         activeRowGroup = null; activeRowKey = null;
-        body.appendChild(node);
+        container.appendChild(node);
       }
     };
 
@@ -1071,19 +1076,17 @@ function renderSchemaForm(sections, bag, onUpdate) {
             activeExpGroup = grp;
             activeExpExpr = f.show_if;
           }
-          activeExpGroup.appendChild(fieldNode);
-          activeRowGroup = null; activeRowKey = null;
+          placeIn(activeExpGroup, fieldNode, f);   // honor `row` inside the expansion-group
         } else {
           // Single conditional field: render inline; refreshSection toggles its display.
           activeExpGroup = null;
           activeExpExpr = null;
-          activeRowGroup = null; activeRowKey = null;
-          body.appendChild(fieldNode);
+          placeIn(body, fieldNode, f);
         }
       } else {
         activeExpGroup = null;
         activeExpExpr = null;
-        placeInBody(fieldNode, f);
+        placeIn(body, fieldNode, f);
       }
     });
 

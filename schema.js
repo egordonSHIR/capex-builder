@@ -858,6 +858,24 @@ window.SCHEMA = {
         "hint": "Enter 0 if none"
       },
       {
+        "key": "walkway_length",
+        "label": "Walkway Length",
+        "type": "number",
+        "min": 0,
+        "hint": "Feet",
+        "show_if": "walkways > 0",
+        "row": "walkway_dims"
+      },
+      {
+        "key": "walkway_width",
+        "label": "Walkway Width",
+        "type": "number",
+        "min": 0,
+        "hint": "Feet",
+        "show_if": "walkways > 0",
+        "row": "walkway_dims"
+      },
+      {
         "key": "stairways",
         "type": "number",
         "label": "# Stairways",
@@ -883,22 +901,6 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Linear Ft"
-      },
-      {
-        "key": "walkway_length",
-        "label": "Walkway Length",
-        "type": "number",
-        "min": 0,
-        "hint": "Feet",
-        "show_if": "walkways > 0"
-      },
-      {
-        "key": "walkway_width",
-        "label": "Walkway Width",
-        "type": "number",
-        "min": 0,
-        "hint": "Feet",
-        "show_if": "walkways > 0"
       },
       {
         "key": "balconies",
@@ -2645,17 +2647,17 @@ window.SCHEMA = {
         "items": [
           {
             "name": "New Railings",
-            "default_cost_per_item": 1.5,
+            "default_cost_per_item": 25.0,
             "notes": "Repair/Replace",
             "gl_account": "17325: CIP Exterior - Railings",
             "default_qty_type": "Railing Lin-ft"
           },
           {
             "name": "Sandblasting",
-            "default_cost_per_item": 1.0,
+            "default_cost_per_item": 10.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
-            "default_qty_type": "Railing Sqft"
+            "default_qty_type": "Railing Lin-ft"
           },
           {
             "name": "Panels",
@@ -2678,28 +2680,28 @@ window.SCHEMA = {
         "items": [
           {
             "name": "New - Materials",
-            "default_cost_per_item": 25.0,
+            "default_cost_per_item": 2.5,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "New - Labor",
-            "default_cost_per_item": 25.0,
+            "default_cost_per_item": 2.5,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "Concrete Finish Coat",
-            "default_cost_per_item": 10.0,
+            "default_cost_per_item": 1.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "Welder",
-            "default_cost_per_item": 5.0,
+            "default_cost_per_item": 1.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Walkway Sqft"
