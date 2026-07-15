@@ -1539,7 +1539,7 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Signage - Wrap & New",
+            "name": "Signage - Temporary Wrap",
             "default_cost_per_item": 5000.0,
             "notes": null,
             "gl_account": "17560: CIP Signage (5 Yrs)",
