@@ -3579,7 +3579,7 @@ function groupHeader(groupName, badgeNode) {
 const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs',
   // Basics-linked Qty Types (2026-07-07): picking one auto-fills a Budget row's
   // # Qty (read-only) from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
-  'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Walkway Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
+  'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Walkway Sqft', 'Railing Lin-ft', 'Railing Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
   '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
   '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)'];
 // Interior "sizing" Qty Types: when an Interior row uses one of these, its
@@ -3609,14 +3609,18 @@ const BASICS_QTY_TYPE_FIELDS = {
   '# Dog Park(s)': 'dog_parks',
   '# Laundry Facility(ies)': 'laundry_facilities',
   '# Indoor Pool(s)': 'indoor_pools',
+  // Railing linear feet = the "# Railings" Basics field (stores LF).
+  'Railing Lin-ft': 'new_railing_lf',
 };
-// Basics-linked Qty Types whose # Qty is a PRODUCT of several Basics fields
-// (computed, read-only) rather than a single field. e.g. "Walkway Sqft" =
-// Walkway Length × Walkway Width × # Walkways (all on Basics → Exteriors). Any
-// factor blank/non-numeric collapses the product to 0. Keep the type name in
-// UNIT_TYPES + the workbook LISTS in sync, same as BASICS_QTY_TYPE_FIELDS.
+// Basics-linked Qty Types whose # Qty is a PRODUCT of factors (computed,
+// read-only). A factor that is a STRING is a Basics field key (its value is
+// read); a NUMBER is a literal constant multiplier. e.g. "Walkway Sqft" =
+// Walkway Length × Walkway Width × # Walkways; "Railing Sqft" = # Railings (LF)
+// × 3 (≈ a 3-ft railing height). Any field factor blank/non-numeric collapses
+// the product to 0. Keep the type name in UNIT_TYPES + the workbook LISTS in sync.
 const BASICS_QTY_TYPE_COMPUTED = {
   'Walkway Sqft': ['walkway_length', 'walkway_width', 'walkways'],
+  'Railing Sqft': ['new_railing_lf', 3],
 };
 // Read a single Basics/Physical field value (phase1 then phase2); blank -> null.
 function basicsFieldNum(key) {
@@ -3635,8 +3639,9 @@ function basicsQtyValue(ut) {
   if (factors) {
     let prod = 1;
     for (const k of factors) {
+      if (typeof k === 'number') { prod *= k; continue; }  // literal constant multiplier
       const n = basicsFieldNum(k);
-      if (n == null) return 0;   // a missing factor -> 0 sqft (not a bogus product)
+      if (n == null) return 0;   // a missing field factor -> 0 (not a bogus product)
       prod *= n;
     }
     return prod;
@@ -3658,7 +3663,7 @@ function basicsQtyTooltip(ut) {
     return k;
   };
   const factors = BASICS_QTY_TYPE_COMPUTED[ut];
-  if (factors) return `Auto-computed from Basics: ${factors.map(labelOf).join(' × ')}`;
+  if (factors) return `Auto-computed from Basics: ${factors.map(f => typeof f === 'number' ? String(f) : labelOf(f)).join(' × ')}`;
   return `Auto-filled from Basics → ${ut}`;
 }
 // Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,

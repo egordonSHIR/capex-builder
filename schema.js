@@ -730,7 +730,7 @@ window.SCHEMA = {
       },
       {
         "key": "parking_spots_hc",
-        "label": "# Accessible (HC) Parking",
+        "label": "# Handicap Parking",
         "type": "number",
         "min": 0,
         "hint": "Of total parking above",
@@ -1088,7 +1088,7 @@ window.SCHEMA = {
       },
       {
         "key": "showerhead_aerated",
-        "label": "Showerhead Aerated? (Y/N)",
+        "label": "Showerhead Aerated?",
         "type": "select",
         "options": [
           "Yes",
@@ -1097,7 +1097,7 @@ window.SCHEMA = {
       },
       {
         "key": "bath_sink_aerated",
-        "label": "Bathroom Faucet Aerated? (Y/N)",
+        "label": "Bathroom Faucet Aerated?",
         "type": "select",
         "options": [
           "Yes",
@@ -1219,7 +1219,7 @@ window.SCHEMA = {
       },
       {
         "key": "laundry_facilities",
-        "label": "# Laundry Facility(ies)",
+        "label": "# Laundry Facilities",
         "type": "number",
         "min": 0,
         "required": true,
@@ -2573,7 +2573,14 @@ window.SCHEMA = {
             "default_qty_type": "Avg # BRs"
           },
           {
-            "name": "Fences/Yards",
+            "name": "New Yard",
+            "default_cost_per_item": 1500.0,
+            "notes": null,
+            "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
+            "default_qty_type": "Each"
+          },
+          {
+            "name": "Patio --> Yard",
             "default_cost_per_item": 1500.0,
             "notes": null,
             "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
@@ -2641,28 +2648,28 @@ window.SCHEMA = {
             "default_cost_per_item": 1.5,
             "notes": "Repair/Replace",
             "gl_account": "17325: CIP Exterior - Railings",
-            "default_qty_type": "Linear Ft"
+            "default_qty_type": "Railing Lin-ft"
           },
           {
-            "name": "Railings - Sandblasting",
+            "name": "Sandblasting",
             "default_cost_per_item": 1.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Railing Sqft"
           },
           {
-            "name": "Railings - Panels",
+            "name": "Panels",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Railing Sqft"
           },
           {
             "name": "Welder - Labor",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17325: CIP Exterior - Railings",
-            "default_qty_type": "Linear Ft"
+            "default_qty_type": "Railing Lin-ft"
           }
         ]
       },
