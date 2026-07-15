@@ -286,7 +286,8 @@ const DEFAULT_PROPERTY = () => ({
   phase1: {},
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
   unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
-  checklist: {}, // CAPEX checklist (Questionnaire tab): `${gi}.${si}.${ii}` -> true
+  checklist: {}, // LEGACY (pre-2026-07-15 Questionnaire selection): `${gi}.${si}.${ii}` -> true. No longer gates the Budget page (every item now renders); kept so old deals load without loss.
+  excluded: {}, // Budget "N/A" toggles: `${gi}.${si}.${ii}` -> true means the row is turned OFF (grayed, inputs locked, $0, excluded from the subtotal). Absent = active/editable (default).
   phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id, finish}
   // User-defined CAPEX Groups: buckets of line items used as the base for any
   // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
@@ -1173,8 +1174,8 @@ function renderExpandCollapseBar(leftItems, leftStat) {
 //   • Enter / Space fire the existing click handler (toggle)
 // Idempotent — the `data-a11y-wired` flag prevents duplicate listeners /
 // observers across re-wires. Nested interactive elements inside a header
-// (e.g. Questionnaire Select-all / Clear buttons) already stopPropagation, so
-// making the header itself role=button is safe — their clicks aren't hijacked.
+// (e.g. bulk Expand/Collapse buttons) already stopPropagation, so making the
+// header itself role=button is safe — their clicks aren't hijacked.
 let _sectionA11yIdCounter = 0;
 function wireSectionA11y(root) {
   if (!root) return;
@@ -1197,8 +1198,8 @@ function wireSectionA11y(root) {
       hdr.setAttribute('aria-controls', body.id);
     }
     // Keyboard: Enter / Space toggle by firing the existing click handler.
-    // e.target !== hdr guard so pressing Space inside a nested button (e.g.
-    // Questionnaire Select-all) doesn't also toggle the section.
+    // e.target !== hdr guard so pressing Space inside a nested button (e.g. a
+    // bulk Expand/Collapse control) doesn't also toggle the section.
     hdr.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       if (e.repeat) return;
@@ -3498,6 +3499,24 @@ function countChecked() {
   return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
 }
 
+// ---------- Budget row on/off (the far-left "Skip" checkbox) ----------
+// Every line item now renders on the Budget page. A row is ACTIVE (editable,
+// contributes to the subtotal) by default; checking its far-left box marks it
+// N/A -> STATE.excluded[key]=true, which grays the row, locks its inputs, and
+// forces its $ Amt to $0. Absence of a key = active. This replaces the old
+// Questionnaire opt-in (checklist); the active/priced gates below all read
+// !isExcluded so the export gray-out, subtotal, badges, and CAPEX-group base
+// math keep working unchanged.
+function isExcluded(gi, si, ii) {
+  return !!(STATE.excluded && STATE.excluded[ckKey(gi, si, ii)]);
+}
+function setExcluded(gi, si, ii, val) {
+  if (!STATE.excluded) STATE.excluded = {};
+  const k = ckKey(gi, si, ii);
+  if (val) STATE.excluded[k] = true; else delete STATE.excluded[k];
+  saveState();
+}
+
 // CAPEX group header colors, matched to the source Excel "CAPEX" tab. Used by the
 // Questionnaire + Budget group headers AND the Excel export (so the pasted section
 // looks like the proforma). The Basics-page section headers reuse these hues plus
@@ -3543,115 +3562,14 @@ function groupHeader(groupName, badgeNode) {
   );
 }
 
-// Update the per-section / per-group "N selected" badges shown on collapsed
-// Questionnaire headers. Cheap DOM walk over the badge placeholders.
-function refreshQuestionnaireBadges() {
-  const root = $('#phase-content');
-  if (!root) return;
-  root.querySelectorAll('[data-q-badge]').forEach(b => {
-    const [gi, si] = b.dataset.qBadge.split('.').map(Number);
-    const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
-    if (!sec) return;
-    let n = 0; sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) n++; });
-    b.textContent = `${n} selected`;
-  });
-  root.querySelectorAll('[data-q-badge-group]').forEach(b => {
-    const gi = Number(b.dataset.qBadgeGroup);
-    const g = SCHEMA.phase3[gi]; if (!g) return;
-    let n = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) n++; }));
-    b.textContent = `${n} selected`;
-  });
-}
+// NOTE (2026-07-15): the standalone "To-Do" tab (renderPhase2 / the CAPEX
+// checklist) was removed. Every line item now renders directly on the Budget
+// page (renderPhase3) with a far-left "Skip" checkbox; see isExcluded/setExcluded
+// and renderExcludeToggleCell. The legacy `checklist`/isChecked/setChecked/
+// countChecked/refreshQuestionnaireBadges helpers are retained only so old deal
+// JSON loads without loss — they no longer gate anything.
 
-// ---------- Phase 2: Questionnaire (CAPEX checklist — checkboxes only) ----------
-function renderPhase2() {
-  const root = el('div');
-  // "# Items" count sits inline in the navy bar with Expand/Collapse all.
-  const itemsStat = el('div', { style: 'display:flex;align-items:center;gap:8px' },
-    el('span', { style: 'color:#cbd5e1;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.03em' }, '# Items'),
-    el('span', { class: 'value', 'data-checked-count': true, style: 'color:#fff;font-size:16px;font-weight:700' }, String(countChecked())));
-  root.appendChild(renderExpandCollapseBar(null, itemsStat));
-  root.appendChild(el('div', { class: 'muted small', style: 'margin:2px 2px 14px' },
-    'Check every capex item this property needs. Selected items appear in the BUDGET $ tab for pricing.'));
-
-  const refreshCount = () => {
-    const n = root.querySelector('[data-checked-count]');
-    if (n) n.textContent = String(countChecked());
-    refreshQuestionnaireBadges();
-  };
-
-  SCHEMA.phase3.forEach((group, gi) => {
-    if (!group.sections.length) return;
-    // groupBody carries .section-body so collapsing the group hides everything inside.
-    const groupBody = el('div', { class: 'section-body group-body' });
-    // Group-derived tints (same scheme as renderPhase3): sub-section headers
-    // get a medium-light tint; line items get a very-light tint of the same hue.
-    const groupColor = GROUP_COLORS[group.name];
-    const subHeaderBg = groupColor ? lightenHex(groupColor, 0.55) : '';
-    const subHeaderTxt = groupColor ? textOn(subHeaderBg) : '';
-    const rowIdleBg = groupColor ? lightenHex(groupColor, 0.88) : '';
-    group.sections.forEach((sec, si) => {
-      if (!sec.items.length) return;
-      const secBody = el('div', { class: 'section-body' });
-      sec.items.forEach((item, ii) => {
-        const cb = el('input', { type: 'checkbox' });
-        cb.checked = isChecked(gi, si, ii);
-        cb.setAttribute('data-cb-key', ckKey(gi, si, ii));
-        cb.addEventListener('change', () => { setChecked(gi, si, ii, cb.checked); refreshCount(); });
-        const itemLabel = el('label', { class: 'check-item' }, cb, el('span', {}, item.name));
-        if (rowIdleBg) itemLabel.style.background = rowIdleBg;
-        secBody.appendChild(itemLabel);
-      });
-      // Bulk Select all / Clear buttons for this subsection. stopPropagation
-      // so clicking them does not also collapse the section via the header.
-      const bulkBtnStyle = 'padding:3px 8px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.92);color:#0f172a;border:1px solid rgba(0,0,0,0.18);border-radius:4px;cursor:pointer;white-space:nowrap;text-transform:none;letter-spacing:0';
-      const bulkSet = (value) => {
-        sec.items.forEach((_, ii) => {
-          setChecked(gi, si, ii, value);
-          const cb = secBody.querySelector(`[data-cb-key="${ckKey(gi, si, ii)}"]`);
-          if (cb) cb.checked = value;
-        });
-        refreshCount();
-      };
-      const selectAllBtn = el('button', {
-        type: 'button', style: bulkBtnStyle, title: 'Select every item in this subsection',
-        onClick: (e) => { e.stopPropagation(); bulkSet(true); },
-      }, '✓ All');
-      const clearBtn = el('button', {
-        type: 'button', style: bulkBtnStyle, title: 'Deselect every item in this subsection',
-        onClick: (e) => { e.stopPropagation(); bulkSet(false); },
-      }, '✗ None');
-      // Questionnaire sub-sections start expanded so users can see all available
-      // line items at a glance — collapse is still available via the chevron.
-      const secHeaderStyle = subHeaderBg
-        ? `background:${subHeaderBg};color:${subHeaderTxt}`
-        : '';
-      const secChecked = sec.items.filter((_, ii) => isChecked(gi, si, ii)).length;
-      const secNode = el('section', { class: 'section' },
-        el('header', { class: 'section-header', style: secHeaderStyle,
-          onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1' }, sec.name),
-          el('span', { class: 'section-collapsed-badge', 'data-q-badge': gi + '.' + si }, `${secChecked} selected`),
-          el('span', { style: 'display:flex;align-items:center;gap:6px;flex-shrink:0' },
-            selectAllBtn,
-            clearBtn,
-            el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
-          )
-        ),
-        secBody
-      );
-      groupBody.appendChild(secNode);
-    });
-    let groupChecked = 0;
-    group.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) groupChecked++; }));
-    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-q-badge-group': gi }, `${groupChecked} selected`);
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge), groupBody);
-    root.appendChild(groupNode);
-  });
-  return root;
-}
-
-// ---------- Phase 3: Details (checked items only — # units, unit type, $/unit) ----------
+// ---------- Phase 3: Budget (ALL line items — far-left Skip toggle, # Qty, Qty Type, $/Qty) ----------
 // '%' is a special type: the row's $/Qty becomes a read-only display of
 // (selected CAPEX Group total) / 100, and the row's $ Amt = (qty / 100) ×
 // group total. A sub-row appears below the line item to pick the group.
@@ -3874,7 +3792,7 @@ function getCapexGroupTotal(groupId) {
     const parts = key.split('.').map(Number);
     if (parts.length !== 3 || parts.some(isNaN)) continue;
     const [gi, si, ii] = parts;
-    if (!isChecked(gi, si, ii)) continue;
+    if (isExcluded(gi, si, ii)) continue; // turned-off rows don't count toward a CAPEX-group base
     const v = STATE.phase3[key];
     if (!v || v.unit_type === '%') continue;
     total += (Number(v.qty) || 0) * getEffectiveUnitCost(gi, si, ii);
@@ -3934,13 +3852,13 @@ function refreshBudgetBadges() {
     const [gi, si] = b.dataset.bBadge.split('.').map(Number);
     const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
     if (!sec) return;
-    let sum = 0; sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); });
+    let sum = 0; sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); });
     b.textContent = fmtMoney(sum);
   });
   root.querySelectorAll('[data-b-badge-group]').forEach(b => {
     const gi = Number(b.dataset.bBadgeGroup);
     const g = SCHEMA.phase3[gi]; if (!g) return;
-    let sum = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (isChecked(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
+    let sum = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
     b.textContent = fmtMoney(sum);
   });
 }
@@ -4020,13 +3938,16 @@ function renderItemConditionalFields(gi, si, ii, item, summaryNode) {
 // The trailing 52px column holds the per-item row-actions: a 📝 note button and
 // a 📷 photo button (see renderRowActionsCell). Used by both the sticky column
 // header and each line-item row so columns line up.
-const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px 52px';
+// Leading 26px column = the per-row "Skip" checkbox (isExcluded toggle). Checked
+// grays the row + forces $0; unchecked (default) = active/editable.
+const DETAIL_GRID_COLS = '26px minmax(0,1fr) 86px 64px 78px 72px 84px 52px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
-// Interior group: 10 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
-// checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
-// between the status-% block and # Qty so it lines up roughly with the
-// non-Interior Options column. Trailing 52px col = note + photo buttons.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px 52px';
+// Interior group: 11 cols. Leading 26px = Skip checkbox. Status-% inputs
+// (Orig./Part./Reno.) replace the =MF checkbox; # Qty is computed from %s ×
+// Unit Mix status totals. Options sits between the status-% block and # Qty so
+// it lines up roughly with the non-Interior Options column. Trailing 52px col =
+// note + photo buttons.
+const DETAIL_GRID_COLS_INTERIOR = '26px minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px 52px';
 const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:4px;padding:6px 8px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
@@ -4039,6 +3960,7 @@ function renderInteriorStatusHeader() {
   const cellBg = counts.empty ? missingBg : fineBg;
   const headerStyle = DETAIL_GRID_BASE_INTERIOR + ';font-weight:700;font-size:10px;color:#475569;text-transform:uppercase;background:#f8fafc;border-bottom:1px solid #cbd5e1';
   return el('div', { class: 'interior-status-header', style: headerStyle, 'data-interior-header': '' },
+    el('div', { style: 'text-align:center' }, ''),
     el('div', {}, 'Item'),
     el('div', { 'data-status-cell': 'orig', style: `text-align:center;padding:2px 0;border-radius:4px;background:${cellBg}` },
       el('div', { style: 'font-size:10px;color:#475569' }, 'Orig.'),
@@ -4129,6 +4051,7 @@ function renderPhase3() {
     'data-budget-colhdr': '',
     style: DETAIL_GRID_BASE + ';font-weight:700;font-size:11px;color:#475569;text-transform:uppercase;background:#f8fafc;border-top:1px solid #e5e7eb'
   },
+    el('div', { style: 'text-align:center;font-size:9px', title: 'Check a row to mark it Not Applicable — grays it out, locks inputs, forces $0' }, 'Skip'),
     el('div', {}, 'Item'),
     el('div', {}, 'Options'),
     el('div', { style: 'text-align:right' }, '# Qty'),
@@ -4140,17 +4063,14 @@ function renderPhase3() {
   sticky.appendChild(colHdr);
   root.appendChild(sticky);
 
-  if (countChecked() === 0) {
-    root.appendChild(el('div', { class: 'home-empty' },
-      'No items selected yet. Check items on the To-Do tab and they will appear here for pricing.'));
-    return root;
-  }
-
+  // Every line item renders now (the To-Do tab is gone) — grouped by group →
+  // section, each as a full pricing row with a far-left "Skip" checkbox. Only
+  // ACTIVE (non-excluded) rows count toward the section/group $ badges + the
+  // running subtotal.
   SCHEMA.phase3.forEach((group, gi) => {
     if (!group.sections.length) return;
     const isInterior = group.name === 'Interior';
     const groupBody = el('div', { class: 'section-body group-body' });
-    let groupHasChecked = false;
     let groupSum = 0;
     // Derive sub-section + row tints from the group banner color. Sub-section
     // headers get a medium-light tint (still readable text); idle line-item
@@ -4162,13 +4082,9 @@ function renderPhase3() {
     const rowIdleBg = groupColor ? lightenHex(groupColor, 0.88) : '';
     const rowPricedBg = groupColor ? lightenHex(groupColor, 0.72) : '#f0fdf4';
     group.sections.forEach((sec, si) => {
-      const checkedItems = sec.items
-        .map((item, ii) => ({ item, ii }))
-        .filter(o => isChecked(gi, si, o.ii));
-      if (!checkedItems.length) return;
-      groupHasChecked = true;
+      if (!sec.items.length) return;
       const secBody = el('div', { class: 'section-body' });
-      checkedItems.forEach(({ item, ii }) => {
+      sec.items.forEach((item, ii) => {
         secBody.appendChild(
           isInterior
             ? renderInteriorDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg })
@@ -4176,7 +4092,7 @@ function renderPhase3() {
         );
       });
       let secSum = 0;
-      checkedItems.forEach(({ ii }) => { secSum += getDetailItemTotal(gi, si, ii); });
+      sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) secSum += getDetailItemTotal(gi, si, ii); });
       groupSum += secSum;
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
@@ -4192,7 +4108,6 @@ function renderPhase3() {
       );
       groupBody.appendChild(secNode);
     });
-    if (!groupHasChecked) return;
     const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
     const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
@@ -4255,6 +4170,41 @@ function renderOptionsCell(gi, si, ii, item, onChange) {
   return sel;
 }
 
+// Far-left "Skip" checkbox cell for a Budget row. Checked = excluded (row grays
+// out, inputs lock, $ Amt = $0, dropped from the subtotal); unchecked (default)
+// = active/editable. The checkbox itself carries data-budget-toggle so
+// applyRowExcludedState never disables it (it's the only way back on).
+function renderExcludeToggleCell(gi, si, ii, itemWrap, summaryNode) {
+  const cb = el('input', { type: 'checkbox' });
+  cb.setAttribute('data-budget-toggle', '');
+  cb.checked = isExcluded(gi, si, ii);
+  cb.title = 'Check to mark this line item Not Applicable — grays it out, locks its inputs, and forces $0. Uncheck to include & price it.';
+  cb.addEventListener('click', (e) => e.stopPropagation());
+  cb.addEventListener('change', () => {
+    setExcluded(gi, si, ii, cb.checked);
+    applyRowExcludedState(itemWrap);
+    recomputePctRowsAndSummary(summaryNode);
+  });
+  return el('div', { class: 'budget-toggle-cell', style: 'display:flex;align-items:center;justify-content:center' }, cb);
+}
+// Apply the current excluded/active state to a rendered row: toggle the
+// .row-excluded class, disable every input/select/button EXCEPT the toggle
+// checkbox, and refresh the $ Amt (renderDetailTotals shows $0 when excluded).
+function applyRowExcludedState(itemWrap) {
+  const key = itemWrap.dataset.ckkey;
+  if (!key) return;
+  const parts = key.split('.').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return;
+  const [gi, si, ii] = parts;
+  const excluded = isExcluded(gi, si, ii);
+  itemWrap.classList.toggle('row-excluded', excluded);
+  itemWrap.querySelectorAll('input, select, button').forEach(c => {
+    if (c.hasAttribute('data-budget-toggle')) return;
+    c.disabled = excluded;
+  });
+  renderDetailTotals(itemWrap, gi, si, ii);
+}
+
 function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const v = getP3(gi, si, ii);
   // Legacy migration: the old "=MF" checkbox (removed 2026-07-07) is superseded by
@@ -4289,7 +4239,10 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   itemWrap.dataset.bgIdle = rowIdleBg;
   itemWrap.dataset.bgPriced = rowPricedBg;
 
-  // Col 1: item name (GL account dropped per user request — kept in schema for
+  // Col 1: far-left "Skip" checkbox (isExcluded toggle).
+  itemWrap.appendChild(renderExcludeToggleCell(gi, si, ii, itemWrap, summaryNode));
+
+  // Col 2: item name (GL account dropped per user request — kept in schema for
   // export but not displayed on Details rows).
   const nameCell = el('div', { style: 'min-width:0;overflow:hidden' },
     el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name)
@@ -4460,6 +4413,9 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     itemWrap.appendChild(renderItemConditionalFields(gi, si, ii, item, summaryNode));
   }
 
+  // Reflect the row's on/off state (grays + locks + $0 when excluded).
+  applyRowExcludedState(itemWrap);
+
   return itemWrap;
 }
 // Interior-group line-item row. Same total/$Amt machinery as renderDetailItem,
@@ -4483,12 +4439,15 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   itemWrap.dataset.bgPriced = rowPricedBg;
   itemWrap.dataset.interior = '1';
 
-  // Col 1: item name
+  // Col 1: far-left "Skip" checkbox (isExcluded toggle).
+  itemWrap.appendChild(renderExcludeToggleCell(gi, si, ii, itemWrap, summaryNode));
+
+  // Col 2: item name
   itemWrap.appendChild(el('div', { style: 'min-width:0;overflow:hidden' },
     el('div', { style: 'font-size:13px;font-weight:600;color:#0f172a;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name)
   ));
 
-  // Cols 2-4: pct_orig / pct_part / pct_reno inputs
+  // Cols 3-5: pct_orig / pct_part / pct_reno inputs
   const qtyInp = el('input', {
     type: 'text', inputmode: 'numeric',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box;background:#f1f5f9'
@@ -4603,13 +4562,24 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
     style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a'
   }, fmtMoney(total)));
 
-  // Col 10: 📷 field photos for this line item.
+  // Col 11: 📷 field photos for this line item.
   itemWrap.appendChild(renderRowActionsCell(gi, si, ii, item));
+
+  // Reflect the row's on/off state (grays + locks + $0 when excluded).
+  applyRowExcludedState(itemWrap);
 
   return itemWrap;
 }
 
 function renderDetailTotals(itemWrap, gi, si, ii) {
+  // Excluded rows always read $0 and let the .row-excluded CSS supply the gray
+  // background (inline bg cleared so it doesn't fight the class).
+  if (isExcluded(gi, si, ii)) {
+    const te = itemWrap.querySelector('[data-total]');
+    if (te) te.textContent = fmtMoney(0);
+    itemWrap.style.background = '';
+    return;
+  }
   // Centralized via getDetailItemTotal so % rows compute correctly here too.
   const total = getDetailItemTotal(gi, si, ii);
   const t = itemWrap.querySelector('[data-total]');
@@ -4728,7 +4698,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
     SCHEMA.phase3.forEach((g, gi) => {
       g.sections.forEach((s, si) => {
         s.items.forEach((it, ii) => {
-          if (!isChecked(gi, si, ii)) return;
+          if (isExcluded(gi, si, ii)) return; // only active rows can be a % base
           const k = ckKey(gi, si, ii);
           if (existing.has(k)) return;
           const v = getP3(gi, si, ii);
@@ -4739,7 +4709,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
       });
     });
     if (!added) {
-      addSel.appendChild(el('option', { value: '', disabled: true }, 'No eligible items — check more on the To-Do tab'));
+      addSel.appendChild(el('option', { value: '', disabled: true }, 'No eligible items — activate more Budget rows (uncheck their Skip box)'));
     }
   }
   rebuildAddOptions();
@@ -4840,7 +4810,7 @@ function computeTotals() {
     byGroup[g.name] = 0;
     g.sections.forEach((s, si) => {
       s.items.forEach((it, ii) => {
-        if (!isChecked(gi, si, ii)) return; // only priced items that are selected
+        if (isExcluded(gi, si, ii)) return; // turned-off rows don't count toward the subtotal
         // Use getDetailItemTotal so % rows contribute their group-scaled value
         // (qty/100 × CAPEX Group total) instead of qty × literal unit_cost.
         const t = getDetailItemTotal(gi, si, ii);
@@ -4874,7 +4844,7 @@ function collectBudgetFlags(rules) {
   SCHEMA.phase3.forEach((g, gi) => {
     g.sections.forEach((s, si) => {
       s.items.forEach((it, ii) => {
-        if (!isChecked(gi, si, ii)) return;
+        if (isExcluded(gi, si, ii)) return;
         rules.forEach((rule) => {
           if (rule.match(it.name) && !notes.includes(rule.note)) notes.push(rule.note);
         });
@@ -4921,7 +4891,7 @@ function renderPhase4() {
   if (!STATE.phase1.mf_units) warnings.push('# of MF Units is missing (Basics) — per-unit metric will be $0.');
   const p2Filled = Object.values(STATE.phase2).filter(v => Array.isArray(v) ? v.length : Boolean(v)).length;
   if (p2Filled === 0) warnings.push('Physical characteristics (Basics tab) appear empty.');
-  if (countChecked() === 0) warnings.push('No capex items selected on the To-Do tab.');
+  if (computeTotals().itemCount === 0) warnings.push('No capex items priced yet (every Budget line is $0 or turned off).');
   // Building & Site area-consistency red flag: paved + footprint + impervious + pervious
   // should not exceed the total site area (= Land Sqft).
   {
@@ -4971,10 +4941,10 @@ function renderPhase4() {
 
   // Export readiness — the buttons stay gray/disabled until the deal has the
   // minimum data for a meaningful export: a property name AND at least one
-  // selected Budget item. (Without either, the export has no real content.)
+  // priced Budget item. (Without either, the export has no real content.)
   const missing = [];
   if (!STATE.phase1.prop_name) missing.push('a property name (Basics)');
-  if (countChecked() === 0) missing.push('at least one selected Budget item (To-Do tab)');
+  if (computeTotals().itemCount === 0) missing.push('at least one priced Budget item');
   const exportReady = missing.length === 0;
   const readyTip = exportReady ? '' : 'Add ' + missing.join(' and ') + ' to enable export.';
   const btnStyle = (activeBg) => exportReady
@@ -5141,9 +5111,9 @@ async function buildCapexWorkbook() {
   ws.views = [{ state: 'frozen', ySplit: colHeaderRow.number }];
 
   // Emit EVERY line item (full default list) so the export mirrors the proforma
-  // CAPEX tab in its entirety. Items that were NOT worked on in the app (unchecked
-  // on the Questionnaire) are rendered with a light-gray background so it's obvious
-  // at a glance which items this deal actually touched.
+  // CAPEX tab in its entirety. Items that were NOT worked on in the app (turned
+  // OFF via the Budget row's Skip checkbox) are rendered with a light-gray
+  // background so it's obvious at a glance which items this deal actually touched.
   // Exclude the Commercial Tenant Costs group — it's represented by the top
   // "Commercial Tenant Costs" summary line and lives separately in the proforma;
   // the MF detail + Multifamily Subtotal cover the 6 multifamily groups only.
@@ -5179,7 +5149,7 @@ async function buildCapexWorkbook() {
 
     sections.forEach(({ sec, si, items }) => {
       items.forEach(({ item, ii }) => {
-        const worked = isChecked(gi, si, ii);   // "worked on in the app"
+        const worked = !isExcluded(gi, si, ii);   // active row (not skipped) = "worked on in the app"
         const v = getP3(gi, si, ii);
         const qtyType = v.unit_type || item.default_qty_type || '';
         const isPct = qtyType === '%';
@@ -5626,8 +5596,9 @@ function renderApp() {
   const main = $('#phase-content');
   main.innerHTML = '';
   let view;
+  // Tabs: 1 = Basics, 3 = Budget (the merged page), 4 = Finalize. Phase 2 (the
+  // old To-Do tab) was removed; its data-phase is no longer in the tab bar.
   if (CURRENT_PHASE === 1) view = renderPhase1();
-  else if (CURRENT_PHASE === 2) view = renderPhase2();
   else if (CURRENT_PHASE === 3) view = renderPhase3();
   else view = renderPhase4();
   main.appendChild(view);
@@ -5695,8 +5666,8 @@ function renderOnboardingCard() {
   const steps = el('ol', { class: 'onboarding-steps' });
   steps.appendChild(el('li', {}, 'Connect your Google Drive account (one tap below).'));
   steps.appendChild(el('li', {}, 'Tap "+ New Property" and fill in name, city, state on the Basics tab.'));
-  steps.appendChild(el('li', {}, 'Leave Basics for the To-Do tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
-  steps.appendChild(el('li', {}, 'Check items on the To-Do tab, price them on BUDGET $, then sync to Drive (see below).'));
+  steps.appendChild(el('li', {}, 'Leave Basics for the BUDGET $ tab — the app finds the matching deal folder across your pipelines and links it automatically.'));
+  steps.appendChild(el('li', {}, 'On BUDGET $, every capex line item is listed and active by default — price the ones that apply and check the far-left "Skip" box on the ones that don\'t. Then sync to Drive (see below).'));
   card.appendChild(steps);
 
   // Push / Pull explainer — the core save-and-retrieve workflow.
@@ -7916,13 +7887,12 @@ HOME SCREEN
 - ARCHIVING: the ⋮ menu's "Archive" option hides a property from the main "Live" list (useful for dead/closed deals). The home screen has a "🗄 Archived" toggle that switches to the archived list, and "← Live" to switch back. Archive/unarchive syncs to all devices and teammates.
 - TO UNARCHIVE / RESTORE a property: click the "🗄 Archived" toggle on the home screen to see archived properties, open that property's ⋮ menu, and choose "Unarchive (move to Live)". It returns to the main list.
 
-THE FOUR TABS
+THE THREE TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
-2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
-3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
+2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. Each row is active and editable by default; price the ones the deal needs and, for the ones that don't apply, check the far-left "Skip" box — that grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 - NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
-4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
+3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
 - You never press Save — it auto-saves to Drive a couple seconds after you stop typing. Google Drive is the source of truth. A status bar shows "Saving…" then "✓ Saved to Drive" (the ✓ auto-hides after a few seconds so it stays out of your way).
@@ -7933,7 +7903,7 @@ TROUBLESHOOTING
 - Import buttons say to link a folder → ☰ → Find Drive Folder (or Link by URL).
 - Proforma import pulls 0 units → the newest model may be an empty shell; use ⬆ Upload XLS with the right file.
 - A section won't show a green check → a required field is blank; use 📋 Export Missing Fields.
-- Export buttons grayed out → give the property a name and check at least one item.
+- Export buttons grayed out → give the property a name and price at least one Budget item.
 - Status stuck on "Saving…" → click it to resolve, or ☰ → Re-sync from Drive.
 - Help chat itself needs the shared AI key, which loads once Google Drive is connected.`;
 

@@ -666,8 +666,16 @@ main {
 .detail-item-interior input,
 .detail-item-interior select { font-size: 11px !important; padding-left: 3px !important; padding-right: 3px !important; }
 .detail-item-interior select[data-finish-select] { font-size: 12px !important; }  /* Options/Finish: 12px still fits "Hardwood" in the 78px column */
-.detail-item-interior > div:first-child > div { font-size: 12px !important; }      /* item name */
+.detail-item-interior > div:nth-child(2) > div { font-size: 12px !important; }     /* item name (col 2 — col 1 is the Skip checkbox) */
 .detail-item-interior > div[data-total] { font-size: 12px !important; }            /* $ Amt */
+
+/* Far-left "Skip" checkbox column on Budget rows (renderExcludeToggleCell). */
+.budget-toggle-cell input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; margin: 0; }
+/* A turned-off (excluded / N.A.) Budget row: gray background + everything but the
+   Skip checkbox dimmed. Inputs are also disabled in JS (applyRowExcludedState),
+   so they read as locked; the dim + gray makes "off" obvious at a glance. */
+.detail-item-wrap.row-excluded { background: #eef1f5 !important; }
+.detail-item-wrap.row-excluded > *:not(.budget-toggle-cell) { opacity: .5; }
 
 /* Colored CAPEX group sections (Questionnaire + Details) */
 .group-section > .group-header { letter-spacing: 0.5px; }
@@ -975,7 +983,11 @@ main {
     grid-template-columns: 76px 40px 66px 46px minmax(40px, 1fr) !important;
     row-gap: 4px;
   }
-  .detail-item-wrap > div:first-child { grid-column: 1 / -1; padding-right: 36px; }
+  /* Col 1 is the "Skip" checkbox — pull it out of the grid and pin it to the
+     row's top-left so the input line keeps its 5 columns; the name (col 2)
+     spans the full top line, padded to clear the checkbox (left) + 📷 pill (right). */
+  .detail-item-wrap > .budget-toggle-cell { position: absolute; left: 4px; top: 6px; z-index: 2; }
+  .detail-item-wrap > div:nth-child(2) { grid-column: 1 / -1; padding-left: 26px; padding-right: 36px; }
   /* Compact inputs so values like "Avg # BRs" / "Brushed Nickel" aren't clipped
      in the narrow tracks (mirrors the interior-row 11px treatment). The finish
      select needs its own rule — the interior 12px [data-finish-select] rule
@@ -988,13 +1000,15 @@ main {
   .detail-item-interior > .pct-input { display: none !important; }
   .interior-status-header { display: none !important; }
   /* Sticky-panel column header: same 5 columns as the rows' input line; the
-     Item (first) + 📷 (last) header cells disappear with the one-line layout.
-     Side padding ≈ the section-card inset so labels line up over the columns. */
+     Skip (1st) + Item (2nd) + 📷 (last) header cells disappear with the one-line
+     layout. Side padding ≈ the section-card inset so labels line up over the columns. */
   [data-budget-colhdr] {
     grid-template-columns: 76px 40px 66px 46px minmax(40px, 1fr) !important;
     padding-left: 34px !important; padding-right: 34px !important;
   }
-  [data-budget-colhdr] > div:first-child, [data-budget-colhdr] > div:last-child { display: none; }
+  [data-budget-colhdr] > div:nth-child(1),
+  [data-budget-colhdr] > div:nth-child(2),
+  [data-budget-colhdr] > div:last-child { display: none; }
   .detail-item-wrap .photo-cell {
     position: absolute; right: 4px; top: 2px; z-index: 2;
   }
