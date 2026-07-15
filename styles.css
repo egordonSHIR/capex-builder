@@ -117,9 +117,32 @@ main {
   justify-content: space-between;
   align-items: center;
 }
-.section-header .chev { transition: transform 0.2s; }
-.section.collapsed .chev { transform: rotate(-90deg); }
+/* Chevron affordance in every section header: ▾ when expanded, ▸ when
+   collapsed. The inline text (▼) rendered by JS is hidden via font-size:0 so
+   the visible glyph is provided by ::before — swapping character (rather than
+   rotating a single glyph) keeps state legible to screen-magnifiers and
+   matches the toggle-button icons Elan spec'd. */
+.section-header .chev {
+  transition: none;
+  font-size: 0;              /* hide the JS-provided inline text */
+  line-height: 1;
+  display: inline-block;
+}
+.section-header .chev::before {
+  content: '\25BE';          /* ▾ expanded */
+  font-size: 14px;
+  line-height: 1;
+  display: inline-block;
+}
+.section.collapsed > .section-header .chev::before { content: '\25B8'; /* ▸ collapsed */ }
 .section.collapsed .section-body { display: none; }
+/* Keyboard focus ring on section headers (they're role="button" tabindex="0"
+   via wireSectionA11y — see app.js). Uses the outline-offset trick so the ring
+   sits INSIDE the rounded section border without being clipped. */
+.section-header:focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: -2px;
+}
 /* Per-section summary badge (Questionnaire "N selected" / Budget "$ subtotal"):
    shown only when the section is collapsed, so it summarizes what's hidden. */
 .section-collapsed-badge {

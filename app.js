@@ -1160,6 +1160,61 @@ function renderExpandCollapseBar(leftItems, leftStat) {
   return bar;
 }
 
+// ---------- Section-header accessibility (a11y) ----------
+// Every `.section` on every page uses its `<header class="section-header">` as
+// the collapse toggle. This helper — invoked from renderApp after each phase
+// re-render — wires the ARIA + keyboard support so the toggle is fully usable
+// by screen readers and keyboard-only users:
+//   • role="button" + tabindex="0" — header enters the tab order
+//   • aria-expanded — reflects the current .collapsed class, live-updated via
+//     a MutationObserver on the parent .section's class attribute (so bulk
+//     Expand/Collapse-all keeps it in sync, not just header clicks)
+//   • aria-controls — points at the section-body id (auto-generated once)
+//   • Enter / Space fire the existing click handler (toggle)
+// Idempotent — the `data-a11y-wired` flag prevents duplicate listeners /
+// observers across re-wires. Nested interactive elements inside a header
+// (e.g. Questionnaire Select-all / Clear buttons) already stopPropagation, so
+// making the header itself role=button is safe — their clicks aren't hijacked.
+let _sectionA11yIdCounter = 0;
+function wireSectionA11y(root) {
+  if (!root) return;
+  root.querySelectorAll('.section').forEach(sec => {
+    const hdr = sec.querySelector(':scope > .section-header');
+    if (!hdr) return;
+    if (hdr.dataset.a11yWired === '1') {
+      // Already wired — just make sure aria-expanded matches current state
+      // (in case the caller flipped .collapsed after the last wire).
+      hdr.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+      return;
+    }
+    hdr.dataset.a11yWired = '1';
+    hdr.setAttribute('role', 'button');
+    hdr.setAttribute('tabindex', '0');
+    hdr.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+    const body = sec.querySelector(':scope > .section-body');
+    if (body) {
+      if (!body.id) body.id = 'cb-sec-body-' + Date.now().toString(36) + '-' + (++_sectionA11yIdCounter);
+      hdr.setAttribute('aria-controls', body.id);
+    }
+    // Keyboard: Enter / Space toggle by firing the existing click handler.
+    // e.target !== hdr guard so pressing Space inside a nested button (e.g.
+    // Questionnaire Select-all) doesn't also toggle the section.
+    hdr.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.repeat) return;
+      if (e.target !== hdr) return;
+      e.preventDefault();
+      hdr.click();
+    });
+    // Live-sync aria-expanded whenever the parent .section's class flips
+    // (header click, Expand-all / Collapse-all bar, renderApp mass-collapse
+    // on nav, any future toggler). Cheap — one observer per section.
+    new MutationObserver(() => {
+      hdr.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+    }).observe(sec, { attributes: true, attributeFilter: ['class'] });
+  });
+}
+
 // Gather every currently-applicable Basics field (phase1 + phase2) that has no
 // value, skipping non-input fields (info/divider/maps_link/computed) and fields
 // hidden by an unmet show_if. Returns [{section, field, key, required, type}].
@@ -4855,6 +4910,10 @@ function renderFlagSection(title, color, bg, lines, emptyText, startCollapsed) {
 
 function renderPhase4() {
   const root = el('div');
+  // Bulk Expand/Collapse-all bar (matches Phases 1-3) so Finalize behaves like
+  // every other page: navigate in → all sections collapsed → user pops open
+  // whatever they care about.
+  root.appendChild(renderExpandCollapseBar());
 
   // Sanity-check warnings
   const warnings = [];
@@ -5572,12 +5631,14 @@ function renderApp() {
   else if (CURRENT_PHASE === 3) view = renderPhase3();
   else view = renderPhase4();
   main.appendChild(view);
-  // On navigation, start the section-heavy tabs (Basics / Questionnaire / Budget)
-  // fully collapsed by default. Finalize (4) keeps its own per-section collapse
-  // logic (Sanity auto-expands on issues, etc.).
-  if (CURRENT_PHASE <= 3) {
-    main.querySelectorAll('.section').forEach(s => s.classList.add('collapsed'));
-  }
+  // On navigation, EVERY page starts fully collapsed — including Finalize.
+  // (Was previously scoped to Phases 1–3; Elan's spec: all sections collapsed
+  // on every page load, user pops open what they care about. Sanity Check's
+  // former "auto-expand on issues" behavior is intentionally overridden here.)
+  main.querySelectorAll('.section').forEach(s => s.classList.add('collapsed'));
+  // Wire keyboard-focus + aria-expanded/aria-controls on every section header
+  // so the collapse toggle is fully accessible (screen readers, tab-nav).
+  wireSectionA11y(main);
   $$('.tab').forEach(t => t.classList.toggle('active', Number(t.dataset.phase) === CURRENT_PHASE));
   setTimeout(updateBasicsTabCheck, 0);
 }
