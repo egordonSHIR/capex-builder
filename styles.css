@@ -192,6 +192,11 @@ main {
   padding-right: 0;
   border-bottom: none;
 }
+/* Walkway Length / Width (row "walkway_dims"): tiny number inputs — don't let them
+   grow to fill the row, and keep the input box narrow, so both fit compactly on one
+   line (label above a small box). Scoped so City/State/ZIP etc. still fill their row. */
+.field-row[data-row="walkway_dims"] > .field { flex: 0 1 120px; }
+.field-row[data-row="walkway_dims"] > .field input { max-width: 90px; }
 /* In-section sub-group divider (Basics > Building & Site). A stronger line than
    the per-field hairline border, used to split a section into visual groups. */
 .field-divider {

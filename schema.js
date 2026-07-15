@@ -859,7 +859,7 @@ window.SCHEMA = {
       },
       {
         "key": "walkway_length",
-        "label": "Walkway Length",
+        "label": "Length",
         "type": "number",
         "min": 0,
         "hint": "Feet",
@@ -868,7 +868,7 @@ window.SCHEMA = {
       },
       {
         "key": "walkway_width",
-        "label": "Walkway Width",
+        "label": "Width",
         "type": "number",
         "min": 0,
         "hint": "Feet",
