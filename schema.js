@@ -1553,32 +1553,6 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           }
         ]
-      },
-      {
-        "name": "MATERIALS NEEDED",
-        "items": [
-          {
-            "name": "Landscaping",
-            "default_cost_per_item": 150.0,
-            "notes": null,
-            "gl_account": "17940: CIP General Conditions",
-            "default_qty_type": "Sqft"
-          },
-          {
-            "name": "Vendor Key Access",
-            "default_cost_per_item": 150.0,
-            "notes": null,
-            "gl_account": "17501: CIP Vendor Key Access",
-            "default_qty_type": "MF Unit"
-          },
-          {
-            "name": "Security Cameras",
-            "default_cost_per_item": 150.0,
-            "notes": null,
-            "gl_account": "17595: CIP Security Cameras",
-            "default_qty_type": "Building"
-          }
-        ]
       }
     ]
   },
