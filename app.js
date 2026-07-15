@@ -4455,7 +4455,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   }
   syncTypeRelatedUI();
 
-  // Conditional companion fields (e.g. parking suggestion/cost on '# Parking Add - New Cover').
+  // Conditional companion fields (e.g. parking suggestion/cost on '# Parks Added - New Asphalt').
   if (Array.isArray(item.conditional_fields) && item.conditional_fields.length) {
     itemWrap.appendChild(renderItemConditionalFields(gi, si, ii, item, summaryNode));
   }

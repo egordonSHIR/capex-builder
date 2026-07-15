@@ -1757,25 +1757,11 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
-            "name": "# Parking Add - New Cover",
+            "name": "# Parks Added - New Asphalt",
             "default_cost_per_item": 2000.0,
             "notes": null,
             "gl_account": "17535: CIP Parking Lot - Asphalt (15 Yrs)",
-            "default_qty_type": "Each",
-            "conditional_fields": [
-              {
-                "key": "parking_suggestion",
-                "type": "info",
-                "show_if": "qty > 0",
-                "expr": "`Adding ${qty||0} covered spot${(qty||0)==1?'':'s'}${(p1_parking_spots_existing||0) ? ' \u2248 '+Math.round(100*(qty||0)/p1_parking_spots_existing)+'% of the '+(p1_parking_spots_existing||0)+' existing spots' : ''}` + ((qty||0) > 0 && (qty||0) <= 0.05*(p1_parking_spots_existing||0) ? '  \u2014 under 5% of existing; a restripe may be cheaper than new cover.' : '')"
-              },
-              {
-                "key": "parking_cost_info",
-                "type": "info",
-                "show_if": "qty > 0",
-                "expr": "`Est. new-cover cost: $${((qty||0)*300*4).toLocaleString()}  ($4/Sqft \u00d7 300 Sqft/spot)`"
-              }
-            ]
+            "default_qty_type": "Each"
           }
         ]
       }
@@ -1795,14 +1781,14 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
-            "name": "Electric Submeters Materials",
+            "name": "Submeters Materials",
             "default_cost_per_item": 100.0,
             "notes": "owned by Utility Co",
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
             "default_qty_type": "MF Unit"
           },
           {
-            "name": "Electric Submeters Labor",
+            "name": "Submeters Labor",
             "default_cost_per_item": 100.0,
             "notes": "done by Utility Co",
             "gl_account": "17370: CIP Building - Electrical Submetering (15 Yrs)",
@@ -1821,7 +1807,7 @@ window.SCHEMA = {
         "name": "FIRE PROTECTION",
         "items": [
           {
-            "name": "Fire Alarm Control Panel",
+            "name": "Alarm Control Panel",
             "default_cost_per_item": null,
             "notes": null,
             "gl_account": "17366: CIP Building - Fire Protection - Alarm System",
@@ -1842,28 +1828,28 @@ window.SCHEMA = {
             ]
           },
           {
-            "name": "Sprinkler - Riser Room  Setup",
+            "name": "Riser Room Setup",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
             "default_qty_type": "Each"
           },
           {
-            "name": "Sprinkler - Heater",
+            "name": "Riser Room Heater",
             "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
             "default_qty_type": "Each"
           },
           {
-            "name": "Sprinkler - Building Lines",
+            "name": "Sprinkler Lines",
             "default_cost_per_item": 3.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Sprinkler - Fire Assembly",
+            "name": "Fire Ceiling Assembly",
             "default_cost_per_item": 500.0,
             "notes": null,
             "gl_account": "17365: CIP Building - Fire Protection - Sprinklers",
@@ -1999,18 +1985,18 @@ window.SCHEMA = {
         "name": "General",
         "items": [
           {
-            "name": "Materials ImportTax",
-            "default_cost_per_item": 20.0,
-            "notes": null,
-            "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
-            "default_qty_type": "%"
-          },
-          {
             "name": "Interior Demo Labor",
             "default_cost_per_item": 250.0,
             "notes": null,
             "gl_account": "17101: CIP Interior - Renovation Labor",
             "default_qty_type": "Reno Unit"
+          },
+          {
+            "name": "Materials Import Tax",
+            "default_cost_per_item": 20.0,
+            "notes": null,
+            "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
+            "default_qty_type": "%"
           }
         ]
       },
@@ -2370,7 +2356,7 @@ window.SCHEMA = {
             "default_qty_type": "Avg Sqft"
           },
           {
-            "name": "Int. Reno Misc. Materials",
+            "name": "Misc. Materials",
             "default_cost_per_item": 100.0,
             "notes": null,
             "gl_account": "17220: CIP Interior - General Building Materials",
