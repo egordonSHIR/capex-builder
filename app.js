@@ -5163,6 +5163,26 @@ async function buildCapexWorkbook() {
   colHeaderRow.eachCell((c) => { c.alignment = { horizontal: 'center', vertical: 'middle' }; });
   ws.views = [{ state: 'frozen', ySplit: colHeaderRow.number }];
 
+  // Collapse the header/summary block (rows 2–13: Property/Address/# Units/Year
+  // Built, the Total Capex / Mgmt Fee / Contingency / Commercial summary, the
+  // Copy/Paste banner, and the MULTIFAMILY SUBTOTAL) into a COLLAPSED outline
+  // group by default, so the export opens compact — just the title (row 1) + the
+  // frozen column header (row 14) + the line items. Expand via the + in the row
+  // gutter. The freeze stays at row 14 (colHeaderRow) so the column headers pin
+  // while scrolling the items; the collapsed rows above just take no height.
+  // (outlineProperties.summaryBelow is true → the +/- control sits on row 14.)
+  for (let n = 2; n < colHeaderRow.number; n++) {   // rows 2..13
+    const r = ws.getRow(n);
+    r.outlineLevel = 1;
+    r.hidden = true;
+    // The empty spacer rows (6, 13) have no cells, so ExcelJS would omit their
+    // <row> element on write and drop the hidden/outline attrs — splitting the
+    // group and leaving stray blank rows. A thin explicit height forces the row
+    // to be emitted so it stays inside the collapsed band.
+    if (!r.hasValues) r.height = 8;
+  }
+  colHeaderRow.collapsed = true;
+
   // Emit EVERY line item (full default list) so the export mirrors the proforma
   // CAPEX tab in its entirety. Items that were NOT worked on in the app (turned
   // OFF via the Budget row's Skip checkbox) are rendered with a light-gray
