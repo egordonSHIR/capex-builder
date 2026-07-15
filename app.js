@@ -3550,7 +3550,7 @@ function lightenHex(hex, blend) {
   return '#' + mix(r) + mix(g) + mix(b);
 }
 // Build a colored group <header> for the CAPEX group sections.
-function groupHeader(groupName, badgeNode, skipNode) {
+function groupHeader(groupName, badgeNode, skipNode, hideNode) {
   const color = GROUP_COLORS[groupName];
   const txt = color ? textOn(color) : null;
   const headerAttrs = {
@@ -3558,10 +3558,13 @@ function groupHeader(groupName, badgeNode, skipNode) {
     onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed'),
   };
   if (color) headerAttrs.style = `background:${color};color:${txt};border-bottom-color:rgba(0,0,0,0.12)`;
+  // Skip toggle sits on the LEFT (before the group name); the hide/show-skipped
+  // button + badge + chevron stay on the right.
   return el('header', headerAttrs,
-    el('span', { style: 'font-size:15px;font-weight:700;flex:1' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
-    badgeNode || false,
     skipNode || false,
+    el('span', { style: 'font-size:15px;font-weight:700;flex:1' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
+    hideNode || false,
+    badgeNode || false,
     el('span', { class: 'chev', style: txt ? `color:${txt}` : '' }, '▼')
   );
 }
@@ -4149,9 +4152,10 @@ function renderPhase3() {
       const secNode = el('section', { class: 'section' },
         el('header', { class: 'section-header', style: secHeaderStyle,
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
-          el('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, sec.name),
-          el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si }, fmtMoney(secSum)),
           renderSkipHeaderToggle(gi, si, summary, subHeaderTxt),
+          el('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, sec.name),
+          renderHideSkippedToggle(secBody, subHeaderTxt),
+          el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si }, fmtMoney(secSum)),
           el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
         secBody
@@ -4159,8 +4163,10 @@ function renderPhase3() {
       groupBody.appendChild(secNode);
     });
     const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
-    const groupSkip = renderSkipHeaderToggle(gi, null, summary, (GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null));
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip));
+    const groupTxt = GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null;
+    const groupSkip = renderSkipHeaderToggle(gi, null, summary, groupTxt);
+    const groupHide = renderHideSkippedToggle(groupBody, groupTxt);
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip, groupHide));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
@@ -4185,10 +4191,13 @@ function renderOptionsCell(gi, si, ii, item, onChange) {
   const v = getP3(gi, si, ii);
   const opts = Array.isArray(item.options) ? item.options : [];
   if (!opts.length && !v.finish) {
+    // Items with no finish options show a gray box with an italic white "n/a"
+    // marker (medium gray so the white reads). Uses currentColor-independent
+    // fixed colors since this cell has no header context.
     return el('div', {
-      style: 'min-height:22px;background:#e5e7eb;border-radius:4px',
-      title: 'No finish options defined for this item',
-    });
+      style: 'min-height:22px;display:flex;align-items:center;justify-content:center;background:#9ca3af;border-radius:4px',
+      title: 'No finish options for this item',
+    }, el('span', { style: 'color:#fff;font-style:italic;font-size:11px;line-height:1' }, 'n/a'));
   }
   const sel = el('select', {
     style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box',
@@ -4314,6 +4323,26 @@ function refreshSkipToggles() {
     const st = groupSkipState(Number(cb.dataset.skipGroup));
     cb.checked = st === 'all'; cb.indeterminate = st === 'some';
   });
+}
+// A "Hide N/A" / "Show N/A" toggle button for a section or group header. Toggles
+// the `hide-skipped` class on the given body element, which (via CSS) collapses
+// every row marked N/A (skipped / excluded) under it. View-only + ephemeral
+// (resets on re-render) — it never touches STATE.excluded.
+function renderHideSkippedToggle(bodyEl, txtColor) {
+  const LABEL_HIDE = '🙈 Hide N/A';
+  const LABEL_SHOW = '👁 Show N/A';
+  const btn = el('button', {
+    type: 'button',
+    class: 'hide-skipped-btn',
+    title: 'Hide or show the line items marked N/A (skipped) here',
+    style: txtColor ? `color:${txtColor};border-color:${txtColor}` : '',
+    onClick: (e) => {
+      e.stopPropagation();
+      const hidden = bodyEl.classList.toggle('hide-skipped');
+      btn.textContent = hidden ? LABEL_SHOW : LABEL_HIDE;
+    },
+  }, LABEL_HIDE);
+  return btn;
 }
 // A "Skip" label+checkbox for a section (si set) or group (si == null) header.
 function renderSkipHeaderToggle(gi, si, summaryNode, txtColor) {

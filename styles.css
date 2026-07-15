@@ -682,10 +682,22 @@ main {
 .detail-item-wrap.row-excluded { background: #eef1f5 !important; }
 .detail-item-wrap.row-excluded > *:not(.budget-toggle-cell) { opacity: .5; }
 /* "Skip" group-action toggle on section + group headers (renderSkipHeaderToggle):
-   a compact label+checkbox that bulk-skips every item under that header. Sits just
-   before the ▼ chevron; clicking it does NOT collapse the header (stopPropagation). */
-.section-header .skip-toggle { margin-left: 8px; }
+   a compact label+checkbox that bulk-skips every item under that header. Sits on
+   the LEFT, before the header name; clicking it does NOT collapse the header
+   (stopPropagation). */
+.section-header .skip-toggle { margin-left: 0; margin-right: 10px; }
 .section-header .skip-toggle .skip-toggle-cb { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+/* "Hide N/A" / "Show N/A" toggle button (renderHideSkippedToggle): sits on the
+   right of the header, before the collapsed-badge + chevron. When its target
+   body carries .hide-skipped, every skipped (N/A) row under it is hidden. */
+.section-header .hide-skipped-btn {
+  font-size: 10px; font-weight: 600; text-transform: none; letter-spacing: 0;
+  padding: 2px 8px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+  background: rgba(255, 255, 255, 0.28); color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.5); margin-left: 8px; flex-shrink: 0;
+}
+.section-header .hide-skipped-btn:hover { background: rgba(255, 255, 255, 0.45); }
+.hide-skipped .detail-item-wrap.row-excluded { display: none !important; }
 
 /* Colored CAPEX group sections (Questionnaire + Details) */
 .group-section > .group-header { letter-spacing: 0.5px; }

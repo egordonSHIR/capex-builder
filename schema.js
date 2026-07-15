@@ -2980,7 +2980,7 @@ window.SCHEMA = {
         "name": "CLUBHOUSE",
         "items": [
           {
-            "name": "Clubhouse Demo",
+            "name": "Demolition",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17635: CIP Leasing Center Build Out",
@@ -3015,31 +3015,24 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
-            "name": "Clubhouse Drywall",
+            "name": "Drywall",
             "default_cost_per_item": 15000.0,
             "notes": "Materials & Labor",
             "gl_account": "17635: CIP Leasing Center Build Out",
             "default_qty_type": "Each"
           },
           {
-            "name": "Clubhouse Finishes",
+            "name": "Finishes",
             "default_cost_per_item": 25000.0,
             "notes": "Materials & Labor",
             "gl_account": "17635: CIP Leasing Center Build Out",
             "default_qty_type": "Each"
           },
           {
-            "name": "Clubhouse FF&E",
+            "name": "FF&E",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17805: CIP Common Area FF&E",
-            "default_qty_type": "Each"
-          },
-          {
-            "name": "Clubhouse Sound System",
-            "default_cost_per_item": 10000.0,
-            "notes": null,
-            "gl_account": "17645: CIP Clubhouse - Sound System (5 Yrs)",
             "default_qty_type": "Each"
           },
           {
