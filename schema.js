@@ -858,6 +858,12 @@ window.SCHEMA = {
         "hint": "Enter 0 if none"
       },
       {
+        "key": "stairways",
+        "type": "number",
+        "label": "# Stairways",
+        "hint": "Enter 0 if none"
+      },
+      {
         "key": "new_railing_lf",
         "label": "# Railings",
         "type": "number",
@@ -970,6 +976,12 @@ window.SCHEMA = {
         "key": "atrium_interior",
         "type": "number",
         "label": "Interior Atrium Sqft",
+        "hint": "Enter 0 if none"
+      },
+      {
+        "key": "stairwells",
+        "type": "number",
+        "label": "# Stairwells",
         "hint": "Enter 0 if none"
       }
     ]
