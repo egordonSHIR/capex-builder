@@ -4017,16 +4017,16 @@ function renderItemConditionalFields(gi, si, ii, item, summaryNode) {
 // | $/Qty | $ Amt | 📷. Options is the Finish picker — dropdown if the item has any
 // options defined in the schema; gray-disabled cell otherwise. (The old =MF
 // checkbox column was removed 2026-07-07 — use the "MF Unit" Qty Type instead.)
-// The trailing 30px column is the per-item photo capture button (field photos →
-// IndexedDB queue → Drive 25. Capex/Photos, see the "Line-item photos" section).
-// Used by both the sticky column header and each line-item row so columns line up.
-const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px 30px';
+// The trailing 52px column holds the per-item row-actions: a 📝 note button and
+// a 📷 photo button (see renderRowActionsCell). Used by both the sticky column
+// header and each line-item row so columns line up.
+const DETAIL_GRID_COLS = 'minmax(0,1fr) 86px 64px 78px 72px 84px 52px';
 const DETAIL_GRID_BASE = `display:grid;grid-template-columns:${DETAIL_GRID_COLS};align-items:center;gap:6px;padding:6px 10px`;
 // Interior group: 10 cols. Status-% inputs (Orig./Part./Reno.) replace the =MF
 // checkbox; # Qty is computed from %s × Unit Mix status totals. Options sits
 // between the status-% block and # Qty so it lines up roughly with the
-// non-Interior Options column. Trailing 30px col = photo button.
-const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px 30px';
+// non-Interior Options column. Trailing 52px col = note + photo buttons.
+const DETAIL_GRID_COLS_INTERIOR = 'minmax(0,1fr) 28px 28px 28px 78px 48px 76px 58px 72px 52px';
 const DETAIL_GRID_BASE_INTERIOR = `display:grid;grid-template-columns:${DETAIL_GRID_COLS_INTERIOR};align-items:center;gap:4px;padding:6px 8px`;
 
 // Status-totals + column header row rendered inside the Interior group (above
@@ -4057,7 +4057,7 @@ function renderInteriorStatusHeader() {
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
     el('div', { style: 'text-align:right' }, '$ Amt'),
-    el('div', { style: 'text-align:center' }, '📷'),
+    el('div', { style: 'text-align:center' }, '📝 📷'),
   );
 }
 
@@ -4135,7 +4135,7 @@ function renderPhase3() {
     el('div', {}, 'Qty Type'),
     el('div', { style: 'text-align:right' }, '$/Qty'),
     el('div', { style: 'text-align:right' }, '$ Amt'),
-    el('div', { style: 'text-align:center' }, '📷'),
+    el('div', { style: 'text-align:center' }, '📝 📷'),
   );
   sticky.appendChild(colHdr);
   root.appendChild(sticky);
@@ -4380,7 +4380,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // Col 7: 📷 field photos for this line item (must come BEFORE the % sub-row —
   // the sub-row spans grid-column:1/-1, so anything appended after it drops to
   // its own grid row).
-  itemWrap.appendChild(renderPhotoCell(gi, si, ii, item));
+  itemWrap.appendChild(renderRowActionsCell(gi, si, ii, item));
 
   // --- Sub-row: only visible when unit_type === '%' ---
   // Lets the user pick which CAPEX Group this percentage applies to. Spans all
@@ -4604,7 +4604,7 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   }, fmtMoney(total)));
 
   // Col 10: 📷 field photos for this line item.
-  itemWrap.appendChild(renderPhotoCell(gi, si, ii, item));
+  itemWrap.appendChild(renderRowActionsCell(gi, si, ii, item));
 
   return itemWrap;
 }
@@ -7122,7 +7122,16 @@ async function enqueueCapturedPhoto(target, file) {
 }
 
 // ---- row cell + badge ----
-function renderPhotoCell(gi, si, ii, item) {
+// Trailing per-row cell holding the 📝 note button + 📷 photo button. .photo-cell
+// keeps the ≤560px media query that pulls this out of the grid and pins it to
+// the row's right edge (the fixed grid columns exceed narrow phones).
+function renderRowActionsCell(gi, si, ii, item) {
+  return el('div', { class: 'photo-cell row-actions', style: 'display:flex;align-items:center;justify-content:center;gap:3px' },
+    renderNoteButton(gi, si, ii, item),
+    renderPhotoButton(gi, si, ii, item),
+  );
+}
+function renderPhotoButton(gi, si, ii, item) {
   const k = ckKey(gi, si, ii);
   const btn = el('button', {
     type: 'button', class: 'photo-btn', 'data-photo-btn': k,
@@ -7149,10 +7158,59 @@ function renderPhotoCell(gi, si, ii, item) {
     handlePhotoDrop(target, e.dataTransfer);
   });
   decoratePhotoBtn(btn, getP3(gi, si, ii).photos || []);
-  // .photo-cell lets the ≤560px media query pull this out of the grid and pin
-  // it to the row's right edge (the fixed grid columns exceed narrow phones,
-  // which would otherwise clip the camera — the one control the field needs).
-  return el('div', { class: 'photo-cell', style: 'text-align:center' }, btn);
+  return btn;
+}
+
+// ---- per-line-item note (📝) ----
+// A short free-text note per Budget line item. Stored on phase3[k].notes (the
+// SAME field the Excel export / proforma paste already read as the Notes
+// column), so saving syncs to the deal's capex_builder.json on Drive via
+// setP3→saveState→auto-push, and the note ships in every export.
+function renderNoteButton(gi, si, ii, item) {
+  const k = ckKey(gi, si, ii);
+  const btn = el('button', { type: 'button', class: 'note-btn', 'data-note-btn': k }, '📝');
+  btn.addEventListener('click', (e) => { e.stopPropagation(); openNotePanel(gi, si, ii, item); });
+  decorateNoteBtn(btn, getP3(gi, si, ii).notes);
+  return btn;
+}
+function decorateNoteBtn(btn, notes) {
+  const has = !!String(notes || '').trim();
+  btn.classList.toggle('has-note', has);
+  btn.title = has ? 'Edit this item’s note (saved with the deal, shows in the Excel export)'
+                  : 'Add a note for this item (saved with the deal, shows in the Excel export)';
+}
+function refreshNoteBtn(k) {
+  const btn = document.querySelector(`[data-note-btn="${CSS.escape(k)}"]`);
+  if (!btn) return;
+  const [gi, si, ii] = k.split('.').map(Number);
+  decorateNoteBtn(btn, getP3(gi, si, ii).notes);
+}
+function closeNotePanel() {
+  const o = $('#note-overlay');
+  if (o) o.remove();
+}
+function openNotePanel(gi, si, ii, item) {
+  closeNotePanel();
+  const k = ckKey(gi, si, ii);
+  const ta = el('textarea', { class: 'note-textarea', rows: '5', placeholder: 'Type a note for this line item…' });
+  ta.value = getP3(gi, si, ii).notes || '';
+  // Save live — setP3 persists to localStorage + schedules the Drive push, so the
+  // note lands in capex_builder.json without an explicit Save press.
+  ta.addEventListener('input', () => { setP3(gi, si, ii, { notes: ta.value }); refreshNoteBtn(k); });
+  const doneBtn = el('button', { type: 'button', class: 'um-btn', style: 'font-weight:600' }, 'Done');
+  doneBtn.addEventListener('click', closeNotePanel);
+  const panel = el('div', { class: 'note-panel' },
+    el('div', { class: 'note-panel-head' },
+      el('div', { style: 'font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, item.name),
+      el('div', { style: 'font-size:11px;color:#64748b' }, 'Note — saved with the deal · appears in the Excel export'),
+    ),
+    ta,
+    el('div', { class: 'note-panel-foot' }, doneBtn),
+  );
+  const overlay = el('div', { id: 'note-overlay', class: 'note-overlay' }, panel);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeNotePanel(); });
+  document.body.appendChild(overlay);
+  setTimeout(() => { try { ta.focus(); } catch {} }, 40);
 }
 function decoratePhotoBtn(btn, photos) {
   btn.querySelectorAll('.photo-badge,.photo-pending-dot').forEach(n => n.remove());
@@ -7863,6 +7921,7 @@ THE FOUR TABS
 2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
+- NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
