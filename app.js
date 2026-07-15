@@ -856,6 +856,13 @@ function refreshSection(sec, body, bag) {
     const show = !!computeField(grp.getAttribute('data-show-if'), eb);
     grp.style.display = show ? '' : 'none';
   });
+  // Row-group containers (fields sharing a `row` tag): collapse the whole row when
+  // every field in it is hidden, so a conditional row-group (e.g. walkway
+  // Length/Width when # Walkways is 0) leaves no empty bordered strip behind.
+  body.querySelectorAll('.field-row').forEach(row => {
+    const fields = [...row.querySelectorAll(':scope > .field')];
+    row.style.display = (fields.length && fields.every(f => f.style.display === 'none')) ? 'none' : '';
+  });
 
   // Section status mark in the header (left of the chevron): green ✓ when complete,
   // red ✗ when not.
@@ -1049,12 +1056,16 @@ function renderSchemaForm(sections, bag, onUpdate) {
 
       // Group consecutive same-show_if fields into an indented expansion-group container,
       // but ONLY when 2+ fields share the same show_if (single-field conditionals do not need a toggle).
+      // EXCEPTION: fields that are ALSO row-grouped (field.row) already share one visual
+      // .field-row, so the expansion-group toggle + indentation is redundant clutter — they
+      // render inline in a compact row directly under their trigger field (e.g. walkway
+      // Length/Width under "# Walkways"). See the walkway_dims CSS in styles.css.
       if (f.show_if) {
         // Look back + ahead: is this field part of a multi-field run with the same expression?
         const fi = sec.fields.indexOf(f);
         const prev = sec.fields[fi - 1];
         const next = sec.fields[fi + 1];
-        const isPartOfMulti = (prev && prev.show_if === f.show_if) || (next && next.show_if === f.show_if);
+        const isPartOfMulti = !f.row && ((prev && prev.show_if === f.show_if) || (next && next.show_if === f.show_if));
         if (isPartOfMulti) {
           if (activeExpExpr !== f.show_if) {
             const groupKey = sec.section + '::' + f.show_if;
@@ -3526,7 +3537,7 @@ function setExcluded(gi, si, ii, val) {
 // three neutral variations — see BASICS_SECTION_COLORS.
 const GROUP_COLORS = {
   'Soft Costs': '#417B85',
-  'Base Work': '#78697B',
+  'Ground Work': '#78697B',
   'Building Work': '#B2BCCB',
   'Interior': '#A64D79',
   'Exterior': '#3477B2',
@@ -3588,7 +3599,8 @@ const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allow
   // # Qty (read-only) from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
   'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Walkway Sqft', 'Railing Lin-ft', 'Railing Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
   '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
-  '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)'];
+  '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)',
+  '# Walkways', '# Stairways', '# Stairwells'];
 // Interior "sizing" Qty Types: when an Interior row uses one of these, its
 // auto-computed # Qty (units being renovated) is multiplied by the matching
 // property-wide average from the Unit Mix. See avgSizingForUnitType().
@@ -3616,6 +3628,9 @@ const BASICS_QTY_TYPE_FIELDS = {
   '# Dog Park(s)': 'dog_parks',
   '# Laundry Facility(ies)': 'laundry_facilities',
   '# Indoor Pool(s)': 'indoor_pools',
+  '# Walkways': 'walkways',
+  '# Stairways': 'stairways',
+  '# Stairwells': 'stairwells',
   // Railing linear feet = the "# Railings" Basics field (stores LF).
   'Railing Lin-ft': 'new_railing_lf',
 };
@@ -8076,7 +8091,7 @@ HOME SCREEN
 
 THE THREE TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
-2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. Each row is active and editable by default; price the ones the deal needs and, for the ones that don't apply, check the far-left "Skip" box — that grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
+2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. Each row is active and editable by default; price the ones the deal needs and, for the ones that don't apply, check the far-left "Skip" box — that grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 - NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
 3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.

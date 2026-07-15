@@ -1557,7 +1557,7 @@ window.SCHEMA = {
     ]
   },
   {
-    "name": "Base Work",
+    "name": "Ground Work",
     "sections": [
       {
         "name": "SITE WORK",
@@ -2374,20 +2374,6 @@ window.SCHEMA = {
         "name": "PER UNIT INTERIOR",
         "items": [
           {
-            "name": "Yard - New",
-            "default_cost_per_item": 2000.0,
-            "notes": null,
-            "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
-            "default_qty_type": "Reno Unit"
-          },
-          {
-            "name": "Balcony/Deck",
-            "default_cost_per_item": 500.0,
-            "notes": null,
-            "gl_account": "17600 - CIP Deck Renovations (7 Yrs)",
-            "default_qty_type": "Reno Unit"
-          },
-          {
             "name": "W/D Hookup",
             "default_cost_per_item": 1000.0,
             "notes": null,
@@ -2485,7 +2471,7 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
-            "name": "Pilon Sign (Face)",
+            "name": "Pole Sign (Face)",
             "default_cost_per_item": 10000.0,
             "notes": null,
             "gl_account": "17560: CIP Signage (5 Yrs)",
@@ -2565,6 +2551,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17435: CIP Fence/Gate (15 Yrs)",
             "default_qty_type": "Each"
+          },
+          {
+            "name": "Balcony/Deck",
+            "default_cost_per_item": 500.0,
+            "notes": null,
+            "gl_account": "17600 - CIP Deck Renovations (7 Yrs)",
+            "default_qty_type": "Reno Unit"
           }
         ]
       },
@@ -2679,6 +2672,13 @@ window.SCHEMA = {
           },
           {
             "name": "Welder",
+            "default_cost_per_item": 1.0,
+            "notes": null,
+            "gl_account": "17335: CIP Exterior Walkways",
+            "default_qty_type": "Walkway Sqft"
+          },
+          {
+            "name": "Carpentry (Repair)",
             "default_cost_per_item": 1.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
