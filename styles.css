@@ -843,6 +843,15 @@ main {
 }
 .photo-btn.has-photos { opacity: 1; }
 .photo-btn:active { transform: translateY(1px); }
+/* Desktop drag-and-drop target feedback: dragging image files over the icon
+   highlights it with a dashed ring so it's clearly a drop zone. */
+.photo-btn.drag-over {
+  opacity: 1;
+  outline: 2px dashed var(--primary-light);
+  outline-offset: 2px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, .12);
+}
 .photo-badge {
   position: absolute; top: -4px; right: -6px;
   background: var(--primary); color: #fff;

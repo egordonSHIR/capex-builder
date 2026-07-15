@@ -7034,6 +7034,28 @@ function capturePhotoForItem(gi, si, ii, item) {
   PHOTO_TARGET = { gi, si, ii, item };
   ensurePhotoInput().click();
 }
+// Desktop drag-and-drop: files dropped on a row's 📷 button run through the
+// SAME enqueue pipeline as camera capture (offline queue → per-item subfolder →
+// "<Property> - capex - <Item> - <N>" naming). Enqueued one at a time (await)
+// so each read of the row's photo count sees the prior one and `num` increments
+// instead of racing to a duplicate.
+async function handlePhotoDrop(target, dataTransfer) {
+  if (!STATE || !STATE.drive.folderId) {
+    toast('Link this property’s Drive deal folder first (☰ menu) — photos save into it', 'error');
+    return;
+  }
+  const files = Array.from((dataTransfer && dataTransfer.files) || [])
+    .filter(f => f && (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(f.name || '')));
+  if (!files.length) {
+    toast('Drop an image file onto the 📷 (from your computer)', 'error');
+    return;
+  }
+  for (const f of files) {
+    try { await enqueueCapturedPhoto(target, f); }
+    catch (e) { console.warn('photo drop enqueue failed', e); toast('Could not save a photo: ' + e.message, 'error'); }
+  }
+  if (files.length > 1) toast(`📷 ${files.length} photos saved — uploading in background`, 'success');
+}
 function photoSanitize(s) {
   return String(s || '').replace(/[\\/:*?"<>|#]+/g, '-').replace(/\s+/g, ' ').trim();
 }
@@ -7101,13 +7123,27 @@ function renderPhotoCell(gi, si, ii, item) {
   const k = ckKey(gi, si, ii);
   const btn = el('button', {
     type: 'button', class: 'photo-btn', 'data-photo-btn': k,
-    title: 'Take a photo of this item (saved to the deal’s 25. Capex/Photos/<item> folder)',
+    title: 'Take/view photos of this item — or drag image files here (saved to the deal’s 25. Capex/Photos/<item> folder)',
   }, '📷');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     const photos = getP3(gi, si, ii).photos || [];
     if (photos.length) openPhotoPanel(gi, si, ii, item);
     else capturePhotoForItem(gi, si, ii, item);
+  });
+  // Desktop drag-and-drop of image files onto the icon → same pipeline as capture.
+  const target = { gi, si, ii, item };
+  btn.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer) return;
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    btn.classList.add('drag-over');
+  });
+  btn.addEventListener('dragleave', (e) => { e.stopPropagation(); btn.classList.remove('drag-over'); });
+  btn.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    btn.classList.remove('drag-over');
+    handlePhotoDrop(target, e.dataTransfer);
   });
   decoratePhotoBtn(btn, getP3(gi, si, ii).photos || []);
   // .photo-cell lets the ≤560px media query pull this out of the grid and pin
@@ -7791,7 +7827,7 @@ THE FOUR TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
 2. TO-DO (formerly "Questionnaire") — the capex scope checklist, grouped by trade (Soft Costs, Base Work, Building Work, Interior, Exterior, Amenities). Tick what the deal needs; use per-section "✓ All" / "✗ None". What you check becomes the items you price on Budget.
 3. BUDGET $ — price each checked item on one row: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
-- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. Each line item that gets photos has its own subfolder under "25. Capex/Photos" (named after the item), and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
+- PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Each line item that gets photos has its own subfolder under "25. Capex/Photos" (named after the item), and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 4. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one checked item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
 
 SAVING & SYNC
