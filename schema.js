@@ -2674,28 +2674,28 @@ window.SCHEMA = {
             "default_cost_per_item": 25.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "New - Labor",
             "default_cost_per_item": 25.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "Concrete Finish Coat",
             "default_cost_per_item": 10.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Walkway Sqft"
           },
           {
             "name": "Welder",
             "default_cost_per_item": 5.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
-            "default_qty_type": "Sqft"
+            "default_qty_type": "Walkway Sqft"
           }
         ]
       },

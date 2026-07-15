@@ -3579,7 +3579,7 @@ function groupHeader(groupName, badgeNode) {
 const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs',
   // Basics-linked Qty Types (2026-07-07): picking one auto-fills a Budget row's
   // # Qty (read-only) from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
-  'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
+  'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Walkway Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
   '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
   '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)'];
 // Interior "sizing" Qty Types: when an Interior row uses one of these, its
@@ -3610,16 +3610,56 @@ const BASICS_QTY_TYPE_FIELDS = {
   '# Laundry Facility(ies)': 'laundry_facilities',
   '# Indoor Pool(s)': 'indoor_pools',
 };
-// Property value backing a Basics-linked Qty Type, or null if `ut` isn't one.
-// Reads phase1 then phase2 (keys are unique across the two); blank/non-numeric -> 0.
-function basicsQtyValue(ut) {
-  const key = BASICS_QTY_TYPE_FIELDS[ut];
-  if (!key) return null;
+// Basics-linked Qty Types whose # Qty is a PRODUCT of several Basics fields
+// (computed, read-only) rather than a single field. e.g. "Walkway Sqft" =
+// Walkway Length × Walkway Width × # Walkways (all on Basics → Exteriors). Any
+// factor blank/non-numeric collapses the product to 0. Keep the type name in
+// UNIT_TYPES + the workbook LISTS in sync, same as BASICS_QTY_TYPE_FIELDS.
+const BASICS_QTY_TYPE_COMPUTED = {
+  'Walkway Sqft': ['walkway_length', 'walkway_width', 'walkways'],
+};
+// Read a single Basics/Physical field value (phase1 then phase2); blank -> null.
+function basicsFieldNum(key) {
   const p1 = STATE.phase1 || {}, p2 = STATE.phase2 || {};
   const raw = (p1[key] !== undefined && p1[key] !== '') ? p1[key]
             : (p2[key] !== undefined ? p2[key] : '');
+  if (raw === '' || raw === null || raw === undefined) return null;
   const n = Number(raw);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
+}
+// Property value backing a Basics-linked Qty Type, or null if `ut` isn't one.
+// Single-field types read that field; computed types multiply their factor
+// fields (any blank/non-numeric factor -> 0). Blank/non-numeric single -> 0.
+function basicsQtyValue(ut) {
+  const factors = BASICS_QTY_TYPE_COMPUTED[ut];
+  if (factors) {
+    let prod = 1;
+    for (const k of factors) {
+      const n = basicsFieldNum(k);
+      if (n == null) return 0;   // a missing factor -> 0 sqft (not a bogus product)
+      prod *= n;
+    }
+    return prod;
+  }
+  const key = BASICS_QTY_TYPE_FIELDS[ut];
+  if (!key) return null;
+  const n = basicsFieldNum(key);
+  return n == null ? 0 : n;
+}
+// Human-readable tooltip for a Basics-linked Qty Type's auto-filled # Qty.
+// Computed types show their factor fields joined by × (e.g. "Walkway Length ×
+// Walkway Width × # Walkways"); single-field types name the source field.
+function basicsQtyTooltip(ut) {
+  const labelOf = (k) => {
+    for (const ph of ['phase1', 'phase2'])
+      for (const sec of (SCHEMA[ph] || []))
+        for (const f of (sec.fields || []))
+          if (f.key === k) return f.label || k;
+    return k;
+  };
+  const factors = BASICS_QTY_TYPE_COMPUTED[ut];
+  if (factors) return `Auto-computed from Basics: ${factors.map(labelOf).join(' × ')}`;
+  return `Auto-filled from Basics → ${ut}`;
 }
 // Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,
 // inserting a disabled "----------" separator between the base types and the
@@ -3630,7 +3670,7 @@ function fillQtyTypeOptions(sel, effectiveUT) {
   sel.appendChild(el('option', { value: '' }, '—'));
   let sepDone = false;
   UNIT_TYPES.forEach(u => {
-    if (!sepDone && u !== 'MF Unit' && BASICS_QTY_TYPE_FIELDS[u]) {
+    if (!sepDone && u !== 'MF Unit' && (BASICS_QTY_TYPE_FIELDS[u] || BASICS_QTY_TYPE_COMPUTED[u])) {
       sel.appendChild(el('option', { value: '', disabled: true }, '----------'));
       sepDone = true;
     }
@@ -4368,22 +4408,27 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   // and display the auto-computed $/Qty value for % rows.
   function syncTypeRelatedUI() {
     const cur = getP3(gi, si, ii);
+    // Effective type = user's saved pick, else the item's schema default (matches
+    // the dropdown + the initial force-fill). Keying off the saved-only value
+    // would leave DEFAULT-driven Basics-linked types (an item that defaults to
+    // "Walkway Sqft" / "MF Unit") auto-filled but not locked read-only.
+    const effUT = cur.unit_type || item.default_qty_type || '';
     // # Qty: Basics-linked Qty Types auto-fill (read-only) from the property value.
-    const bv = basicsQtyValue(cur.unit_type);
+    const bv = basicsQtyValue(effUT);
     if (bv != null) {
       if ((Number(cur.qty) || 0) !== bv) setP3(gi, si, ii, { qty: bv });
       setNumVal(qtyInp, bv || '');
       qtyInp.readOnly = true;
       qtyInp.style.background = '#f1f5f9';
       qtyInp.title = bv
-        ? `Auto-filled from Basics → ${cur.unit_type}`
-        : `Auto-filled from Basics → ${cur.unit_type} (not set — enter it on the Basics tab)`;
+        ? basicsQtyTooltip(effUT)
+        : basicsQtyTooltip(effUT) + ' (not set — enter the value(s) on the Basics tab)';
     } else {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
       qtyInp.title = '';
     }
-    if (cur.unit_type === '%') {
+    if (effUT === '%') {
       subRow.style.display = 'flex';
       const grpTotal = getCapexGroupTotal(cur.pct_group_id);
       setNumVal(costInp, grpTotal ? Number((grpTotal / 100).toFixed(2)) : '');
