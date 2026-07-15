@@ -1353,6 +1353,10 @@ window.SCHEMA = {
             "options": [
               {
                 "finish": "All Existing+New",
+                "default_cost": 50000.0
+              },
+              {
+                "finish": "Redraw Existing",
                 "default_cost": 25000.0
               },
               {
