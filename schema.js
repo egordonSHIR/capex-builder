@@ -2658,14 +2658,14 @@ window.SCHEMA = {
         "name": "WALKWAYS",
         "items": [
           {
-            "name": "New Framing - Materials",
+            "name": "New - Materials",
             "default_cost_per_item": 25.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Sqft"
           },
           {
-            "name": "New Framing - Labor",
+            "name": "New - Labor",
             "default_cost_per_item": 25.0,
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
@@ -2684,13 +2684,6 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17335: CIP Exterior Walkways",
             "default_qty_type": "Sqft"
-          },
-          {
-            "name": "Walkway Extension",
-            "default_cost_per_item": 15.0,
-            "notes": null,
-            "gl_account": "17335: CIP Exterior Walkways",
-            "default_qty_type": "Sqft"
           }
         ]
       },
@@ -2698,7 +2691,7 @@ window.SCHEMA = {
         "name": "SIDING",
         "items": [
           {
-            "name": "Siding - Sandblasting",
+            "name": "Sandblasting",
             "default_cost_per_item": 2.5,
             "notes": "Materials & Install",
             "gl_account": "17415: CIP Siding",
@@ -2712,7 +2705,7 @@ window.SCHEMA = {
             "default_qty_type": "Sqft"
           },
           {
-            "name": "Siding Materials",
+            "name": "New Siding Materials",
             "default_cost_per_item": 10.0,
             "notes": "Materials & Install (w/ Paint)",
             "gl_account": "17420: CIP Siding (Vinyl) (5 Yrs)",
