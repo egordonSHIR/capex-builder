@@ -3550,7 +3550,7 @@ function lightenHex(hex, blend) {
   return '#' + mix(r) + mix(g) + mix(b);
 }
 // Build a colored group <header> for the CAPEX group sections.
-function groupHeader(groupName, badgeNode) {
+function groupHeader(groupName, badgeNode, skipNode) {
   const color = GROUP_COLORS[groupName];
   const txt = color ? textOn(color) : null;
   const headerAttrs = {
@@ -3561,6 +3561,7 @@ function groupHeader(groupName, badgeNode) {
   return el('header', headerAttrs,
     el('span', { style: 'font-size:15px;font-weight:700;flex:1' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
     badgeNode || false,
+    skipNode || false,
     el('span', { class: 'chev', style: txt ? `color:${txt}` : '' }, '▼')
   );
 }
@@ -4150,6 +4151,7 @@ function renderPhase3() {
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           el('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, sec.name),
           el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si }, fmtMoney(secSum)),
+          renderSkipHeaderToggle(gi, si, summary, subHeaderTxt),
           el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
         secBody
@@ -4157,7 +4159,8 @@ function renderPhase3() {
       groupBody.appendChild(secNode);
     });
     const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge));
+    const groupSkip = renderSkipHeaderToggle(gi, null, summary, (GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null));
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
@@ -4232,6 +4235,7 @@ function renderExcludeToggleCell(gi, si, ii, itemWrap, summaryNode) {
     setExcluded(gi, si, ii, cb.checked);
     applyRowExcludedState(itemWrap);
     recomputePctRowsAndSummary(summaryNode);
+    refreshSkipToggles();   // keep the section/group Skip boxes in sync
   });
   return el('div', { class: 'budget-toggle-cell', style: 'display:flex;align-items:center;justify-content:center' }, cb);
 }
@@ -4251,6 +4255,87 @@ function applyRowExcludedState(itemWrap) {
     c.disabled = excluded;
   });
   renderDetailTotals(itemWrap, gi, si, ii);
+}
+
+// ---- Section / group "Skip" group-action toggles ----
+// A Skip checkbox on each section + group header bulk-skips (excludes) or
+// un-skips every line item under it. State is tri-state: checked = ALL items
+// excluded, unchecked = none, indeterminate = some. Mirrors the per-row Skip box.
+function sectionSkipState(gi, si) {
+  const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
+  if (!sec || !sec.items.length) return 'none';
+  let ex = 0;
+  sec.items.forEach((_, ii) => { if (isExcluded(gi, si, ii)) ex++; });
+  return ex === 0 ? 'none' : (ex === sec.items.length ? 'all' : 'some');
+}
+function groupSkipState(gi) {
+  const g = SCHEMA.phase3[gi]; if (!g) return 'none';
+  let tot = 0, ex = 0;
+  g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { tot++; if (isExcluded(gi, si, ii)) ex++; }));
+  return tot === 0 ? 'none' : (ex === 0 ? 'none' : (ex === tot ? 'all' : 'some'));
+}
+// Exclude/include every item across the given section indices in one shot: batch
+// STATE.excluded (single saveState), then live-update each rendered row + its
+// per-row checkbox, recompute the summary, and refresh every Skip toggle.
+function bulkSetExcluded(gi, siList, excluded, summaryNode) {
+  const g = SCHEMA.phase3[gi]; if (!g) return;
+  if (!STATE.excluded) STATE.excluded = {};
+  siList.forEach(si => {
+    const sec = g.sections[si]; if (!sec) return;
+    sec.items.forEach((_, ii) => {
+      const k = ckKey(gi, si, ii);
+      if (excluded) STATE.excluded[k] = true; else delete STATE.excluded[k];
+    });
+  });
+  saveState();
+  siList.forEach(si => {
+    const sec = g.sections[si]; if (!sec) return;
+    sec.items.forEach((_, ii) => {
+      const wrap = document.querySelector(`.detail-item-wrap[data-ckkey="${gi}.${si}.${ii}"]`);
+      if (!wrap) return;
+      const rcb = wrap.querySelector('.budget-toggle-cell input');
+      if (rcb) rcb.checked = excluded;
+      applyRowExcludedState(wrap);
+    });
+  });
+  recomputePctRowsAndSummary(summaryNode);
+  refreshSkipToggles();
+}
+// Re-sync every section/group Skip checkbox to the current STATE (checked/
+// indeterminate). Called after any single-row or bulk skip change.
+function refreshSkipToggles() {
+  const root = $('#phase-content'); if (!root) return;
+  root.querySelectorAll('[data-skip-section]').forEach(cb => {
+    const [gi, si] = cb.dataset.skipSection.split('.').map(Number);
+    const st = sectionSkipState(gi, si);
+    cb.checked = st === 'all'; cb.indeterminate = st === 'some';
+  });
+  root.querySelectorAll('[data-skip-group]').forEach(cb => {
+    const st = groupSkipState(Number(cb.dataset.skipGroup));
+    cb.checked = st === 'all'; cb.indeterminate = st === 'some';
+  });
+}
+// A "Skip" label+checkbox for a section (si set) or group (si == null) header.
+function renderSkipHeaderToggle(gi, si, summaryNode, txtColor) {
+  const isGroup = si == null;
+  const cb = el('input', { type: 'checkbox', class: 'skip-toggle-cb' });
+  if (isGroup) cb.setAttribute('data-skip-group', String(gi));
+  else cb.setAttribute('data-skip-section', gi + '.' + si);
+  const st = isGroup ? groupSkipState(gi) : sectionSkipState(gi, si);
+  cb.checked = st === 'all'; cb.indeterminate = st === 'some';
+  cb.addEventListener('click', (e) => e.stopPropagation());
+  cb.addEventListener('change', () => {
+    const g = SCHEMA.phase3[gi];
+    const siList = isGroup ? g.sections.map((_, i) => i) : [si];
+    bulkSetExcluded(gi, siList, cb.checked, summaryNode);
+  });
+  const lbl = el('label', {
+    class: 'skip-toggle',
+    title: isGroup ? 'Skip / un-skip every line item in this group' : 'Skip / un-skip every line item in this section',
+    style: 'display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;flex-shrink:0;cursor:pointer;text-transform:none;letter-spacing:0' + (txtColor ? `;color:${txtColor}` : ''),
+    onClick: (e) => e.stopPropagation(),
+  }, 'Skip', cb);
+  return lbl;
 }
 
 function renderDetailItem(gi, si, ii, item, summaryNode, tints) {

@@ -681,6 +681,11 @@ main {
    so they read as locked; the dim + gray makes "off" obvious at a glance. */
 .detail-item-wrap.row-excluded { background: #eef1f5 !important; }
 .detail-item-wrap.row-excluded > *:not(.budget-toggle-cell) { opacity: .5; }
+/* "Skip" group-action toggle on section + group headers (renderSkipHeaderToggle):
+   a compact label+checkbox that bulk-skips every item under that header. Sits just
+   before the ▼ chevron; clicking it does NOT collapse the header (stopPropagation). */
+.section-header .skip-toggle { margin-left: 8px; }
+.section-header .skip-toggle .skip-toggle-cb { width: 14px; height: 14px; cursor: pointer; margin: 0; }
 
 /* Colored CAPEX group sections (Questionnaire + Details) */
 .group-section > .group-header { letter-spacing: 0.5px; }
