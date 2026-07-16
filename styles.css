@@ -641,6 +641,19 @@ main {
   padding-bottom: 6px;
   border-bottom: 2px solid var(--primary-light);
 }
+/* A group divider that collapses/expands its whole group of sections. Flex so the
+   chevron pins to the right; the whole bar is the click target. */
+.group-divider-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.group-divider-toggle:hover { color: var(--primary-hover, #1e40af); border-bottom-color: var(--primary); }
+.group-divider-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.group-divider-chev { font-size: 13px; font-weight: 400; line-height: 1; }
 .check-item {
   display: flex;
   align-items: flex-start;
@@ -687,6 +700,34 @@ main {
 
 /* Far-left "Skip" checkbox column on Budget rows (renderExcludeToggleCell). */
 .budget-toggle-cell input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; margin: 0; }
+/* The Skip checkbox reads as a red ✗ (not a blue ✓) — "checked = crossed out /
+   Not Applicable". appearance:none + an inline-SVG red X so it looks the same in
+   every browser. Applies to both the per-row Skip box and the section/group
+   bulk-Skip boxes. Unchecked = empty box; :indeterminate (some-skipped, group
+   headers only) = a muted red dash. */
+.budget-toggle-cell input[type=checkbox],
+.section-header .skip-toggle .skip-toggle-cb {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 3px;
+  background-color: #fff;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 82% 82%;
+}
+.budget-toggle-cell input[type=checkbox]:checked,
+.section-header .skip-toggle .skip-toggle-cb:checked {
+  border-color: #dc2626;
+  background-color: #fee2e2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5' stroke='%23dc2626' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+.section-header .skip-toggle .skip-toggle-cb:indeterminate {
+  border-color: #f87171;
+  background-color: #fef2f2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8H12' stroke='%23dc2626' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E");
+}
 /* A turned-off (excluded / N.A.) Budget row: gray background + everything but the
    Skip checkbox dimmed. Inputs are also disabled in JS (applyRowExcludedState),
    so they read as locked; the dim + gray makes "off" obvious at a glance. */

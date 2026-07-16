@@ -798,6 +798,7 @@ window.SCHEMA = {
         "options": [
           "Wood Frame",
           "Concrete",
+          "Brick",
           "Steel"
         ],
         "required": true
@@ -872,6 +873,26 @@ window.SCHEMA = {
         "type": "number",
         "min": 0,
         "hint": "Feet",
+        "show_if": "walkways > 0",
+        "row": "walkway_dims"
+      },
+      {
+        "key": "walkway_sqft_each",
+        "label": "Sqft/ea",
+        "type": "number",
+        "decimals": 0,
+        "computed": "walkway_length * walkway_width",
+        "hint": "L\u00d7W",
+        "show_if": "walkways > 0",
+        "row": "walkway_dims"
+      },
+      {
+        "key": "walkway_sqft_total",
+        "label": "Total Sqft",
+        "type": "number",
+        "decimals": 0,
+        "computed": "walkway_length * walkway_width * walkways",
+        "hint": "L\u00d7W\u00d7#",
         "show_if": "walkways > 0",
         "row": "walkway_dims"
       },
@@ -1074,6 +1095,7 @@ window.SCHEMA = {
         "type": "select",
         "options": [
           "Steel",
+          "Copper",
           "PVC",
           "Cast Iron"
         ]

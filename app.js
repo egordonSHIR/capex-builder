@@ -1055,10 +1055,14 @@ function renderSchemaForm(sections, bag, onUpdate) {
           bag[permfKey] = cb.checked;
           if (cb.checked) applyPerMf(); else { releasePerMf(); saveState(); }
         });
+        // Sits in the middle grid column (grid-column 2) of the inline field so the
+        // checkbox lines up between the label and the input box instead of wrapping
+        // onto its own line below. (Inline fields have no hint in col 2 for the
+        // per_mf fields, so the middle column is free.)
         const cbWrap = el('label', {
           class: 'permf-toggle',
-          style: 'display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:var(--muted);cursor:pointer'
-        }, cb, ' Per MF Unit (auto-fill from Unit Mix)');
+          style: 'grid-column:2;display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap'
+        }, cb, ' Per MF Unit (auto-fill)');
         fieldNode.appendChild(cbWrap);
         if (cb.checked) applyPerMf();
       }
@@ -1172,6 +1176,62 @@ function syncExpandToggles() {
   root.querySelectorAll('[data-expand-toggle]').forEach(btn => {
     btn.textContent = anyCollapsed ? '▼ Expand all' : '▶ Collapse all';
     btn.title = anyCollapsed ? 'Expand all sections on this tab' : 'Collapse all sections on this tab';
+  });
+  syncBasicsGroupChevrons();
+}
+
+// ---------- Basics-page group dividers (collapse/expand a whole group) ----------
+// Each group divider on the Basics page ("Property Basics", "Physical
+// Characteristics") doubles as a collapse/expand-ALL control for just the sections
+// in that group — the sibling .section elements that follow the divider up to the
+// next .group-divider. Mirrors the global Expand/Collapse-all bar, scoped to one
+// group. Chevron: ▾ = at least one section expanded (click collapses the group),
+// ▸ = every section collapsed (click expands the group).
+function makeGroupDivider(label) {
+  const chev = el('span', { class: 'group-divider-chev' }, '▾');
+  const div = el('div', {
+    class: 'group-divider group-divider-toggle',
+    role: 'button', tabindex: '0', 'aria-expanded': 'true',
+    onClick: (e) => toggleBasicsGroup(e.currentTarget),
+  }, el('span', {}, label), chev);
+  div.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleBasicsGroup(div); }
+  });
+  return div;
+}
+// The .section siblings belonging to a group divider (up to the next divider).
+function basicsGroupSections(divider) {
+  const out = [];
+  let n = divider.nextElementSibling;
+  while (n && !n.classList.contains('group-divider')) {
+    if (n.classList.contains('section')) out.push(n);
+    n = n.nextElementSibling;
+  }
+  return out;
+}
+function _sectionName(sec) {
+  const sp = sec.querySelector(':scope > .section-header > span');
+  return sp ? sp.textContent.trim() : '';
+}
+function toggleBasicsGroup(divider) {
+  const secs = basicsGroupSections(divider);
+  if (!secs.length) return;
+  const collapseAll = secs.some(s => !s.classList.contains('collapsed'));   // any open -> collapse all; else expand all
+  secs.forEach(s => {
+    s.classList.toggle('collapsed', collapseAll);
+    const nm = _sectionName(s);
+    if (nm) window['_collapsed_' + nm] = collapseAll;
+  });
+  syncExpandToggles();   // also runs syncBasicsGroupChevrons()
+}
+// Refresh every group divider's chevron + aria to reflect its sections' state.
+function syncBasicsGroupChevrons() {
+  document.querySelectorAll('.group-divider-toggle').forEach(div => {
+    const secs = basicsGroupSections(div);
+    const allCollapsed = secs.length > 0 && secs.every(s => s.classList.contains('collapsed'));
+    const chev = div.querySelector('.group-divider-chev');
+    if (chev) chev.textContent = allCollapsed ? '▸' : '▾';
+    div.setAttribute('aria-expanded', allCollapsed ? 'false' : 'true');
   });
 }
 // One SHIR-navy box (matches the Budget page summary bar): optional left content
@@ -1344,6 +1404,9 @@ function renderPhase1() {
     onClick: () => exportEmptyBasicsFields(),
   }, '📋 Export Missing Fields');
   root.appendChild(renderExpandCollapseBar([importBtn, exportBtn]));
+  // Group divider for the property-basics group (Identity / Units / Area /
+  // Building & Site + Basics Notes) — clickable to collapse/expand the whole group.
+  root.appendChild(makeGroupDivider('Property Basics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units" schema section (split out from the
@@ -1382,7 +1445,7 @@ function renderPhase1() {
     () => (STATE.phase1 && STATE.phase1.basics_notes) || '',
     (html) => { STATE.phase1.basics_notes = html; saveState(); }));
   // Physical characteristics questionnaire lives here too (collapsible sections).
-  root.appendChild(el('div', { class: 'group-divider' }, 'Physical Characteristics'));
+  root.appendChild(makeGroupDivider('Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   // Physical Notes — same rich-text notes at the end of the Physical
   // Characteristics sections, i.e. right below Amenities - Indoor. Stored in phase2.
