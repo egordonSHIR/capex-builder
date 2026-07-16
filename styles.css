@@ -698,16 +698,9 @@ main {
    (stopPropagation). */
 .section-header .skip-toggle { margin-left: 0; margin-right: 10px; }
 .section-header .skip-toggle .skip-toggle-cb { width: 14px; height: 14px; cursor: pointer; margin: 0; }
-/* "Hide N/A" / "Show N/A" toggle button (renderHideSkippedToggle): sits on the
-   right of the header, before the collapsed-badge + chevron. When its target
-   body carries .hide-skipped, every skipped (N/A) row under it is hidden. */
-.section-header .hide-skipped-btn {
-  font-size: 10px; font-weight: 600; text-transform: none; letter-spacing: 0;
-  padding: 2px 8px; border-radius: 10px; cursor: pointer; white-space: nowrap;
-  background: rgba(255, 255, 255, 0.28); color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.5); margin-left: 8px; flex-shrink: 0;
-}
-.section-header .hide-skipped-btn:hover { background: rgba(255, 255, 255, 0.45); }
+/* "Hide N/A" / "Show N/A": a single global toggle in the Budget sticky top bar
+   (see renderPhase3) flips `.hide-skipped` on the whole Budget page root, and
+   this rule hides every skipped (N/A) row at once. */
 .hide-skipped .detail-item-wrap.row-excluded { display: none !important; }
 
 /* Colored CAPEX group sections (Questionnaire + Details) */

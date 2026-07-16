@@ -1139,9 +1139,35 @@ const BAR_BTN_STYLE = 'padding:6px 10px;font-size:12px;font-weight:600;backgroun
 // Variant for buttons that sit ON the navy summary bar (Budget page Expand/
 // Collapse): match the blue background, white font, thin white border.
 const BAR_BTN_STYLE_ON_NAVY = 'padding:6px 10px;font-size:12px;font-weight:600;background:var(--primary);border:1px solid #fff;border-radius:6px;cursor:pointer;color:#fff;white-space:nowrap';
+// Single state-aware Expand/Collapse-ALL toggle (one button, not two — frees
+// top-bar room). Shows "▼ Expand all" whenever ANY section is collapsed (click
+// expands all), and "▶ Collapse all" only when every section is already expanded
+// (click collapses all). The action is decided from LIVE DOM state each click, so
+// the label is just a hint; syncExpandToggles() keeps every such button's label
+// current after bulk AND manual per-section toggles (wired from wireSectionA11y).
+function makeExpandToggle(styleStr) {
+  const btn = el('button', { type: 'button', style: styleStr });
+  btn.setAttribute('data-expand-toggle', '');
+  btn.addEventListener('click', () => {
+    const root = $('#phase-content'); if (!root) return;
+    const anyCollapsed = root.querySelector('.section.collapsed');
+    if (anyCollapsed) root.querySelectorAll('.section.collapsed').forEach(s => s.classList.remove('collapsed'));
+    else root.querySelectorAll('.section').forEach(s => s.classList.add('collapsed'));
+    syncExpandToggles();
+  });
+  return btn;
+}
+function syncExpandToggles() {
+  const root = $('#phase-content'); if (!root) return;
+  const anyCollapsed = !!root.querySelector('.section.collapsed');
+  root.querySelectorAll('[data-expand-toggle]').forEach(btn => {
+    btn.textContent = anyCollapsed ? '▼ Expand all' : '▶ Collapse all';
+    btn.title = anyCollapsed ? 'Expand all sections on this tab' : 'Collapse all sections on this tab';
+  });
+}
 // One SHIR-navy box (matches the Budget page summary bar): optional left content
 // (leftStat for a summary chip and/or leftItems for buttons) on the left, and the
-// Expand/Collapse-all buttons on the right. All buttons use the on-navy style
+// single Expand/Collapse-all toggle on the right. All buttons use the on-navy style
 // (navy bg, white text, thin white border) so they read as one master blue box.
 // leftItems buttons should already carry BAR_BTN_STYLE_ON_NAVY.
 function renderExpandCollapseBar(leftItems, leftStat) {
@@ -1157,20 +1183,7 @@ function renderExpandCollapseBar(leftItems, leftStat) {
     bar.appendChild(left);
   }
   const right = el('div', { style: 'display:flex;gap:6px' });
-  right.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Expand all sections on this tab',
-    onClick: () => {
-      $('#phase-content').querySelectorAll('.section.collapsed')
-        .forEach(s => s.classList.remove('collapsed'));
-    },
-  }, '▼ Expand all'));
-  right.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Collapse all sections on this tab',
-    onClick: () => {
-      $('#phase-content').querySelectorAll('.section')
-        .forEach(s => s.classList.add('collapsed'));
-    },
-  }, '▶ Collapse all'));
+  right.appendChild(makeExpandToggle(BAR_BTN_STYLE_ON_NAVY));
   bar.appendChild(right);
   return bar;
 }
@@ -1226,8 +1239,10 @@ function wireSectionA11y(root) {
     // on nav, any future toggler). Cheap — one observer per section.
     new MutationObserver(() => {
       hdr.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+      syncExpandToggles();   // keep the single Expand/Collapse toggle's label in sync
     }).observe(sec, { attributes: true, attributeFilter: ['class'] });
   });
+  syncExpandToggles();   // set the toggle label to match the freshly-rendered state
 }
 
 // Gather every currently-applicable Basics field (phase1 + phase2) that has no
@@ -4094,20 +4109,21 @@ function renderPhase3() {
       el('span', { class: 'value', 'data-stat': 'perunit', style: 'color:#fff' }, fmtMoney(totals.subtotalPerUnit))));
   bar.appendChild(summary);
   const actions = el('div', { style: 'display:flex;gap:6px;flex-shrink:0;padding-left:12px;border-left:1px solid rgba(255,255,255,0.35)' });
-  actions.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Expand all sections on this tab',
-    onClick: () => {
-      $('#phase-content').querySelectorAll('.section.collapsed')
-        .forEach(s => s.classList.remove('collapsed'));
-    },
-  }, '▼ Expand all'));
-  actions.appendChild(el('button', {
-    type: 'button', style: BAR_BTN_STYLE_ON_NAVY, title: 'Collapse all sections on this tab',
-    onClick: () => {
-      $('#phase-content').querySelectorAll('.section')
-        .forEach(s => s.classList.add('collapsed'));
-    },
-  }, '▶ Collapse all'));
+  actions.appendChild(makeExpandToggle(BAR_BTN_STYLE_ON_NAVY));
+  // Single global "Hide/Show N/A" toggle (replaces the old per-section + per-group
+  // Hide buttons): flips `hide-skipped` on the whole Budget page (root), so CSS
+  // hides EVERY skipped (N/A) row at once. It lives in the sticky top bar, so it's
+  // always reachable. View-only + ephemeral (resets on re-render; never touches
+  // STATE.excluded).
+  const hideToggle = el('button', {
+    type: 'button', style: BAR_BTN_STYLE_ON_NAVY,
+    title: 'Hide or show every line item marked N/A (skipped) across all sections',
+  }, '🙈 Hide N/A');
+  hideToggle.addEventListener('click', () => {
+    const hidden = root.classList.toggle('hide-skipped');
+    hideToggle.textContent = hidden ? '👁 Show N/A' : '🙈 Hide N/A';
+  });
+  actions.appendChild(hideToggle);
   bar.appendChild(actions);
   sticky.appendChild(bar);
   // Column header row — same grid template as data rows so cells align.
@@ -4169,7 +4185,6 @@ function renderPhase3() {
           onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
           renderSkipHeaderToggle(gi, si, summary, subHeaderTxt),
           el('span', { style: 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, sec.name),
-          renderHideSkippedToggle(secBody, subHeaderTxt),
           el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si }, fmtMoney(secSum)),
           el('span', { class: 'chev', style: subHeaderTxt ? `color:${subHeaderTxt}` : '' }, '▼')
         ),
@@ -4180,8 +4195,7 @@ function renderPhase3() {
     const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
     const groupTxt = GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null;
     const groupSkip = renderSkipHeaderToggle(gi, null, summary, groupTxt);
-    const groupHide = renderHideSkippedToggle(groupBody, groupTxt);
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip, groupHide));
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
@@ -4339,26 +4353,9 @@ function refreshSkipToggles() {
     cb.checked = st === 'all'; cb.indeterminate = st === 'some';
   });
 }
-// A "Hide N/A" / "Show N/A" toggle button for a section or group header. Toggles
-// the `hide-skipped` class on the given body element, which (via CSS) collapses
-// every row marked N/A (skipped / excluded) under it. View-only + ephemeral
-// (resets on re-render) — it never touches STATE.excluded.
-function renderHideSkippedToggle(bodyEl, txtColor) {
-  const LABEL_HIDE = '🙈 Hide N/A';
-  const LABEL_SHOW = '👁 Show N/A';
-  const btn = el('button', {
-    type: 'button',
-    class: 'hide-skipped-btn',
-    title: 'Hide or show the line items marked N/A (skipped) here',
-    style: txtColor ? `color:${txtColor};border-color:${txtColor}` : '',
-    onClick: (e) => {
-      e.stopPropagation();
-      const hidden = bodyEl.classList.toggle('hide-skipped');
-      btn.textContent = hidden ? LABEL_SHOW : LABEL_HIDE;
-    },
-  }, LABEL_HIDE);
-  return btn;
-}
+// (The old per-section/per-group "Hide N/A" toggle button was replaced by a
+// single global toggle in the Budget sticky top bar — see renderPhase3. It flips
+// `hide-skipped` on the whole page root; the CSS rule below still does the hiding.)
 // A "Skip" label+checkbox for a section (si set) or group (si == null) header.
 function renderSkipHeaderToggle(gi, si, summaryNode, txtColor) {
   const isGroup = si == null;
