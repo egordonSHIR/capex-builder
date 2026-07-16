@@ -2940,10 +2940,18 @@ function parseUnitsTab(wb) {
   for (let i = hi + 1; i < rows.length; i++) {
     const row = rows[i] || [];
     const g = String(row[1] == null ? '' : row[1]).trim();
-    if (g) curGroup = g;
+    // Every real per-plan row carries its BR/BA group label in col B. The
+    // bedroom-type roll-up blocks ("Eff" / "1BR" / "2BR" / …) that sit below
+    // each group — plus the "Subtotal/Avg", "ALL" and "Grand Tot/Avg" rows —
+    // all leave col B BLANK and merely RESTATE counts already listed in the
+    // detailed rows above. Counting them aggregates phantom unit types and
+    // DOUBLES the total (Lewisville 104→208, Plano 125→250). Skip blank-col-B
+    // rows so only the detailed plan rows are summed.
+    if (!g) continue;
+    curGroup = g;
     const plan = String(row[2] == null ? '' : row[2]).trim();
     if (!plan) continue;                                   // pre-allocated placeholder rows
-    if (/^all$|grand|subtotal|tot\s*\/?\s*avg/i.test(plan)) continue;
+    if (/^all$|grand|subtotal|tot\s*\/?\s*avg/i.test(plan)) continue;  // redundant safety
     const status = umStatus(row[3]);
     const count = Number(row[4]);
     if (!isFinite(count) || count <= 0) continue;
