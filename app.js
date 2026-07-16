@@ -5529,21 +5529,11 @@ function renderPhase4() {
       proformaStatus.style.display = '';
       return;
     }
-    // Custom (user-defined) line items would add rows the fixed proforma template
-    // doesn't have → the import worker's 1:1 label match aborts. Disable proforma
-    // import while any custom item exists (Export to Excel / Place in Capex Folder
-    // still include them). Auto-insertion into the proforma is a later update.
+    // Custom (user-defined) line items add rows the base proforma template lacks.
+    // The import worker (v2) INSERTS them into the CAPEX tab; the first import for a
+    // custom-item deal runs as a review-only dry-run (see submitProformaCapexJob's
+    // confirm + the worker skill). Button stays enabled; a note explains the flow.
     const nCustom = ensureCustomItems().length;
-    if (nCustom > 0) {
-      proformaBtn.textContent = '📥  Place In Proforma';
-      proformaBtn.style.cssText = btnStyle('#3477B2') + ';background:#cbd5e1;color:#f8fafc;cursor:not-allowed';
-      proformaBtn.disabled = true; proformaBtn.onclick = null;
-      proformaBtn.title = 'Custom line items aren\'t supported by proforma import yet — remove them, or use Export to Excel / Place in Capex Folder.';
-      proformaStatus.style.color = '#b45309';
-      proformaStatus.textContent = `⚠ This deal has ${nCustom} custom line item${nCustom === 1 ? '' : 's'}. Proforma import is disabled while custom items exist (they'd break the proforma template's row match). They still flow through "Export to Excel" / "Place in Capex Folder". Direct proforma import for custom items is coming in a later update.`;
-      proformaStatus.style.display = '';
-      return;
-    }
     proformaBtn.style.cssText = btnStyle('#3477B2');
     proformaBtn.disabled = !exportReady;
     proformaBtn.onclick = exportReady ? submitProformaCapexJob : null;
@@ -5558,6 +5548,11 @@ function renderPhase4() {
       proformaBtn.textContent = '📥  Place In Proforma';
       proformaBtn.title = exportReady ? 'Place the capex budget into a proforma in 2. UW-Analysis' : readyTip;
       proformaStatus.style.display = 'none';
+    }
+    if (nCustom > 0 && exportReady) {
+      proformaStatus.style.color = '#b45309';
+      proformaStatus.textContent = `⚠ ${nCustom} custom line item${nCustom === 1 ? '' : 's'} will be INSERTED into the proforma's CAPEX tab. The first import for this deal runs as a review-only dry-run (a copy you inspect) — nothing is saved to the deal folder until you confirm.`;
+      proformaStatus.style.display = '';
     }
   };
   paintProforma((PROFORMA_CAPEXB_CACHE[STATE.id] || {}).file || null);
@@ -5619,12 +5614,13 @@ async function buildCapexWorkbook() {
   ws.properties.outlineProperties = { summaryBelow: true, summaryRight: true };
   const COL_TOTAL = 10; // J
   const COL_PHOTOS = 13; // M — hyperlink to the line item's Drive photo subfolder
+  const COL_CUSTOM_FLAG = 14; // N — hidden "CUSTOM" marker for the proforma-import worker (never pasted)
   ws.columns = [
     { width: 22 }, { width: 34 }, { width: 18 },
     { width: 8 }, { width: 8 }, { width: 8 },
     { width: 9 }, { width: 12 }, { width: 12 },
     { width: 15 }, { width: 28 }, { width: 30 },
-    { width: 20 },
+    { width: 20 }, { width: 10, hidden: true },
   ];
 
   const titleRow = ws.addRow(['CAPEX BUDGET' + (propName ? ' — ' + propName.toUpperCase() : '')]);
@@ -5839,6 +5835,10 @@ async function buildCapexWorkbook() {
           c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } };
           c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cFill } };
         });
+        // Hidden marker (col N) so the proforma-import worker can deterministically
+        // tell a user-added row (to INSERT) from a schema row (to align 1:1). Never
+        // pasted into the proforma (the worker reads cols A–L); column stays hidden.
+        cr.getCell(COL_CUSTOM_FLAG).value = 'CUSTOM';
         if (firstItemRowInGroup === null) firstItemRowInGroup = cr.number;
         lastItemRowInGroup = cr.number;
       });
@@ -6099,12 +6099,19 @@ async function submitProformaCapexJob() {
   if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
   if (!getDriveToken()) { toast('Connect Google Drive first (☰ → Connect).', 'error'); return; }
   if (proformaJobIsActive(getProformaJob())) { toast('A proforma import is already ' + getProformaJob().status + ' for this property.', ''); return; }
-  // Custom (user-defined) line items add rows the fixed proforma template lacks →
-  // the worker's 1:1 label match would abort. Block import until phase 2 wires
-  // row-insertion into the worker. Excel export paths still include custom items.
-  if (ensureCustomItems().length) {
-    toast('Custom line items aren\'t supported by proforma import yet — use Export to Excel / Place in Capex Folder, or remove custom items to import into the proforma.', 'error');
-    return;
+  // Custom (user-defined) line items add rows the base proforma template lacks. The
+  // worker (v2) INSERTS them into the CAPEX tab (marked in the export via the hidden
+  // CUSTOM column). The first import for a custom-item deal runs as a review-only
+  // dry-run: the worker builds a copy for you to inspect and does NOT save into the
+  // deal folder. Confirm so the user knows what to expect.
+  const nCustomItems = ensureCustomItems().length;
+  if (nCustomItems > 0) {
+    const ok = confirm(
+      `This deal has ${nCustomItems} custom line item${nCustomItems === 1 ? '' : 's'}.\n\n` +
+      `They'll be INSERTED into the proforma's CAPEX tab (they aren't in the standard template). ` +
+      `The first import runs as a review-only DRY-RUN — the processing agent builds a copy for you ` +
+      `to check and does NOT save it into 2. UW-Analysis yet.\n\nContinue?`);
+    if (!ok) return;
   }
   try {
     toast('Finding proforma files in 2. UW-Analysis…');
