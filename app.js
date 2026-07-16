@@ -292,6 +292,15 @@ const DEFAULT_PROPERTY = () => ({
   // User-defined CAPEX Groups: buckets of line items used as the base for any
   // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
   capexGroups: [],
+  // User-defined custom line items (the first line-item type that lives in STATE
+  // rather than SCHEMA.phase3). Each item targets an existing schema Group+Section
+  // BY NAME (indices drift when schema.js is regenerated; names are stable). Skip
+  // state lives on the item (`excluded`), NOT in STATE.excluded (that map is
+  // ckKey-namespaced and walked with .map(Number)). id prefix `ci_` can never parse
+  // as a ckKey ("int.int.int"), so customs never leak into getP3/isExcluded.
+  // Shape: {id, groupName, sectionName, name, qty, unit_type, unit_cost, notes,
+  //         useBuckets, pct_orig, pct_part, pct_reno, excluded}
+  customItems: [],
   phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
   // Survey-derived site specs (from survey-breakdown-specs skill).
   // Flat values land in phase1 (parking_spots_hc, site_perimeter_lf, etc.);
@@ -3821,17 +3830,26 @@ function avgSizingForUnitType(ut, avgsOpt) {
   return null;
 }
 
-function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
-  const v = getP3(gi, si, ii);
+// Pure Orig/Part/Reno bucket-qty formula, shared by Interior schema rows and by
+// custom line items. `spec` = {pct_orig, pct_part, pct_reno, unit_type}; counts
+// default to the live Unit Mix status counts, avgs to the live Unit Mix averages.
+// Returns the rounded unit count, scaled by the matching Avg-* average when the
+// Qty Type is one of AVG_QTY_TYPES.
+function computeBucketQty(spec, countsOpt, avgsOpt) {
   const c = countsOpt || getUnitStatusCounts();
-  const po = Number(v.pct_orig) || 0;
-  const pp = Number(v.pct_part) || 0;
-  const pr = Number(v.pct_reno) || 0;
+  const po = Number(spec.pct_orig) || 0;
+  const pp = Number(spec.pct_part) || 0;
+  const pr = Number(spec.pct_reno) || 0;
   let qty = Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
   // Avg-* Qty Types scale the unit count by the matching property-wide average
   // (sqft / beds / baths) so e.g. Flooring priced $/sqft computes against total sqft.
-  const sizing = avgSizingForUnitType(v.unit_type);
+  const sizing = avgSizingForUnitType(spec.unit_type, avgsOpt);
   if (sizing != null) qty = Math.round(qty * sizing);
+  return qty;
+}
+function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
+  const v = getP3(gi, si, ii);
+  const qty = computeBucketQty(v, countsOpt);
   if ((Number(v.qty) || 0) !== qty) setP3(gi, si, ii, { qty });
   return qty;
 }
@@ -3908,6 +3926,61 @@ function getSchemaItemByKey(ckKey) {
   const s = g.sections && g.sections[si]; if (!s) return null;
   return (s.items && s.items[ii]) || null;
 }
+
+// ---------- Custom (user-defined) line items ----------
+// Custom items live on STATE.customItems (see DEFAULT_PROPERTY) and target an
+// existing schema Group+Section by NAME. Mirrors the CAPEX-group CRUD shape.
+function ensureCustomItems() {
+  if (!Array.isArray(STATE.customItems)) STATE.customItems = [];
+  return STATE.customItems;
+}
+function findCustomItem(id) {
+  return ensureCustomItems().find(ci => ci.id === id) || null;
+}
+function createCustomItem(groupName, sectionName) {
+  const ci = {
+    id: 'ci_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+    groupName: groupName || '', sectionName: sectionName || '', name: '',
+    qty: '', unit_type: '', unit_cost: '', notes: '',
+    useBuckets: false, pct_orig: '', pct_part: '', pct_reno: '',
+    excluded: false,
+  };
+  ensureCustomItems().push(ci);
+  saveState();
+  return ci;
+}
+function updateCustomItem(id, patch) {
+  const ci = findCustomItem(id);
+  if (ci) { Object.assign(ci, patch); saveState(); }
+  return ci;
+}
+function removeCustomItem(id) {
+  const arr = ensureCustomItems();
+  const idx = arr.findIndex(ci => ci.id === id);
+  if (idx < 0) return;
+  arr.splice(idx, 1);
+  saveState();
+}
+function getCustomItemsFor(groupName, sectionName) {
+  return ensureCustomItems().filter(ci => ci.groupName === groupName && ci.sectionName === sectionName);
+}
+// Resolve a custom item's schema Group+Section NAMES to current indices, or null
+// if the target no longer exists (e.g. a schema regen renamed/removed it).
+function resolveCustomTarget(ci) {
+  if (!ci || !ci.groupName) return null;
+  const gi = SCHEMA.phase3.findIndex(g => g.name === ci.groupName);
+  if (gi < 0) return null;
+  const si = (SCHEMA.phase3[gi].sections || []).findIndex(s => s.name === ci.sectionName);
+  if (si < 0) return null;
+  return { gi, si };
+}
+// $ Amt for a custom item. No finish/options/schema-default → plain qty × cost.
+// Bucket items derive qty from the Orig/Part/Reno percentages (Avg-* aware).
+function getCustomItemTotal(ci) {
+  if (!ci) return 0;
+  const qty = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
+  return qty * (Number(ci.unit_cost) || 0);
+}
 // Walk all % rows on the Details page and refresh their displayed $/Qty + $ Amt,
 // then update the running subtotal. Called whenever any qty/cost/group change
 // could affect a percentage calculation.
@@ -3943,12 +4016,14 @@ function refreshBudgetBadges() {
     const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
     if (!sec) return;
     let sum = 0; sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); });
+    getCustomItemsFor(SCHEMA.phase3[gi].name, sec.name).forEach(ci => { if (!ci.excluded) sum += getCustomItemTotal(ci); });
     b.textContent = fmtMoney(sum);
   });
   root.querySelectorAll('[data-b-badge-group]').forEach(b => {
     const gi = Number(b.dataset.bBadgeGroup);
     const g = SCHEMA.phase3[gi]; if (!g) return;
     let sum = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
+    ensureCustomItems().forEach(ci => { if (!ci.excluded && ci.groupName === g.name) sum += getCustomItemTotal(ci); });
     b.textContent = fmtMoney(sum);
   });
 }
@@ -4182,8 +4257,19 @@ function renderPhase3() {
             : renderDetailItem(gi, si, ii, item, summary, { rowIdleBg, rowPricedBg })
         );
       });
+      // Custom (user-defined) line items assigned to this group/section render
+      // inline after the schema items, followed by the "+ Add custom item"
+      // button (hidden for Commercial Tenant Costs — it's excluded from export).
+      const customOpts = { isInterior, rowIdleBg, rowPricedBg };
+      getCustomItemsFor(group.name, sec.name).forEach(ci => {
+        secBody.appendChild(renderCustomDetailItem(ci, customOpts, summary));
+      });
+      if (group.name !== 'Commercial Tenant Costs') {
+        secBody.appendChild(renderAddCustomItemButton(group.name, sec.name, secBody, customOpts, summary));
+      }
       let secSum = 0;
       sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) secSum += getDetailItemTotal(gi, si, ii); });
+      getCustomItemsFor(group.name, sec.name).forEach(ci => { if (!ci.excluded) secSum += getCustomItemTotal(ci); });
       groupSum += secSum;
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
@@ -4208,6 +4294,22 @@ function renderPhase3() {
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
   });
+  // Orphaned custom items (their group/section no longer exists in the schema —
+  // e.g. after a schema regen renamed it). Surface them so they can be reassigned
+  // rather than silently vanish; they're skipped in the Excel export until fixed.
+  const orphans = ensureCustomItems().filter(ci => !resolveCustomTarget(ci));
+  if (orphans.length) {
+    const oSec = el('section', { class: 'section', style: 'margin-top:20px' });
+    oSec.appendChild(el('header', { class: 'section-header', style: 'background:#7f1d1d;color:#fff' },
+      el('span', {}, `⚠ Unassigned custom items (${orphans.length})`),
+      el('span', { class: 'chev', style: 'color:#fff' }, '▼')));
+    const oBody = el('div', { class: 'section-body' });
+    oBody.appendChild(el('div', { class: 'muted small', style: 'padding:6px 16px' },
+      'These custom items point at a Group/Section that no longer exists. Pick a new Group + Section below to restore them (they are excluded from the Excel export until reassigned).'));
+    orphans.forEach(ci => oBody.appendChild(renderCustomDetailItem(ci, { isInterior: false, rowIdleBg: '', rowPricedBg: '#f0fdf4' }, summary)));
+    oSec.appendChild(oBody);
+    root.appendChild(oSec);
+  }
   // CAPEX Groups manager — user-defined buckets used by any % line item.
   root.appendChild(renderCapexGroupsSection(summary));
   return root;
@@ -4758,6 +4860,267 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   return itemWrap;
 }
 
+// ---------- Custom (user-defined) line items — inline row renderer ----------
+// Renders one STATE.customItems entry as a Budget row inside its chosen
+// group/section. Grid-aware: uses the 11-col Interior grid (with inline
+// Orig/Part/Reno % inputs) when the target section is in the Interior group,
+// else the standard 8-col grid with an optional per-item "Buckets" toggle.
+// Reads/writes ci.* via updateCustomItem (NOT getP3/setP3) and computes its $ Amt
+// via getCustomItemTotal. Carries the .detail-item-wrap class (so the global
+// Hide-N/A rule + row-excluded styling apply) but NO data-ckkey, so the
+// ckKey-keyed walks (recomputePctRowsAndSummary, bulkSetExcluded) skip it.
+function applyCustomRowExcludedState(wrap, ci) {
+  const ex = !!ci.excluded;
+  wrap.classList.toggle('row-excluded', ex);
+  wrap.querySelectorAll('input, select, button').forEach(c => {
+    // Keep the Skip checkbox and the 🗑 delete usable even when excluded.
+    if (c.hasAttribute('data-budget-toggle') || c.hasAttribute('data-custom-keep')) return;
+    c.disabled = ex;
+  });
+}
+function renderCustomDetailItem(ci, opts, summaryNode) {
+  const isInterior = !!(opts && opts.isInterior);
+  const rowIdleBg = (opts && opts.rowIdleBg) || '';
+  const rowPricedBg = (opts && opts.rowPricedBg) || '#f0fdf4';
+  // Interior-section custom items always use bucket math (mirrors schema Interior rows).
+  if (isInterior && !ci.useBuckets) { ci.useBuckets = true; }
+
+  const wrap = el('div', {
+    class: 'detail-item-wrap custom-item-wrap' + (isInterior ? ' detail-item-interior' : ''),
+    style: (isInterior ? DETAIL_GRID_BASE_INTERIOR : DETAIL_GRID_BASE) + ';border-bottom:1px solid #e5e7eb'
+  });
+  wrap.dataset.customId = ci.id;
+  wrap.dataset.bgIdle = rowIdleBg;
+  wrap.dataset.bgPriced = rowPricedBg;
+
+  // Inputs declared up front so the sync/refresh closures can reach them.
+  const qtyInp = el('input', {
+    type: 'text', inputmode: 'decimal',
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
+  });
+  qtyInp.setAttribute('data-qty-input', '');
+  const costInp = el('input', {
+    type: 'text', inputmode: 'decimal',
+    style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
+  });
+  costInp.setAttribute('data-cost-input', '');
+  setNumVal(costInp, (ci.unit_cost === '' || ci.unit_cost == null) ? '' : ci.unit_cost);
+  const totalEl = el('div', { 'data-total': true, style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a' }, '');
+
+  function currentQty() {
+    if (ci.useBuckets) return computeBucketQty(ci);
+    const bv = basicsQtyValue(ci.unit_type);
+    if (bv != null) return bv;
+    return Number(ci.qty) || 0;
+  }
+  function refresh() {
+    const total = ci.excluded ? 0 : getCustomItemTotal(ci);
+    totalEl.textContent = fmtMoney(total);
+    wrap.style.background = ci.excluded ? '' : (total > 0 ? rowPricedBg : rowIdleBg);
+    if (summaryNode) { updateDetailSummary(summaryNode); refreshBudgetBadges(); }
+  }
+  // # Qty is read-only + auto-filled when buckets are on OR when a Basics-linked
+  // Qty Type is selected (buckets win); otherwise it's a free numeric input.
+  function syncQtyUI() {
+    const bucketsOn = !!ci.useBuckets;
+    const bv = basicsQtyValue(ci.unit_type);
+    const auto = bucketsOn || bv != null;
+    if (auto) {
+      const q = bucketsOn ? computeBucketQty(ci) : bv;
+      if (!bucketsOn && (Number(ci.qty) || 0) !== q) updateCustomItem(ci.id, { qty: q });
+      setNumVal(qtyInp, q || '');
+      qtyInp.readOnly = true;
+      qtyInp.style.background = '#f1f5f9';
+      qtyInp.title = bucketsOn
+        ? 'Auto-computed from the Orig/Part/Reno % of the Unit Mix counts'
+        : basicsQtyTooltip(ci.unit_type);
+    } else {
+      qtyInp.readOnly = false;
+      qtyInp.style.background = '';
+      qtyInp.title = '';
+      setNumVal(qtyInp, (ci.qty === '' || ci.qty == null) ? '' : ci.qty);
+    }
+  }
+
+  // Col 1: Skip checkbox.
+  const skipCb = el('input', { type: 'checkbox' });
+  skipCb.setAttribute('data-budget-toggle', '');
+  skipCb.checked = !!ci.excluded;
+  skipCb.title = 'Mark this custom item Not Applicable — grays it out, locks inputs, forces $0.';
+  skipCb.addEventListener('click', (e) => e.stopPropagation());
+  skipCb.addEventListener('change', () => {
+    updateCustomItem(ci.id, { excluded: skipCb.checked });
+    applyCustomRowExcludedState(wrap, ci);
+    refresh();
+  });
+  wrap.appendChild(el('div', { class: 'budget-toggle-cell', style: 'display:flex;align-items:center;justify-content:center' }, skipCb));
+
+  // Col 2: editable name (+ a "Buckets" toggle for non-Interior rows).
+  const nameInp = el('input', {
+    type: 'text', placeholder: 'Custom item name…',
+    style: 'width:100%;padding:4px 6px;font-size:13px;font-weight:600;color:#0f172a;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:4px'
+  });
+  nameInp.value = ci.name || '';
+  nameInp.addEventListener('input', () => updateCustomItem(ci.id, { name: nameInp.value }));
+  const nameCell = el('div', { style: 'min-width:0;overflow:hidden;display:flex;flex-direction:column;gap:3px' }, nameInp);
+  if (!isInterior) {
+    const bLbl = el('label', { style: 'display:flex;align-items:center;gap:4px;font-size:10px;color:#64748b;cursor:pointer;white-space:nowrap' });
+    const bCb = el('input', { type: 'checkbox' });
+    bCb.checked = !!ci.useBuckets;
+    bCb.addEventListener('change', () => {
+      updateCustomItem(ci.id, { useBuckets: bCb.checked });
+      bucketRow.style.display = bCb.checked ? 'flex' : 'none';
+      syncQtyUI(); refresh();
+    });
+    bLbl.appendChild(bCb);
+    bLbl.appendChild(el('span', {}, 'Apply to reno unit buckets (Orig/Part/Reno)'));
+    nameCell.appendChild(bLbl);
+  }
+  wrap.appendChild(nameCell);
+
+  // Interior grid: inline Orig/Part/Reno % inputs (cols 3-5).
+  function mkCustomPctInput(field) {
+    const baseStyle = 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box';
+    const errStyle = baseStyle + ';border:1px solid #dc2626;background:#fef2f2;color:#dc2626';
+    const inp = el('input', { type: 'number', min: 1, max: 100, step: 'any', placeholder: '%', class: 'pct-input', style: baseStyle });
+    inp.value = (ci[field] !== '' && ci[field] != null) ? ci[field] : '';
+    inp.addEventListener('input', () => {
+      const raw = inp.value;
+      if (raw === '') { inp.style = baseStyle; inp.setCustomValidity(''); updateCustomItem(ci.id, { [field]: '' }); }
+      else {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 1 || n > 100) {
+          inp.style = errStyle; inp.setCustomValidity('Please enter a number between 1 and 100.');
+          toast('Please enter a number between 1 and 100', 'error'); return;
+        }
+        inp.style = baseStyle; inp.setCustomValidity(''); updateCustomItem(ci.id, { [field]: n });
+      }
+      syncQtyUI(); refresh();
+    });
+    return inp;
+  }
+  if (isInterior) {
+    wrap.appendChild(mkCustomPctInput('pct_orig'));
+    wrap.appendChild(mkCustomPctInput('pct_part'));
+    wrap.appendChild(mkCustomPctInput('pct_reno'));
+  }
+
+  // Options cell — custom items have no finish options → gray "n/a" marker.
+  wrap.appendChild(el('div', {
+    style: 'min-height:22px;display:flex;align-items:center;justify-content:center;background:#9ca3af;border-radius:4px',
+    title: 'Custom items have no finish options',
+  }, el('span', { style: 'color:#fff;font-style:italic;font-size:11px;line-height:1' }, 'n/a')));
+
+  // # Qty
+  qtyInp.addEventListener('input', () => {
+    if (qtyInp.readOnly) return;
+    updateCustomItem(ci.id, { qty: numVal(qtyInp) });
+    refresh();
+  });
+  qtyInp.addEventListener('blur', () => { if (!qtyInp.readOnly) setNumVal(qtyInp, numVal(qtyInp)); });
+  wrap.appendChild(qtyInp);
+
+  // Qty Type (custom items cannot be a '%' row — that references CAPEX groups).
+  const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
+  fillQtyTypeOptions(utSel, ci.unit_type || '');
+  Array.from(utSel.options).forEach(o => { if (o.value === '%') o.remove(); });
+  utSel.addEventListener('change', () => {
+    updateCustomItem(ci.id, { unit_type: utSel.value });
+    syncQtyUI(); refresh();
+  });
+  wrap.appendChild(utSel);
+
+  // $/Qty
+  costInp.addEventListener('input', () => {
+    if (costInp.readOnly) return;
+    updateCustomItem(ci.id, { unit_cost: numVal(costInp) });
+    refresh();
+  });
+  costInp.addEventListener('blur', () => { if (!costInp.readOnly) setNumVal(costInp, numVal(costInp)); });
+  wrap.appendChild(costInp);
+
+  // $ Amt
+  wrap.appendChild(totalEl);
+
+  // Actions cell (last col): 🗑 delete.
+  const delBtn = el('button', {
+    type: 'button', title: 'Delete this custom item',
+    style: 'background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;padding:2px'
+  }, '🗑');
+  delBtn.setAttribute('data-custom-keep', '');
+  delBtn.addEventListener('click', () => {
+    removeCustomItem(ci.id);
+    wrap.remove();
+    if (summaryNode) { updateDetailSummary(summaryNode); refreshBudgetBadges(); }
+  });
+  wrap.appendChild(el('div', { style: 'display:flex;align-items:center;justify-content:center' }, delBtn));
+
+  // Sub-row (grid-column 1/-1): Group + Section reassignment, and (non-Interior)
+  // the Orig/Part/Reno % inputs when buckets are toggled on.
+  const groupNames = SCHEMA.phase3.map(g => g.name).filter(n => n && n !== 'Commercial Tenant Costs');
+  const subRow = el('div', { style: 'grid-column:1/-1;padding:2px 4px 8px 32px;display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;flex-wrap:wrap' });
+  const grpSel = el('select', { style: 'padding:3px 4px;font-size:12px;box-sizing:border-box' });
+  const secSel = el('select', { style: 'padding:3px 4px;font-size:12px;box-sizing:border-box' });
+  function fillGroupSel() {
+    grpSel.innerHTML = '';
+    groupNames.forEach(n => { const o = el('option', { value: n }, n); if (n === ci.groupName) o.selected = true; grpSel.appendChild(o); });
+  }
+  function fillSectionSel() {
+    secSel.innerHTML = '';
+    const g = SCHEMA.phase3.find(x => x.name === grpSel.value);
+    (g ? g.sections : []).forEach(s => { const o = el('option', { value: s.name }, s.name); if (s.name === ci.sectionName) o.selected = true; secSel.appendChild(o); });
+  }
+  fillGroupSel(); fillSectionSel();
+  grpSel.addEventListener('change', () => {
+    const g = SCHEMA.phase3.find(x => x.name === grpSel.value);
+    const firstSec = g && g.sections[0] ? g.sections[0].name : '';
+    updateCustomItem(ci.id, { groupName: grpSel.value, sectionName: firstSec });
+    renderApp();   // row physically moves to another group/section — full re-render
+  });
+  secSel.addEventListener('change', () => {
+    updateCustomItem(ci.id, { sectionName: secSel.value });
+    renderApp();
+  });
+  subRow.appendChild(el('span', { style: 'font-weight:600' }, 'Group:'));
+  subRow.appendChild(grpSel);
+  subRow.appendChild(el('span', { style: 'font-weight:600' }, 'Section:'));
+  subRow.appendChild(secSel);
+
+  // Non-Interior bucket inputs live in the sub-row (revealed by the toggle).
+  const bucketRow = el('div', { style: 'display:' + (ci.useBuckets && !isInterior ? 'flex' : 'none') + ';align-items:center;gap:6px;margin-left:8px' });
+  if (!isInterior) {
+    bucketRow.appendChild(el('span', { style: 'font-weight:600' }, 'Orig/Part/Reno %:'));
+    bucketRow.appendChild(mkCustomPctInput('pct_orig'));
+    bucketRow.appendChild(mkCustomPctInput('pct_part'));
+    bucketRow.appendChild(mkCustomPctInput('pct_reno'));
+    subRow.appendChild(bucketRow);
+  }
+  wrap.appendChild(subRow);
+
+  syncQtyUI();
+  refresh();
+  applyCustomRowExcludedState(wrap, ci);
+  return wrap;
+}
+// "+ Add custom item" button for a section body — appends a new custom row inline
+// (keeps the section open, no full re-render).
+function renderAddCustomItemButton(groupName, sectionName, secBody, opts, summaryNode) {
+  const btn = el('button', {
+    type: 'button', class: 'add-custom-item-btn',
+    style: 'margin:6px 10px;padding:6px 12px;font-size:12px;font-weight:600;background:#e2e8f0;color:#0f172a;border:1px dashed #94a3b8;border-radius:6px;cursor:pointer'
+  }, '+ Add custom item');
+  const holder = el('div', {}, btn);
+  btn.addEventListener('click', () => {
+    const ci = createCustomItem(groupName, sectionName);
+    const row = renderCustomDetailItem(ci, opts, summaryNode);
+    secBody.insertBefore(row, holder);
+    const nm = row.querySelector('input[placeholder="Custom item name…"]');
+    if (nm) nm.focus();
+    if (summaryNode) { updateDetailSummary(summaryNode); refreshBudgetBadges(); }
+  });
+  return holder;
+}
+
 function renderDetailTotals(itemWrap, gi, si, ii) {
   // Excluded rows always read $0 and let the .row-excluded CSS supply the gray
   // background (inline bg cleared so it doesn't fight the class).
@@ -5005,6 +5368,13 @@ function computeTotals() {
       });
     });
   });
+  // Custom (user-defined) line items live on STATE, not the schema, so they must
+  // be summed explicitly. Count toward the subtotal + their chosen group's total.
+  ensureCustomItems().forEach(ci => {
+    if (ci.excluded) return;
+    const t = getCustomItemTotal(ci);
+    if (t > 0) { subtotal += t; itemCount += 1; if (ci.groupName in byGroup) byGroup[ci.groupName] += t; }
+  });
   // Contingency & construction-mgmt fee are NOT computed here anymore — they live
   // downstream in the MFVA proforma (CAPEX tab), applied to the Multifamily
   // Subtotal there. The Capex Builder is now the source of the line-item budget only.
@@ -5156,6 +5526,21 @@ function renderPhase4() {
       proformaBtn.title = 'A proforma import is already running';
       proformaStatus.style.color = '#475569';
       proformaStatus.textContent = `⏳ A processing agent is ${proformaJob.outputName && /capexb/i.test(proformaJob.outputName) && proformaJob.proformaName === proformaJob.outputName ? `refreshing "${proformaJob.proformaName}"` : `building "${proformaJob.outputName || 'the CapexB proforma'}" from "${proformaJob.proformaName || 'the proforma'}"`} via Excel COM. It will appear in 2. UW-Analysis — typically ~30 min–1 hour. You can leave this page.`;
+      proformaStatus.style.display = '';
+      return;
+    }
+    // Custom (user-defined) line items would add rows the fixed proforma template
+    // doesn't have → the import worker's 1:1 label match aborts. Disable proforma
+    // import while any custom item exists (Export to Excel / Place in Capex Folder
+    // still include them). Auto-insertion into the proforma is a later update.
+    const nCustom = ensureCustomItems().length;
+    if (nCustom > 0) {
+      proformaBtn.textContent = '📥  Place In Proforma';
+      proformaBtn.style.cssText = btnStyle('#3477B2') + ';background:#cbd5e1;color:#f8fafc;cursor:not-allowed';
+      proformaBtn.disabled = true; proformaBtn.onclick = null;
+      proformaBtn.title = 'Custom line items aren\'t supported by proforma import yet — remove them, or use Export to Excel / Place in Capex Folder.';
+      proformaStatus.style.color = '#b45309';
+      proformaStatus.textContent = `⚠ This deal has ${nCustom} custom line item${nCustom === 1 ? '' : 's'}. Proforma import is disabled while custom items exist (they'd break the proforma template's row match). They still flow through "Export to Excel" / "Place in Capex Folder". Direct proforma import for custom items is coming in a later update.`;
       proformaStatus.style.display = '';
       return;
     }
@@ -5425,6 +5810,38 @@ async function buildCapexWorkbook() {
         if (firstItemRowInGroup === null) firstItemRowInGroup = r.number;
         lastItemRowInGroup = r.number;
       });
+
+      // Custom (user-defined) line items for this section — emitted INSIDE the
+      // group's item band so they roll into the group SUM + grand total with no
+      // formula changes. Orphaned customs (group/section removed) never match
+      // getCustomItemsFor here, so they're naturally skipped from the export.
+      getCustomItemsFor(group.name, sec.name).forEach(ci => {
+        const worked = !ci.excluded;
+        const pctv = (n) => (n === '' || n === null || n === undefined) ? '' : Number(n);
+        const cq = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
+        const qty = worked ? cq : '';
+        const rate = worked ? (Number(ci.unit_cost) || 0) : '';
+        const cr = ws.addRow([
+          sec.name, ci.name || '(unnamed custom item)', '',
+          worked ? pctv(ci.pct_orig) : '', worked ? pctv(ci.pct_part) : '', worked ? pctv(ci.pct_reno) : '',
+          qty || '', ci.unit_type || '', (rate === '' ? '' : (rate || 0)),
+          '', // Total (col J) — live formula below
+          '', worked ? (ci.notes || '') : '',
+          '', // Photos (col M) — customs have none
+        ]);
+        cr.getCell(COL_TOTAL).value = { formula: `IFERROR(G${cr.number}*I${cr.number},0)`, result: (Number(qty) || 0) * (Number(rate) || 0) };
+        stylePct(cr.getCell(4)); stylePct(cr.getCell(5)); stylePct(cr.getCell(6));
+        styleCurrency(cr.getCell(9));
+        styleCurrency(cr.getCell(COL_TOTAL));
+        cr.outlineLevel = 1;
+        const cFill = worked ? rowTintArgb : GRAY;
+        cr.eachCell({ includeEmpty: true }, (c) => {
+          c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cFill } };
+        });
+        if (firstItemRowInGroup === null) firstItemRowInGroup = cr.number;
+        lastItemRowInGroup = cr.number;
+      });
     });
 
     // Group subtotal row — same coloring as this group's header banner.
@@ -5682,6 +6099,13 @@ async function submitProformaCapexJob() {
   if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
   if (!getDriveToken()) { toast('Connect Google Drive first (☰ → Connect).', 'error'); return; }
   if (proformaJobIsActive(getProformaJob())) { toast('A proforma import is already ' + getProformaJob().status + ' for this property.', ''); return; }
+  // Custom (user-defined) line items add rows the fixed proforma template lacks →
+  // the worker's 1:1 label match would abort. Block import until phase 2 wires
+  // row-insertion into the worker. Excel export paths still include custom items.
+  if (ensureCustomItems().length) {
+    toast('Custom line items aren\'t supported by proforma import yet — use Export to Excel / Place in Capex Folder, or remove custom items to import into the proforma.', 'error');
+    return;
+  }
   try {
     toast('Finding proforma files in 2. UW-Analysis…');
     const { list } = await _listUWProformaCandidates();
@@ -8096,7 +8520,7 @@ HOME SCREEN
 
 THE THREE TABS
 1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
-2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. Each row is active and editable by default; price the ones the deal needs and, for the ones that don't apply, check the far-left "Skip" box — that grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee). A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
+2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. Each row is active and editable by default; price the ones the deal needs and, for the ones that don't apply, check the far-left "Skip" box — that grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type locks the quantity to the property's unit count. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. CUSTOM ITEMS: if a cost isn't in the standard list, tap "+ Add custom item" at the bottom of any section to add your own line — give it a name, # Qty, Qty Type, and $/Qty, and use the Group/Section dropdowns under it to file it wherever it belongs. Tick "Apply to reno unit buckets" on a custom item to size its quantity from the Orig./Part./Reno unit counts just like an Interior item. Custom items count toward the totals and are included in the "Export to Excel" / "Place in Capex Folder" workbooks (rolled into their group's subtotal). NOTE: while a deal has any custom items, the "Place In Proforma" button is disabled (custom lines aren't wired into the proforma template yet) — use the Excel export instead, or remove the custom items to import into the proforma. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee); custom items can't be a "%" base. A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 - NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
 3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab.
@@ -8111,6 +8535,7 @@ TROUBLESHOOTING
 - Proforma import pulls 0 units → the newest model may be an empty shell; use ⬆ Upload XLS with the right file.
 - A section won't show a green check → a required field is blank; use 📋 Export Missing Fields.
 - Export buttons grayed out → give the property a name and price at least one Budget item.
+- "Place In Proforma" grayed out but Export works → the deal has custom line items, which the proforma template can't take in yet; use "Export to Excel" / "Place in Capex Folder", or delete the custom items to import into the proforma.
 - Status stuck on "Saving…" → click it to resolve, or ☰ → Re-sync from Drive.
 - Help chat itself needs the shared AI key, which loads once Google Drive is connected.`;
 
