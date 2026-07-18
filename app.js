@@ -5828,6 +5828,12 @@ async function buildCapexWorkbook() {
   ws.mergeCells(`A${rowBanner.number}:M${rowBanner.number}`);
 
   const stRow = mkSummary('MULTIFAMILY SUBTOTAL', NAVY, WHITE, true);
+  // The MULTIFAMILY SUBTOTAL is the first row the proforma-import worker maps into
+  // the CAPEX tab (everything from here down, just below the Copy/Paste banner).
+  // Expose its ACTUAL row number so the job mapping (submitProformaCapexJob) stays
+  // correct even when the header block above shifts — e.g. the row-2 provenance
+  // stamp added one row. Was hardcoded to 12; keep this the source of truth.
+  workbook._exportFirstDataRow = stRow.number;
 
   ws.addRow([]);
   const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', 'GL Account', 'Notes', 'Photos']);
@@ -6104,7 +6110,7 @@ async function buildCapexBlob() {
   const workbook = await buildCapexWorkbook();
   const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const buf = await workbook.xlsx.writeBuffer();
-  return { blob: new Blob([buf], { type: XLSX_MIME }), filename };
+  return { blob: new Blob([buf], { type: XLSX_MIME }), filename, firstDataRow: workbook._exportFirstDataRow };
 }
 
 // "Export to Excel" — download only (never touches Drive).
@@ -6298,7 +6304,7 @@ async function submitProformaCapexJob() {
     // Build the capex workbook and upload it into the jobs folder so the worker can read
     // the values below the "Copy/Paste Below This Line to Proforma" banner.
     toast('Building capex workbook…');
-    const { blob } = await buildCapexBlob();
+    const { blob, firstDataRow } = await buildCapexBlob();
     const jobsFolderId = await ensureProformaJobsFolder();
     const jobId = 'pj_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
     const capexName = `job_${jobId}_capex.xlsx`;
@@ -6317,7 +6323,7 @@ async function submitProformaCapexJob() {
       overwriteExisting: isCapexBProforma(chosen.name),
       capex: { fileId: capexUp.id, fileName: capexName },
       // How the export maps into the proforma CAPEX tab (worker verifies against the file):
-      mapping: { bannerText: 'Copy/Paste Below This Line to Proforma', exportFirstDataRow: 12, capexAnchorRow: 25 },
+      mapping: { bannerText: 'Copy/Paste Below This Line to Proforma', exportFirstDataRow: firstDataRow || 13, capexAnchorRow: 25 },
       requestedBy: { email: (CURRENT_USER || {}).email || '', name: (CURRENT_USER || {}).name || '' },
       requestedAt, startedAt: null, finishedAt: null, worker: null,
       output: null, error: null, attempts: 0,

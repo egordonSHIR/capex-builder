@@ -1324,10 +1324,10 @@ window.SCHEMA = {
     "name": "Soft Costs",
     "sections": [
       {
-        "name": "General",
+        "name": "Zoning",
         "items": [
           {
-            "name": "Zoning",
+            "name": "Legal",
             "default_cost_per_item": 25000.0,
             "notes": null,
             "gl_account": "17966: CIP Zoning",
@@ -1616,6 +1616,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17445: CIP Foundation (15 Yrs)",
             "default_qty_type": "Each"
+          },
+          {
+            "name": "Excavation",
+            "default_cost_per_item": 10000.0,
+            "notes": null,
+            "gl_account": "17445: CIP Foundation (15 Yrs)",
+            "default_qty_type": "Building"
           },
           {
             "name": "Add'l Floor Area",
