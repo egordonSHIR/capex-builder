@@ -361,6 +361,9 @@ const PROP_NAME_MAX = 25;
 function saveState() {
   if (STATE) {
     STATE.updated = new Date().toISOString();
+    // Remember who most recently edited this deal (for the export provenance
+    // stamp). Falls back to any prior value if the signed-in user isn't known yet.
+    STATE.lastEditor = (CURRENT_USER && CURRENT_USER.email) || STATE.lastEditor || '';
     // Property Name is capped at PROP_NAME_MAX chars (truncate anything longer).
     if (STATE.phase1 && typeof STATE.phase1.prop_name === 'string' && STATE.phase1.prop_name.length > PROP_NAME_MAX) {
       STATE.phase1.prop_name = STATE.phase1.prop_name.slice(0, PROP_NAME_MAX);
@@ -608,6 +611,30 @@ function el(tag, attrs = {}, ...children) {
 function fmtMoney(n) {
   if (!isFinite(n)) return '$0';
   return '$' + Math.round(n).toLocaleString();
+}
+// Export provenance strings for row 2 of any workbook export:
+//   A2 = when THIS file was exported; B2 = who most recently updated this deal's
+//   capex budget + when. Shared across every xlsx export.
+function exportMetaLines() {
+  const ed = (STATE && STATE.lastEditor) || (CURRENT_USER && CURRENT_USER.email) || 'unknown';
+  const upd = (STATE && STATE.updated) ? new Date(STATE.updated) : null;
+  const updStr = (upd && !isNaN(upd.getTime())) ? upd.toLocaleString() : 'unknown';
+  return {
+    a2: `Exported: ${new Date().toLocaleString()}`,
+    b2: `Last updated by: ${ed} — ${updStr}`,
+  };
+}
+// Write the provenance stamp into cells A2 (export time) + B2 (last editor +
+// update time) of a worksheet whose row 2 is free (unit mix, basics, survey…).
+// The main capex export inserts its own metaRow instead (row 2 there is styled +
+// kept out of the collapsed header band). Returns the metadata row.
+function stampExportMetaA2B2(ws) {
+  const meta = exportMetaLines();
+  const a2 = ws.getCell('A2'); a2.value = meta.a2;
+  const b2 = ws.getCell('B2'); b2.value = meta.b2;
+  a2.font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+  b2.font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+  return ws.getRow(2);
 }
 // Gray background while an input/textarea is empty; normal white once it has a value.
 function grayWhenEmpty(inputEl) {
@@ -3244,6 +3271,7 @@ async function exportUnitMixXlsx() {
   title.alignment = { vertical: 'middle' };
   ws.mergeCells(`A${title.number}:G${title.number}`);
   ws.addRow([]);
+  stampExportMetaA2B2(ws);   // A2 = export time, B2 = last editor + update time
 
   const header = ws.addRow(['Unit Type', '# Units', 'Beds', 'Baths', 'SqFt / Unit', 'Status', 'Total SF']);
   header.font = { bold: true };
@@ -4071,6 +4099,27 @@ function recomputePctRowsAndSummary(summaryNode) {
 }
 // Update the per-section / per-group "$ subtotal" badges shown on collapsed
 // Budget headers (sum of $ Amt across each section's / group's checked items).
+// Active (non-skipped) $ total for a whole group, including its custom items.
+function groupActiveTotal(gi) {
+  const g = SCHEMA.phase3[gi]; if (!g) return 0;
+  let sum = 0;
+  g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
+  ensureCustomItems().forEach(ci => { if (!ci.excluded && ci.groupName === g.name) sum += getCustomItemTotal(ci); });
+  return sum;
+}
+// "$X,XXX/unit" (total ÷ MF units); em-dash when the unit count is unknown.
+function perUnitStr(total) {
+  const u = Number(STATE.phase1.mf_units) || 0;
+  return u > 0 ? fmtMoney(total / u) + '/unit' : '—/unit';
+}
+// Contingency + construction-mgmt markup. ADDITIVE (matches the proforma summary:
+// Total = Subtotal + Subtotal×contingency + Subtotal×mgmt-fee), each defaulting to
+// 10% from phase4. mult = 1 + cont + fee.
+function budgetMarkupPcts() {
+  const cont = Number(STATE.phase4 && STATE.phase4.contingency_pct) || 0;
+  const fee  = Number(STATE.phase4 && STATE.phase4.mgmt_fee_pct) || 0;
+  return { cont, fee, mult: 1 + cont + fee };
+}
 function refreshBudgetBadges() {
   const root = $('#phase-content');
   if (!root) return;
@@ -4082,13 +4131,48 @@ function refreshBudgetBadges() {
     getCustomItemsFor(SCHEMA.phase3[gi].name, sec.name).forEach(ci => { if (!ci.excluded) sum += getCustomItemTotal(ci); });
     b.textContent = fmtMoney(sum);
   });
+  // Group header badge: $ amount + $/unit (shown when the group is collapsed).
   root.querySelectorAll('[data-b-badge-group]').forEach(b => {
     const gi = Number(b.dataset.bBadgeGroup);
-    const g = SCHEMA.phase3[gi]; if (!g) return;
-    let sum = 0; g.sections.forEach((sec, si) => sec.items.forEach((_, ii) => { if (!isExcluded(gi, si, ii)) sum += getDetailItemTotal(gi, si, ii); }));
-    ensureCustomItems().forEach(ci => { if (!ci.excluded && ci.groupName === g.name) sum += getCustomItemTotal(ci); });
-    b.textContent = fmtMoney(sum);
+    if (!SCHEMA.phase3[gi]) return;
+    const sum = groupActiveTotal(gi);
+    const amt = b.querySelector('[data-bg-amt]'); if (amt) amt.textContent = fmtMoney(sum);
+    const pu = b.querySelector('[data-bg-pu]'); if (pu) pu.textContent = perUnitStr(sum);
   });
+  // Group footer: total (with $/unit) + total-with-markups (with $/unit).
+  const { mult } = budgetMarkupPcts();
+  root.querySelectorAll('[data-b-foot]').forEach(foot => {
+    const gi = Number(foot.dataset.bFoot); if (!SCHEMA.phase3[gi]) return;
+    const pre = groupActiveTotal(gi), post = pre * mult;
+    const set = (sel, txt) => { const e = foot.querySelector(sel); if (e) e.textContent = txt; };
+    set('[data-foot-pre]', fmtMoney(pre));      set('[data-foot-pre-pu]', perUnitStr(pre));
+    set('[data-foot-post]', fmtMoney(post));    set('[data-foot-post-pu]', perUnitStr(post));
+  });
+}
+// Colored footer at the bottom of each Budget group body (same hue as the group
+// banner): the group total with its $/unit, then the total WITH contingency +
+// construction-mgmt fee added, also with its $/unit. Live-updated by
+// refreshBudgetBadges via the data-b-foot / data-foot-* hooks.
+function renderGroupFooter(gi, groupName, groupSum) {
+  const color = GROUP_COLORS[groupName] || '#1E3A8A';
+  const txt = textOn(color);
+  const { cont, fee, mult } = budgetMarkupPcts();
+  const post = groupSum * mult;
+  const rowStyle = 'display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap';
+  const mkVals = (amtAttr, puAttr, amt) => el('span', { style: 'display:inline-flex;align-items:baseline;gap:10px;white-space:nowrap' },
+    el('span', Object.assign({ style: 'font-weight:700;font-variant-numeric:tabular-nums' }, amtAttr), fmtMoney(amt)),
+    el('span', Object.assign({ style: 'font-size:12px;opacity:0.9;font-variant-numeric:tabular-nums' }, puAttr), perUnitStr(amt)));
+  return el('div', {
+    class: 'group-footer', 'data-b-foot': gi,
+    style: `background:${color};color:${txt};padding:8px 14px;border-top:2px solid rgba(0,0,0,0.18);border-radius:0 0 6px 6px;display:flex;flex-direction:column;gap:3px;margin-top:6px`
+  },
+    el('div', { style: rowStyle },
+      el('span', { style: 'font-weight:600' }, `${groupName.toUpperCase()} — Total`),
+      mkVals({ 'data-foot-pre': '' }, { 'data-foot-pre-pu': '' }, groupSum)),
+    el('div', { style: rowStyle },
+      el('span', { style: 'font-size:12px;opacity:0.92' }, `+ Contingency ${Math.round(cont * 100)}% + Const. Mgmt ${Math.round(fee * 100)}%`),
+      mkVals({ 'data-foot-post': '' }, { 'data-foot-post-pu': '' }, post))
+  );
 }
 // Re-populate every visible % group dropdown when CAPEX Groups change
 // (added / renamed / deleted) so the in-line item % selectors stay current
@@ -4349,11 +4433,17 @@ function renderPhase3() {
       );
       groupBody.appendChild(secNode);
     });
-    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi }, fmtMoney(groupSum));
+    // Collapsed-group header badge: $ amount AND $/unit side by side.
+    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi },
+      el('span', { 'data-bg-amt': '' }, fmtMoney(groupSum)),
+      el('span', { 'data-bg-pu': '', style: 'font-weight:600;margin-left:10px;opacity:0.85' }, perUnitStr(groupSum)));
     const groupTxt = GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null;
     const groupSkip = renderSkipHeaderToggle(gi, null, summary, groupTxt);
     const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
+    // Colored group footer (total + total-with-markups, each with $/unit) at the
+    // bottom of the group body, so it collapses/expands with the group.
+    groupBody.appendChild(renderGroupFooter(gi, group.name, groupSum));
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
   });
@@ -5524,7 +5614,13 @@ function renderPhase4() {
     }
   }
 
-  root.appendChild(renderFlagSection('Sanity Check', '#dc2626', null, warnings, 'No issues found.', warnings.length === 0));
+  // CONSOLIDATED "Sanity Check & Red Flags" at the TOP — the automated sanity
+  // warnings + any red-flag/consideration notes, combined into one box (was two
+  // separate sections; red flags used to sit below Revenue/Opex).
+  const redFlagLines = collectBudgetFlags(RED_FLAG_RULES);
+  const sanityLines = warnings.concat(redFlagLines);
+  root.appendChild(renderFlagSection('Sanity Check & Red Flags', '#dc2626', null, sanityLines,
+    'No issues or red flags found.', sanityLines.length === 0));
 
   // Revenue Drivers — green; Opex Reducers — red. Populated from REVENUE_DRIVER_RULES /
   // OPEX_REDUCER_RULES against whatever is checked on the Budget tab. Collapsed by
@@ -5535,13 +5631,6 @@ function renderPhase4() {
   const opexLines = collectBudgetFlags(OPEX_REDUCER_RULES);
   root.appendChild(renderFlagSection('Opex Reducers', '#b91c1c', '#fef2f2',
     opexLines, 'No opex-reducing items currently selected on the Budget tab.', opexLines.length === 0));
-
-  // Red Flags / Considerations — gray, no rules wired up yet (placeholder for a future
-  // request). Stays gray regardless of content — unlike Revenue/Opex this isn't a
-  // green-good / red-bad signal, just a neutral running list.
-  const redFlagLines = collectBudgetFlags(RED_FLAG_RULES);
-  root.appendChild(renderFlagSection('Red Flags / Considerations', '#6b7280', '#f3f4f6',
-    redFlagLines, 'No red flags or considerations yet.', redFlagLines.length === 0));
 
   // Notes — free-form. (Contingency & Construction Mgmt Fee were removed 2026-07-06:
   // they now live in the MFVA proforma CAPEX tab, applied to the Multifamily Subtotal,
@@ -5693,6 +5782,13 @@ async function buildCapexWorkbook() {
   titleRow.alignment = { vertical: 'middle' };
   ws.mergeCells(`A${titleRow.number}:M${titleRow.number}`);
 
+  // Row 2 — export provenance: A2 = export time, B2 = last editor + update time.
+  // Kept OUT of the collapsed header band below so it's always visible.
+  const meta = exportMetaLines();
+  const metaRow = ws.addRow([meta.a2, meta.b2]);
+  metaRow.getCell(1).font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+  metaRow.getCell(2).font = { italic: true, size: 9, color: { argb: 'FF64748B' } };
+
   const propRow = ws.addRow(['Property:', propName]); propRow.getCell(1).font = { bold: true };
   const addrRow = ws.addRow(['Address:', [STATE.phase1.mailing_address, STATE.phase1.city, STATE.phase1.state, STATE.phase1.zip].filter(Boolean).join(', ')]);
   addrRow.getCell(1).font = { bold: true };
@@ -5741,15 +5837,14 @@ async function buildCapexWorkbook() {
   colHeaderRow.eachCell((c) => { c.alignment = { horizontal: 'center', vertical: 'middle' }; });
   ws.views = [{ state: 'frozen', ySplit: colHeaderRow.number }];
 
-  // Collapse the header/summary block (rows 2–13: Property/Address/# Units/Year
-  // Built, the Total Capex / Mgmt Fee / Contingency / Commercial summary, the
-  // Copy/Paste banner, and the MULTIFAMILY SUBTOTAL) into a COLLAPSED outline
-  // group by default, so the export opens compact — just the title (row 1) + the
-  // frozen column header (row 14) + the line items. Expand via the + in the row
-  // gutter. The freeze stays at row 14 (colHeaderRow) so the column headers pin
-  // while scrolling the items; the collapsed rows above just take no height.
-  // (outlineProperties.summaryBelow is true → the +/- control sits on row 14.)
-  for (let n = 2; n < colHeaderRow.number; n++) {   // rows 2..13
+  // Collapse the header/summary block (Property/Address/# Units/Year Built, the
+  // Total Capex / Mgmt Fee / Contingency / Commercial summary, the Copy/Paste
+  // banner, and the MULTIFAMILY SUBTOTAL) into a COLLAPSED outline group by
+  // default, so the export opens compact — just the title (row 1), the always-
+  // visible provenance line (row 2), the frozen column header, and the line
+  // items. Expand via the + in the row gutter. Starts at row 3 so the metaRow
+  // (row 2) stays out of the collapsed band and always shows.
+  for (let n = 3; n < colHeaderRow.number; n++) {
     const r = ws.getRow(n);
     r.outlineLevel = 1;
     r.hidden = true;
