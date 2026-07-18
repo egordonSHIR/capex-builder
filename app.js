@@ -5597,7 +5597,12 @@ function renderBudgetSummarySection() {
   const { cont, fee, mult } = budgetMarkupPcts();
   const per = (n) => units > 0 ? fmtMoney(n / units) : '—';
   let totItems = 0, totAmt = 0;
-  const rowsData = SCHEMA.phase3.map((group, gi) => {
+  const rowsData = [];
+  SCHEMA.phase3.forEach((group, gi) => {
+    // Commercial Tenant Costs is left out of the Capex Builder summary — it lives
+    // separately in the proforma (it DOES get the CT & CM markup there, just not
+    // modeled here). Excluding it makes this TOTAL the Multifamily Subtotal.
+    if (group.name === 'Commercial Tenant Costs') return;
     let items = 0;
     group.sections.forEach((sec, si) => sec.items.forEach((_, ii) => {
       if (!isExcluded(gi, si, ii) && getDetailItemTotal(gi, si, ii) > 0) items++;
@@ -5605,7 +5610,7 @@ function renderBudgetSummarySection() {
     ensureCustomItems().forEach(ci => { if (!ci.excluded && ci.groupName === group.name && getCustomItemTotal(ci) > 0) items++; });
     const amt = groupActiveTotal(gi);
     totItems += items; totAmt += amt;
-    return { name: group.name, color: GROUP_COLORS[group.name] || '#1E3A8A', items, amt };
+    rowsData.push({ name: group.name, color: GROUP_COLORS[group.name] || '#1E3A8A', items, amt });
   });
 
   const th = (txt, align) => el('th', { style: `padding:8px 10px;text-align:${align};font-size:11px;font-weight:700;color:#fff;background:var(--primary);white-space:nowrap` }, txt);
@@ -5621,7 +5626,7 @@ function renderBudgetSummarySection() {
     numCell(fmtMoney(r.amt * mult)), numCell(per(r.amt * mult))
   ));
   const totalRow = el('tr', { style: 'border-top:2px solid var(--primary);background:#f1f5f9' },
-    el('td', { style: 'padding:8px 10px;font-weight:800' }, 'TOTAL'),
+    el('td', { style: 'padding:8px 10px;font-weight:800' }, 'TOTAL (Multifamily)'),
     el('td', { style: 'padding:8px 10px;text-align:center;font-weight:800;font-variant-numeric:tabular-nums' }, String(totItems)),
     numCell(fmtMoney(totAmt), true), numCell(per(totAmt), true),
     numCell(fmtMoney(totAmt * mult), true), numCell(per(totAmt * mult), true)
@@ -5632,7 +5637,7 @@ function renderBudgetSummarySection() {
   const noteUnits = units > 0 ? `${units.toLocaleString()} MF units` : '⚠ set # MF Units in Basics';
   const body = el('div', { class: 'section-body' },
     el('div', { style: 'padding:2px 2px 10px;font-size:12px;color:var(--muted)' },
-      `$/Unit = ÷ ${noteUnits}.  "w CT & CM" = + Contingency ${Math.round(cont * 100)}% + Construction Mgmt ${Math.round(fee * 100)}%.`),
+      `$/Unit = ÷ ${noteUnits}.  "w CT & CM" = + Contingency ${Math.round(cont * 100)}% + Construction Mgmt ${Math.round(fee * 100)}%.  Commercial Tenant Costs is handled separately in the proforma (excluded here).`),
     el('div', { style: 'overflow-x:auto' }, table));
 
   // Starts EXPANDED (no 'collapsed' class) — it's the headline readout.
