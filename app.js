@@ -5588,6 +5588,60 @@ function renderFlagSection(title, color, bg, lines, emptyText, startCollapsed) {
   return wrap;
 }
 
+// "Budget Summary" table for the Finalize tab: one row per Budget group with
+// # Items (priced/active), $ Amt, $/Unit, and the same two WITH Contingency +
+// Construction Mgmt added ("w CT & CM" = ×(1+cont+fee)), plus a TOTAL row.
+// Recomputed on each Finalize render (Finalize is a fresh render per tab switch).
+function renderBudgetSummarySection() {
+  const units = Number(STATE.phase1.mf_units) || 0;
+  const { cont, fee, mult } = budgetMarkupPcts();
+  const per = (n) => units > 0 ? fmtMoney(n / units) : '—';
+  let totItems = 0, totAmt = 0;
+  const rowsData = SCHEMA.phase3.map((group, gi) => {
+    let items = 0;
+    group.sections.forEach((sec, si) => sec.items.forEach((_, ii) => {
+      if (!isExcluded(gi, si, ii) && getDetailItemTotal(gi, si, ii) > 0) items++;
+    }));
+    ensureCustomItems().forEach(ci => { if (!ci.excluded && ci.groupName === group.name && getCustomItemTotal(ci) > 0) items++; });
+    const amt = groupActiveTotal(gi);
+    totItems += items; totAmt += amt;
+    return { name: group.name, color: GROUP_COLORS[group.name] || '#1E3A8A', items, amt };
+  });
+
+  const th = (txt, align) => el('th', { style: `padding:8px 10px;text-align:${align};font-size:11px;font-weight:700;color:#fff;background:var(--primary);white-space:nowrap` }, txt);
+  const numCell = (txt, bold) => el('td', { style: `padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap${bold ? ';font-weight:800' : ''}` }, txt);
+
+  const headRow = el('tr', {}, th('Group', 'left'), th('# Items', 'center'), th('$ Amt', 'right'), th('$/Unit', 'right'), th('$ Amt (w CT & CM)', 'right'), th('$/Unit (w CT & CM)', 'right'));
+  const bodyRows = rowsData.map(r => el('tr', { style: 'border-bottom:1px solid #eef1f5' },
+    el('td', { style: 'padding:7px 10px;white-space:nowrap' },
+      el('span', { style: `display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.color};margin-right:8px;vertical-align:middle` }),
+      el('span', { style: 'font-weight:600' }, r.name)),
+    el('td', { style: 'padding:7px 10px;text-align:center;font-variant-numeric:tabular-nums' }, String(r.items)),
+    numCell(fmtMoney(r.amt)), numCell(per(r.amt)),
+    numCell(fmtMoney(r.amt * mult)), numCell(per(r.amt * mult))
+  ));
+  const totalRow = el('tr', { style: 'border-top:2px solid var(--primary);background:#f1f5f9' },
+    el('td', { style: 'padding:8px 10px;font-weight:800' }, 'TOTAL'),
+    el('td', { style: 'padding:8px 10px;text-align:center;font-weight:800;font-variant-numeric:tabular-nums' }, String(totItems)),
+    numCell(fmtMoney(totAmt), true), numCell(per(totAmt), true),
+    numCell(fmtMoney(totAmt * mult), true), numCell(per(totAmt * mult), true)
+  );
+  const table = el('table', { style: 'width:100%;border-collapse:collapse;font-size:13px' },
+    el('thead', {}, headRow), el('tbody', {}, ...bodyRows, totalRow));
+
+  const noteUnits = units > 0 ? `${units.toLocaleString()} MF units` : '⚠ set # MF Units in Basics';
+  const body = el('div', { class: 'section-body' },
+    el('div', { style: 'padding:2px 2px 10px;font-size:12px;color:var(--muted)' },
+      `$/Unit = ÷ ${noteUnits}.  "w CT & CM" = + Contingency ${Math.round(cont * 100)}% + Construction Mgmt ${Math.round(fee * 100)}%.`),
+    el('div', { style: 'overflow-x:auto' }, table));
+
+  // Starts EXPANDED (no 'collapsed' class) — it's the headline readout.
+  return el('section', { class: 'section' },
+    el('header', { class: 'section-header', onClick: (e) => e.currentTarget.parentElement.classList.toggle('collapsed') },
+      el('span', {}, 'Budget Summary'), el('span', { class: 'chev' }, '▼')),
+    body);
+}
+
 function renderPhase4() {
   const root = el('div');
   // Bulk Expand/Collapse-all bar (matches Phases 1-3) so Finalize behaves like
@@ -5621,6 +5675,10 @@ function renderPhase4() {
   const sanityLines = warnings.concat(redFlagLines);
   root.appendChild(renderFlagSection('Sanity Check & Red Flags', '#dc2626', null, sanityLines,
     'No issues or red flags found.', sanityLines.length === 0));
+
+  // Budget Summary — per-group table (# Items / $ Amt / $/Unit + the same with
+  // Contingency & Construction-Mgmt markups) + TOTAL row.
+  root.appendChild(renderBudgetSummarySection());
 
   // Revenue Drivers — green; Opex Reducers — red. Populated from REVENUE_DRIVER_RULES /
   // OPEX_REDUCER_RULES against whatever is checked on the Budget tab. Collapsed by
