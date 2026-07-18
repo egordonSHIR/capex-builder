@@ -743,6 +743,9 @@ main {
    (see renderPhase3) flips `.hide-skipped` on the whole Budget page root, and
    this rule hides every skipped (N/A) row at once. */
 .hide-skipped .detail-item-wrap.row-excluded { display: none !important; }
+/* Hide N/A also tucks away the per-section "+ Add custom item" button, so a
+   hidden/collapsed view stays clean (Show N/A brings it back). */
+.hide-skipped .add-custom-item-btn { display: none !important; }
 
 /* Colored CAPEX group sections (Questionnaire + Details) */
 .group-section > .group-header { letter-spacing: 0.5px; }
