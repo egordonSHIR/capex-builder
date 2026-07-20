@@ -5739,7 +5739,10 @@ function renderPhase4() {
       proformaBtn.textContent = proformaJob.status === 'processing' ? '⏳  Working in Proforma…' : '⏳  Proforma queued…';
       proformaBtn.disabled = true; proformaBtn.style.cssText = btnStyle('#3477B2') + ';cursor:default'; proformaBtn.onclick = null;
       proformaBtn.title = 'A proforma import is already running';
-      proformaStatus.style.color = '#475569';
+      // Pending-job note: red + larger so the "leave this page / ~30 min" status is unmissable.
+      proformaStatus.style.color = '#dc2626';
+      proformaStatus.style.fontSize = '15px';
+      proformaStatus.style.fontWeight = '600';
       proformaStatus.textContent = `⏳ A processing agent is ${proformaJob.outputName && /capexb/i.test(proformaJob.outputName) && proformaJob.proformaName === proformaJob.outputName ? `refreshing "${proformaJob.proformaName}"` : `building "${proformaJob.outputName || 'the CapexB proforma'}" from "${proformaJob.proformaName || 'the proforma'}"`} via Excel COM. It will appear in 2. UW-Analysis — typically ~30 min–1 hour. You can leave this page.`;
       proformaStatus.style.display = '';
       return;
