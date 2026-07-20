@@ -2904,7 +2904,8 @@ function surveyJobStatusLine(rebuild) {
     '. Processing usually takes 30 min to 1 hour; the breakdown imports here automatically when done — you can leave the page.' +
     (stale ? ' ⚠ Taking longer than usual — is the survey-job worker running?' : '');
   return el('div', { class: 'muted small', style: 'padding:0 16px 6px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap' },
-    el('span', { style: 'flex:1;min-width:220px' }, msg),
+    // Pending-job note: red + slightly larger so users don't keep re-clicking Process Survey while it runs.
+    el('span', { style: 'flex:1;min-width:220px;color:#dc2626;font-size:14px;font-weight:600' }, msg),
     el('button', { class: 'um-btn secondary', style: 'font-size:11px;padding:3px 8px', onClick: () => cancelSurveyJob(rebuild) }, '✕ Cancel'));
 }
 
