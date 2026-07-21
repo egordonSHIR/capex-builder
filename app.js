@@ -3725,9 +3725,10 @@ const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allow
   '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
   '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)',
   '# Walkways', '# Stairways', '# Stairwells'];
-// Interior "sizing" Qty Types: when an Interior row uses one of these, its
-// auto-computed # Qty (units being renovated) is multiplied by the matching
-// property-wide average from the Unit Mix. See avgSizingForUnitType().
+// "Sizing" Qty Types: when a row uses one of these, its $ Amt multiplies by the
+// matching property-wide average from the Unit Mix — $ Amt = # Qty × avg × $/Qty
+// (# Qty stays the plain unit/entered count; the average is applied to the total,
+// not folded into # Qty). See avgSizingForUnitType() / effectiveQtyForTotal().
 const AVG_QTY_TYPES = ['Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
 
 // Basics-linked Qty Types: Qty Type name -> Basics/Physical schema key. When a
@@ -3803,20 +3804,35 @@ function basicsQtyValue(ut) {
   const n = basicsFieldNum(key);
   return n == null ? 0 : n;
 }
+// Human-readable label of a Basics/Physical schema field (falls back to the key).
+function basicsFieldLabel(key) {
+  for (const ph of ['phase1', 'phase2'])
+    for (const sec of (SCHEMA[ph] || []))
+      for (const f of (sec.fields || []))
+        if (f.key === key) return f.label || key;
+  return key;
+}
 // Human-readable tooltip for a Basics-linked Qty Type's auto-filled # Qty.
 // Computed types show their factor fields joined by × (e.g. "Walkway Length ×
 // Walkway Width × # Walkways"); single-field types name the source field.
 function basicsQtyTooltip(ut) {
-  const labelOf = (k) => {
-    for (const ph of ['phase1', 'phase2'])
-      for (const sec of (SCHEMA[ph] || []))
-        for (const f of (sec.fields || []))
-          if (f.key === k) return f.label || k;
-    return k;
-  };
   const factors = BASICS_QTY_TYPE_COMPUTED[ut];
-  if (factors) return `Auto-computed from Basics: ${factors.map(f => typeof f === 'number' ? String(f) : labelOf(f)).join(' × ')}`;
+  if (factors) return `Auto-computed from Basics: ${factors.map(f => typeof f === 'number' ? String(f) : basicsFieldLabel(f)).join(' × ')}`;
   return `Auto-filled from Basics → ${ut}`;
+}
+// The blank Basics/computed source field(s) backing a Basics-linked Qty Type —
+// the value(s) the user must enter before that Qty Type can produce a real # Qty.
+// Returns [] when the Qty Type isn't Basics-linked or every source field already
+// has a value. A filled-in 0 counts as filled — only truly-blank (never-entered)
+// fields are flagged (basicsFieldNum returns null only for blank/non-numeric).
+function qtyTypeMissingInputs(ut) {
+  const factors = BASICS_QTY_TYPE_COMPUTED[ut];
+  if (factors) {
+    return factors.filter(f => typeof f === 'string' && basicsFieldNum(f) === null).map(basicsFieldLabel);
+  }
+  const key = BASICS_QTY_TYPE_FIELDS[ut];
+  if (key) return basicsFieldNum(key) === null ? [basicsFieldLabel(key)] : [];
+  return [];
 }
 // Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,
 // inserting a disabled "----------" separator between the base types and the
@@ -3929,22 +3945,32 @@ function avgSizingForUnitType(ut, avgsOpt) {
   return null;
 }
 
+// Effective quantity used to compute a row's $ Amt. For an Avg-* "sizing" Qty
+// Type the row's # Qty stays the plain UNIT count and the property-wide Unit-Mix
+// average (sqft / beds / baths) is applied HERE as a separate factor, so
+//   $ Amt = (# Qty × avg) × $/Qty
+// (e.g. Flooring priced $/sqft = units being renovated × avg sqft × rate). For
+// every other Qty Type the average is 1, so the effective qty == # Qty. Keeping
+// the average OUT of # Qty (it used to be folded in) makes # Qty read as an
+// intuitive unit count while the total still reflects unit size. Rounded so the
+// Excel export's G×I (# Qty × $/Qty) reproduces this total exactly.
+function effectiveQtyForTotal(qty, ut) {
+  const q = Number(qty) || 0;
+  const s = avgSizingForUnitType(ut);
+  return s == null ? q : Math.round(q * s);
+}
+
 // Pure Orig/Part/Reno bucket-qty formula, shared by Interior schema rows and by
-// custom line items. `spec` = {pct_orig, pct_part, pct_reno, unit_type}; counts
-// default to the live Unit Mix status counts, avgs to the live Unit Mix averages.
-// Returns the rounded unit count, scaled by the matching Avg-* average when the
-// Qty Type is one of AVG_QTY_TYPES.
-function computeBucketQty(spec, countsOpt, avgsOpt) {
+// custom line items. `spec` = {pct_orig, pct_part, pct_reno}; counts default to
+// the live Unit Mix status counts. Returns the rounded UNIT count. The Avg-*
+// sizing average is NOT folded in here anymore — it's applied to the $ Amt via
+// effectiveQtyForTotal, so # Qty always reads as a plain unit count.
+function computeBucketQty(spec, countsOpt) {
   const c = countsOpt || getUnitStatusCounts();
   const po = Number(spec.pct_orig) || 0;
   const pp = Number(spec.pct_part) || 0;
   const pr = Number(spec.pct_reno) || 0;
-  let qty = Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
-  // Avg-* Qty Types scale the unit count by the matching property-wide average
-  // (sqft / beds / baths) so e.g. Flooring priced $/sqft computes against total sqft.
-  const sizing = avgSizingForUnitType(spec.unit_type, avgsOpt);
-  if (sizing != null) qty = Math.round(qty * sizing);
-  return qty;
+  return Math.round((po / 100) * c.orig + (pp / 100) * c.part + (pr / 100) * c.reno);
 }
 function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
   const v = getP3(gi, si, ii);
@@ -4002,18 +4028,23 @@ function getCapexGroupTotal(groupId) {
     if (isExcluded(gi, si, ii)) continue; // turned-off rows don't count toward a CAPEX-group base
     const v = STATE.phase3[key];
     if (!v || v.unit_type === '%') continue;
-    total += (Number(v.qty) || 0) * getEffectiveUnitCost(gi, si, ii);
+    // Route through getDetailItemTotal so an Avg-* member contributes its real
+    // $ Amt (# Qty × unit-mix avg × $/Qty), not just # Qty × $/Qty. (% rows are
+    // already skipped above, so this never recurses back into getCapexGroupTotal.)
+    total += getDetailItemTotal(gi, si, ii);
   }
   return total;
 }
-// Unified $ Amt calculation — handles both normal (qty × cost) and % rows.
+// Unified $ Amt calculation — handles normal, Avg-* sizing, and % rows.
 function getDetailItemTotal(gi, si, ii) {
   const v = getP3(gi, si, ii);
   const qty = Number(v.qty) || 0;
   if (v.unit_type === '%') {
     return (qty / 100) * getCapexGroupTotal(v.pct_group_id);
   }
-  return qty * getEffectiveUnitCost(gi, si, ii);
+  // Avg-* Qty Types multiply by the Unit-Mix average here (effectiveQtyForTotal
+  // returns # Qty unchanged for every other type): $ Amt = (# Qty × avg) × $/Qty.
+  return effectiveQtyForTotal(qty, v.unit_type) * getEffectiveUnitCost(gi, si, ii);
 }
 // Look up the schema item for a ckKey (used by the CAPEX Groups UI to render
 // item names + filter the Add Item dropdown).
@@ -4074,11 +4105,66 @@ function resolveCustomTarget(ci) {
   return { gi, si };
 }
 // $ Amt for a custom item. No finish/options/schema-default → plain qty × cost.
-// Bucket items derive qty from the Orig/Part/Reno percentages (Avg-* aware).
+// Bucket items derive qty from the Orig/Part/Reno percentages; an Avg-* Qty Type
+// multiplies by the Unit-Mix average via effectiveQtyForTotal (same as schema rows).
 function getCustomItemTotal(ci) {
   if (!ci) return 0;
   const qty = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
-  return qty * (Number(ci.unit_cost) || 0);
+  return effectiveQtyForTotal(qty, ci.unit_type) * (Number(ci.unit_cost) || 0);
+}
+
+// ---------- Missing-Basics guard (a Qty Type whose value isn't in Basics yet) ----------
+// A "priced" Budget row (not skipped, effective $/Qty > 0) that uses a Basics-
+// linked Qty Type auto-fills its # Qty from a Basics field. If that field is
+// blank the row silently reads 0 — so we flag it (red # Qty inline + a Finalize
+// gate that blocks export) until the field is filled. Interior rows are exempt:
+// their # Qty is bucket-computed from the Unit Mix, not from a Basics-linked
+// field, so a Basics-linked Qty Type there never auto-fills.
+function rowMissingInputs(gi, si, ii) {
+  if (isExcluded(gi, si, ii)) return [];
+  if (isInteriorGroup(gi)) return [];
+  const v = getP3(gi, si, ii);
+  const item = getSchemaItemByKey(ckKey(gi, si, ii));
+  const ut = v.unit_type || (item && item.default_qty_type) || '';
+  if (!ut || ut === '%') return [];
+  if (getEffectiveUnitCost(gi, si, ii) <= 0) return [];   // only rows the user is pricing
+  return qtyTypeMissingInputs(ut);
+}
+// Same check for a custom line item. Bucket customs (qty from the Orig/Part/Reno
+// %s) are exempt — their # Qty isn't Basics-linked.
+function customMissingInputs(ci) {
+  if (!ci || ci.excluded || ci.useBuckets) return [];
+  const ut = ci.unit_type || '';
+  if (!ut || ut === '%') return [];
+  if ((Number(ci.unit_cost) || 0) <= 0) return [];
+  return qtyTypeMissingInputs(ut);
+}
+// Toggle the red "fill a Basics field" flag on a schema row's # Qty cell.
+function applyMissingInputFlag(itemWrap, gi, si, ii) {
+  if (!itemWrap) return;
+  const qtyCell = itemWrap.querySelector('[data-qty-input]');
+  if (qtyCell) qtyCell.classList.toggle('qty-missing-input', rowMissingInputs(gi, si, ii).length > 0);
+}
+// Priced, non-skipped Budget rows (schema + custom) whose Qty Type needs a Basics
+// field that's still blank. Feeds the Finalize sanity list + the export gate.
+function collectBudgetBasicsGaps() {
+  const gaps = [];   // {name, ut, fields:[labels]}
+  SCHEMA.phase3.forEach((g, gi) => {
+    g.sections.forEach((s, si) => {
+      s.items.forEach((it, ii) => {
+        const fields = rowMissingInputs(gi, si, ii);
+        if (fields.length) {
+          const v = getP3(gi, si, ii);
+          gaps.push({ name: it.name, ut: v.unit_type || it.default_qty_type || '', fields });
+        }
+      });
+    });
+  });
+  ensureCustomItems().forEach(ci => {
+    const fields = customMissingInputs(ci);
+    if (fields.length) gaps.push({ name: ci.name || '(unnamed custom item)', ut: ci.unit_type || '', fields });
+  });
+  return gaps;
 }
 // Walk all % rows on the Details page and refresh their displayed $/Qty + $ Amt,
 // then update the running subtotal. Called whenever any qty/cost/group change
@@ -4749,6 +4835,7 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     type: 'text', inputmode: 'decimal',
     style: 'width:100%;padding:4px 6px;font-size:13px;text-align:right;box-sizing:border-box'
   });
+  qtyInp.setAttribute('data-qty-input', '');   // so the missing-Basics flag can find it
   setNumVal(qtyInp, v.qty);
   qtyInp.addEventListener('input', () => {
     if (qtyInp.readOnly) return;
@@ -4877,6 +4964,14 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       qtyInp.title = bv
         ? basicsQtyTooltip(effUT)
         : basicsQtyTooltip(effUT) + ' (not set — enter the value(s) on the Basics tab)';
+    } else if (AVG_QTY_TYPES.includes(effUT)) {
+      // Avg-* "sizing" type: # Qty is a free unit/quantity count; the Unit-Mix
+      // average is applied to the $ Amt (effectiveQtyForTotal), not to # Qty.
+      qtyInp.readOnly = false;
+      qtyInp.style.background = '';
+      const s = avgSizingForUnitType(effUT);
+      const metric = effUT === 'Avg Sqft' ? 'sqft' : effUT === 'Avg # BRs' ? 'beds' : 'baths';
+      qtyInp.title = `$ Amt = # Qty × avg ${metric}${s ? ` (${s < 10 ? s.toFixed(1) : Math.round(s).toLocaleString()})` : ' — set the Unit Mix'} × $/Qty`;
     } else {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
@@ -4914,6 +5009,8 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   // Reflect the row's on/off state (grays + locks + $0 when excluded).
   applyRowExcludedState(itemWrap);
+  // Flag a red # Qty if this row's Qty Type needs a Basics field that's still blank.
+  applyMissingInputFlag(itemWrap, gi, si, ii);
 
   return itemWrap;
 }
@@ -4957,10 +5054,14 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
     const cur = getP3(gi, si, ii);
     setNumVal(qtyInp, (Number(cur.qty) || 0) || '');
     const sizing = avgSizingForUnitType(cur.unit_type);
-    qtyInp.title = sizing != null
-      ? `Auto-computed: Σ (% × unit-status total) × avg ${cur.unit_type.replace(/^Avg /, '')} `
-        + `(${sizing < 10 ? sizing.toFixed(1) : Math.round(sizing).toLocaleString()}), rounded`
-      : 'Auto-computed: Σ (% × matching unit-status total), rounded';
+    if (sizing != null) {
+      // # Qty is now the plain UNIT count; the avg is a separate factor in $ Amt.
+      const metric = cur.unit_type === 'Avg Sqft' ? 'sqft' : cur.unit_type === 'Avg # BRs' ? 'beds' : 'baths';
+      qtyInp.title = `Auto-computed unit count: Σ (% × unit-status total), rounded. `
+        + `$ Amt = # Qty × avg ${metric} (${sizing < 10 ? sizing.toFixed(1) : Math.round(sizing).toLocaleString()}) × $/Qty.`;
+    } else {
+      qtyInp.title = 'Auto-computed: Σ (% × matching unit-status total), rounded';
+    }
   };
   function mkPctInput(field) {
     const baseStyle = 'width:100%;padding:4px 4px;font-size:12px;text-align:right;box-sizing:border-box';
@@ -5066,6 +5167,8 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
 
   // Reflect the row's on/off state (grays + locks + $0 when excluded).
   applyRowExcludedState(itemWrap);
+  // Flag a red # Qty if this row's Qty Type needs a Basics field that's still blank.
+  applyMissingInputFlag(itemWrap, gi, si, ii);
 
   return itemWrap;
 }
@@ -5127,6 +5230,8 @@ function renderCustomDetailItem(ci, opts, summaryNode) {
     const total = ci.excluded ? 0 : getCustomItemTotal(ci);
     totalEl.textContent = fmtMoney(total);
     wrap.style.background = ci.excluded ? '' : (total > 0 ? rowPricedBg : rowIdleBg);
+    // Red # Qty if this custom item's Qty Type needs a Basics field that's blank.
+    qtyInp.classList.toggle('qty-missing-input', customMissingInputs(ci).length > 0);
     if (summaryNode) { updateDetailSummary(summaryNode); refreshBudgetBadges(); }
   }
   // # Qty is read-only + auto-filled when buckets are on OR when a Basics-linked
@@ -5332,6 +5437,9 @@ function renderAddCustomItemButton(groupName, sectionName, secBody, opts, summar
 }
 
 function renderDetailTotals(itemWrap, gi, si, ii) {
+  // Reconcile the "missing Basics field" red flag (clears itself for excluded /
+  // no-longer-Basics-linked rows) on every recompute.
+  applyMissingInputFlag(itemWrap, gi, si, ii);
   // Excluded rows always read $0 and let the .row-excluded CSS supply the gray
   // background (inline bg cleared so it doesn't fight the class).
   if (isExcluded(gi, si, ii)) {
@@ -5730,6 +5838,14 @@ function renderPhase4() {
     }
   }
 
+  // Missing-Basics guard: any priced, non-skipped Budget line whose Qty Type
+  // pulls its # Qty from a Basics field that's still blank reads $0 silently.
+  // List each so the user fills the field (or skips the line) — and BLOCK export
+  // below until they do.
+  const basicsGaps = collectBudgetBasicsGaps();
+  basicsGaps.forEach(g => warnings.push(
+    `🚩 "${g.name}" uses Qty Type "${g.ut}" but ${g.fields.join(' + ')} ${g.fields.length > 1 ? 'are' : 'is'} blank in Basics — fill ${g.fields.length > 1 ? 'them' : 'it'} (or skip the line).`));
+
   // CONSOLIDATED "Sanity Check & Red Flags" at the TOP — the automated sanity
   // warnings + any red-flag/consideration notes, combined into one box (was two
   // separate sections; red flags used to sit below Revenue/Opex).
@@ -5774,6 +5890,10 @@ function renderPhase4() {
   const missing = [];
   if (!STATE.phase1.prop_name) missing.push('a property name (Basics)');
   if (computeTotals().itemCount === 0) missing.push('at least one priced Budget item');
+  if (basicsGaps.length) {
+    const distinctFields = [...new Set(basicsGaps.flatMap(g => g.fields))];
+    missing.push(`the missing Basics value${distinctFields.length > 1 ? 's' : ''} for ${basicsGaps.length} Budget line${basicsGaps.length > 1 ? 's' : ''} (${distinctFields.join(', ')})`);
+  }
   const exportReady = missing.length === 0;
   const readyTip = exportReady ? '' : 'Add ' + missing.join(' and ') + ' to enable export.';
   const btnStyle = (activeBg) => exportReady
@@ -6041,6 +6161,10 @@ async function buildCapexWorkbook() {
           const dc = Number(item.default_cost_per_item);
           rate = Number.isFinite(dc) ? dc : '';
         }
+        // For an Avg-* sizing Qty Type the exported # Qty is the EFFECTIVE quantity
+        // (# Qty × unit-mix avg, e.g. total sqft), so the proforma's G×I (# Qty ×
+        // $/Qty) reproduces the app's $ Amt. Non-Avg types export # Qty unchanged.
+        const exportQty = worked ? effectiveQtyForTotal(qty, qtyType) : '';
         const photoCount = Array.isArray(v.photos) ? v.photos.length : 0;
         const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
         const rowFill = worked ? rowTintArgb : GRAY;
@@ -6049,13 +6173,13 @@ async function buildCapexWorkbook() {
         const r = ws.addRow([
           sec.name, item.name, finish,
           pO, pP, pR,
-          qty || '', qtyType, (rate === '' ? '' : (rate || 0)),
+          exportQty || '', qtyType, (rate === '' ? '' : (rate || 0)),
           '', // Total (col J) — live formula below
           item.gl_account || '', notesText,
           '', // Photos (col M) — hyperlink set below
         ]);
         // Total never shows an error (blank/text $/Qty) — falls back to 0.
-        r.getCell(COL_TOTAL).value = { formula: `IFERROR(G${r.number}*I${r.number},0)`, result: (Number(qty) || 0) * (Number(rate) || 0) };
+        r.getCell(COL_TOTAL).value = { formula: `IFERROR(G${r.number}*I${r.number},0)`, result: (Number(exportQty) || 0) * (Number(rate) || 0) };
         stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
         styleCurrency(r.getCell(9));
         styleCurrency(r.getCell(COL_TOTAL));   // per-row Total stays regular weight
@@ -6094,8 +6218,10 @@ async function buildCapexWorkbook() {
       getCustomItemsFor(group.name, sec.name).forEach(ci => {
         const worked = !ci.excluded;
         const pctv = (n) => (n === '' || n === null || n === undefined) ? '' : Number(n);
-        const cq = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
-        const qty = worked ? cq : '';
+        const cqUnits = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
+        // Avg-* sizing types export the effective quantity (# Qty × unit-mix avg)
+        // so the proforma's G×I matches the app's $ Amt (same as schema rows).
+        const qty = worked ? effectiveQtyForTotal(cqUnits, ci.unit_type) : '';
         const rate = worked ? (Number(ci.unit_cost) || 0) : '';
         const cr = ws.addRow([
           sec.name, ci.name || '(unnamed custom item)', '',
