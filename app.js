@@ -3945,18 +3945,39 @@ function avgSizingForUnitType(ut, avgsOpt) {
   return null;
 }
 
+// Line items whose Avg # BRs / Avg # BAs sizing gets +1 to account for common
+// areas (a hallway/common-area fixture beyond the in-unit count). Does NOT apply
+// to Avg Sqft. Matched by exact item name, case-insensitive.
+const COMMON_AREA_PLUS_ONE_ITEMS = new Set(
+  ['Lighting Fixtures', 'Plumbing Fixtures', 'Door Hardware', 'Door Repairs', 'Blinds'].map(s => s.toLowerCase())
+);
+// True when the +1-common-area bump applies to this (Qty Type, item) pair.
+function isCommonAreaPlusOne(ut, itemName) {
+  return (ut === 'Avg # BRs' || ut === 'Avg # BAs') && !!itemName &&
+    COMMON_AREA_PLUS_ONE_ITEMS.has(String(itemName).trim().toLowerCase());
+}
+// The property-wide average a row multiplies its # Qty by — the raw Unit-Mix
+// average, PLUS 1 for the common-area items above on Avg # BRs / Avg # BAs.
+// Returns null when `ut` isn't a sizing (Avg-*) type.
+function sizingAverageFor(ut, itemName, avgsOpt) {
+  const base = avgSizingForUnitType(ut, avgsOpt);
+  if (base == null) return null;
+  return isCommonAreaPlusOne(ut, itemName) ? base + 1 : base;
+}
+
 // Effective quantity used to compute a row's $ Amt. For an Avg-* "sizing" Qty
 // Type the row's # Qty stays the plain UNIT count and the property-wide Unit-Mix
 // average (sqft / beds / baths) is applied HERE as a separate factor, so
 //   $ Amt = (# Qty × avg) × $/Qty
-// (e.g. Flooring priced $/sqft = units being renovated × avg sqft × rate). For
-// every other Qty Type the average is 1, so the effective qty == # Qty. Keeping
-// the average OUT of # Qty (it used to be folded in) makes # Qty read as an
-// intuitive unit count while the total still reflects unit size. Rounded so the
-// Excel export's G×I (# Qty × $/Qty) reproduces this total exactly.
-function effectiveQtyForTotal(qty, ut) {
+// (e.g. Flooring priced $/sqft = units being renovated × avg sqft × rate). For a
+// handful of items the beds/baths average is bumped +1 for common areas (see
+// sizingAverageFor). For every other Qty Type the average is 1, so the effective
+// qty == # Qty. Keeping the average OUT of # Qty (it used to be folded in) makes
+// # Qty read as an intuitive unit count while the total still reflects unit size.
+// Rounded so the Excel export's G×I (# Qty × $/Qty) reproduces this total exactly.
+function effectiveQtyForTotal(qty, ut, itemName) {
   const q = Number(qty) || 0;
-  const s = avgSizingForUnitType(ut);
+  const s = sizingAverageFor(ut, itemName);
   return s == null ? q : Math.round(q * s);
 }
 
@@ -4044,7 +4065,9 @@ function getDetailItemTotal(gi, si, ii) {
   }
   // Avg-* Qty Types multiply by the Unit-Mix average here (effectiveQtyForTotal
   // returns # Qty unchanged for every other type): $ Amt = (# Qty × avg) × $/Qty.
-  return effectiveQtyForTotal(qty, v.unit_type) * getEffectiveUnitCost(gi, si, ii);
+  // The item name lets effectiveQtyForTotal apply the +1 common-area bump where it does.
+  const item = getSchemaItemByKey(ckKey(gi, si, ii));
+  return effectiveQtyForTotal(qty, v.unit_type, item && item.name) * getEffectiveUnitCost(gi, si, ii);
 }
 // Look up the schema item for a ckKey (used by the CAPEX Groups UI to render
 // item names + filter the Add Item dropdown).
@@ -4110,7 +4133,7 @@ function resolveCustomTarget(ci) {
 function getCustomItemTotal(ci) {
   if (!ci) return 0;
   const qty = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
-  return effectiveQtyForTotal(qty, ci.unit_type) * (Number(ci.unit_cost) || 0);
+  return effectiveQtyForTotal(qty, ci.unit_type, ci.name) * (Number(ci.unit_cost) || 0);
 }
 
 // ---------- Missing-Basics guard (a Qty Type whose value isn't in Basics yet) ----------
@@ -4969,9 +4992,10 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
       // average is applied to the $ Amt (effectiveQtyForTotal), not to # Qty.
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
-      const s = avgSizingForUnitType(effUT);
+      const s = sizingAverageFor(effUT, item.name);
       const metric = effUT === 'Avg Sqft' ? 'sqft' : effUT === 'Avg # BRs' ? 'beds' : 'baths';
-      qtyInp.title = `$ Amt = # Qty × avg ${metric}${s ? ` (${s < 10 ? s.toFixed(1) : Math.round(s).toLocaleString()})` : ' — set the Unit Mix'} × $/Qty`;
+      const bump = isCommonAreaPlusOne(effUT, item.name) ? ' + 1 common area' : '';
+      qtyInp.title = `$ Amt = # Qty × avg ${metric}${bump}${s ? ` (${s < 10 ? s.toFixed(1) : Math.round(s).toLocaleString()})` : ' — set the Unit Mix'} × $/Qty`;
     } else {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
@@ -5053,12 +5077,13 @@ function renderInteriorDetailItem(gi, si, ii, item, summaryNode, tints) {
   const refreshQtyDisplay = () => {
     const cur = getP3(gi, si, ii);
     setNumVal(qtyInp, (Number(cur.qty) || 0) || '');
-    const sizing = avgSizingForUnitType(cur.unit_type);
+    const sizing = sizingAverageFor(cur.unit_type, item.name);
     if (sizing != null) {
       // # Qty is now the plain UNIT count; the avg is a separate factor in $ Amt.
       const metric = cur.unit_type === 'Avg Sqft' ? 'sqft' : cur.unit_type === 'Avg # BRs' ? 'beds' : 'baths';
+      const bump = isCommonAreaPlusOne(cur.unit_type, item.name) ? ' + 1 common area' : '';
       qtyInp.title = `Auto-computed unit count: Σ (% × unit-status total), rounded. `
-        + `$ Amt = # Qty × avg ${metric} (${sizing < 10 ? sizing.toFixed(1) : Math.round(sizing).toLocaleString()}) × $/Qty.`;
+        + `$ Amt = # Qty × avg ${metric}${bump} (${sizing < 10 ? sizing.toFixed(1) : Math.round(sizing).toLocaleString()}) × $/Qty.`;
     } else {
       qtyInp.title = 'Auto-computed: Σ (% × matching unit-status total), rounded';
     }
@@ -6164,7 +6189,8 @@ async function buildCapexWorkbook() {
         // For an Avg-* sizing Qty Type the exported # Qty is the EFFECTIVE quantity
         // (# Qty × unit-mix avg, e.g. total sqft), so the proforma's G×I (# Qty ×
         // $/Qty) reproduces the app's $ Amt. Non-Avg types export # Qty unchanged.
-        const exportQty = worked ? effectiveQtyForTotal(qty, qtyType) : '';
+        // Pass item.name so the +1 common-area bump is included where it applies.
+        const exportQty = worked ? effectiveQtyForTotal(qty, qtyType, item.name) : '';
         const photoCount = Array.isArray(v.photos) ? v.photos.length : 0;
         const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
         const rowFill = worked ? rowTintArgb : GRAY;
@@ -6221,7 +6247,7 @@ async function buildCapexWorkbook() {
         const cqUnits = ci.useBuckets ? computeBucketQty(ci) : (Number(ci.qty) || 0);
         // Avg-* sizing types export the effective quantity (# Qty × unit-mix avg)
         // so the proforma's G×I matches the app's $ Amt (same as schema rows).
-        const qty = worked ? effectiveQtyForTotal(cqUnits, ci.unit_type) : '';
+        const qty = worked ? effectiveQtyForTotal(cqUnits, ci.unit_type, ci.name) : '';
         const rate = worked ? (Number(ci.unit_cost) || 0) : '';
         const cr = ws.addRow([
           sec.name, ci.name || '(unnamed custom item)', '',
