@@ -3737,6 +3737,9 @@ const AVG_QTY_TYPES = ['Avg Sqft', 'Avg # BRs', 'Avg # BAs'];
 const BASICS_QTY_TYPE_FIELDS = {
   // 'MF Unit' replaces the old =MF checkbox: auto-fills # Qty from # of MF Units.
   'MF Unit': 'mf_units',
+  // 'Building' is a base Qty Type (stays above the dropdown separator, like
+  // 'MF Unit') that auto-fills # Qty from the property's # Buildings count.
+  'Building': 'num_buildings',
   // 'Park' is a base Qty Type (stays above the dropdown separator, like 'MF Unit')
   // that auto-fills # Qty from the property's total parking-spot count.
   'Park': 'parking_spots_existing',
@@ -3817,14 +3820,15 @@ function basicsQtyTooltip(ut) {
 }
 // Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,
 // inserting a disabled "----------" separator between the base types and the
-// appended Basics-linked ones. ('MF Unit' and 'Park' are base types that are
-// also Basics-linked, so they stay ABOVE the separator; the split lands before
-// the first truly-appended type, i.e. 'Multifamily RSF'.) `effectiveUT` is pre-selected.
+// appended Basics-linked ones. ('MF Unit', 'Building', and 'Park' are base
+// types that are also Basics-linked, so they stay ABOVE the separator; the
+// split lands before the first truly-appended type, i.e. 'Multifamily RSF'.)
+// `effectiveUT` is pre-selected.
 function fillQtyTypeOptions(sel, effectiveUT) {
   sel.appendChild(el('option', { value: '' }, '—'));
   let sepDone = false;
   UNIT_TYPES.forEach(u => {
-    if (!sepDone && u !== 'MF Unit' && u !== 'Park' && (BASICS_QTY_TYPE_FIELDS[u] || BASICS_QTY_TYPE_COMPUTED[u])) {
+    if (!sepDone && u !== 'MF Unit' && u !== 'Building' && u !== 'Park' && (BASICS_QTY_TYPE_FIELDS[u] || BASICS_QTY_TYPE_COMPUTED[u])) {
       sel.appendChild(el('option', { value: '', disabled: true }, '----------'));
       sepDone = true;
     }
