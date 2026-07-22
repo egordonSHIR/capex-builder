@@ -6017,7 +6017,10 @@ async function buildCapexWorkbook() {
 
   // ===== Main "Capex Budget" sheet =====
   // Columns: A Section | B Item Name | C Options(Finish) | D % Orig | E % Part |
-  // F % Reno | G # Qty | H Qty Type | I $/Qty | J Total | K GL Account | L Notes.
+  // F % Reno | G # Qty | H Qty Type | I $/Qty | J Total | K $/Unit | L Notes |
+  // M Photos | N GL Account | (O hidden CUSTOM marker). This mirrors the reshuffled
+  // MFVA v35 / ExStay v9 proforma CAPEX tab: $/Unit = Total ÷ # Units on every line
+  // item + subtotal + total, Notes in L, the Drive photo link in M, GL Account in N.
   // Section + Item are separate columns (no section banner rows); the % columns
   // sit just left of # Qty; only GROUPS get subtotals; each group's item rows are
   // an Excel outline band so a group can be collapsed with the [-] gutter button.
@@ -6025,15 +6028,27 @@ async function buildCapexWorkbook() {
   // Summary rows sit BELOW their detail band → collapse button lands on the
   // group subtotal row (Excel default, but set explicitly for clarity).
   ws.properties.outlineProperties = { summaryBelow: true, summaryRight: true };
-  const COL_TOTAL = 10; // J
-  const COL_PHOTOS = 13; // M — hyperlink to the line item's Drive photo subfolder
-  const COL_CUSTOM_FLAG = 14; // N — hidden "CUSTOM" marker for the proforma-import worker (never pasted)
+  const COL_TOTAL = 10;    // J
+  const COL_PER_UNIT = 11; // K — $/Unit (Total ÷ # Units), on line items, subtotals, totals
+  const COL_NOTES = 12;    // L — Notes
+  const COL_PHOTOS = 13;   // M — hyperlink to the line item's Drive photo subfolder
+  const COL_GL = 14;       // N — GL Account
+  const COL_CUSTOM_FLAG = 15; // O — hidden "CUSTOM" marker for the proforma-import worker (never pasted)
+  // $/Unit helper — sets a cell to =IFERROR(<totalRef>/<units>,0) (mirrors the
+  // proforma's =IFERROR(J/$C$1,0)); if # Units is 0/unknown, emit a plain 0 so the
+  // export never shows #DIV/0!. `units` is captured above; embeds the literal count
+  // (the export has no stable single "# Units" anchor cell like the proforma's $C$1).
+  const setPerUnit = (cell, totalRef, totalResult) => {
+    if (units > 0) cell.value = { formula: `IFERROR(${totalRef}/${units},0)`, result: (Number(totalResult) || 0) / units };
+    else cell.value = 0;
+    styleCurrency(cell);
+  };
   ws.columns = [
     { width: 22 }, { width: 34 }, { width: 18 },
     { width: 8 }, { width: 8 }, { width: 8 },
     { width: 9 }, { width: 12 }, { width: 12 },
-    { width: 15 }, { width: 28 }, { width: 30 },
-    { width: 20 }, { width: 10, hidden: true },
+    { width: 15 }, { width: 12 }, { width: 30 },
+    { width: 20 }, { width: 28 }, { width: 10, hidden: true },
   ];
 
   const titleRow = ws.addRow(['CAPEX BUDGET' + (propName ? ' — ' + propName.toUpperCase() : '')]);
@@ -6041,7 +6056,7 @@ async function buildCapexWorkbook() {
   titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   titleRow.height = 24;
   titleRow.alignment = { vertical: 'middle' };
-  ws.mergeCells(`A${titleRow.number}:M${titleRow.number}`);
+  ws.mergeCells(`A${titleRow.number}:N${titleRow.number}`);
 
   // Row 2 — export provenance: A2 = export time, B2 = last editor + update time.
   // Kept OUT of the collapsed header band below so it's always visible.
@@ -6063,13 +6078,14 @@ async function buildCapexWorkbook() {
   // in the proforma — so Total Capex Budget = Multifamily Subtotal here. All $
   // values are backfilled after the detail is built. -----
   const mkSummary = (label, fillArgb, fontArgb, big) => {
-    const row = ws.addRow([label, '', '', '', '', '', '', '', '', '', '', '', '']);
+    const row = ws.addRow([label, '', '', '', '', '', '', '', '', '', '', '', '', '']);
     row.eachCell({ includeEmpty: true }, (c) => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
       c.font = { bold: true, color: { argb: fontArgb }, size: big ? 14 : 11 };
     });
     if (big) row.height = 22;
     styleCurrency(row.getCell(COL_TOTAL));
+    styleCurrency(row.getCell(COL_PER_UNIT));
     return row;
   };
   const commHex = GROUP_COLORS['Commercial Tenant Costs'] || '#FFCC66';
@@ -6079,14 +6095,14 @@ async function buildCapexWorkbook() {
   const rowComm  = mkSummary('Commercial Tenant Costs', argb(commHex), argb(textOn(commHex)), false);
 
   // Big banner marking the copy/paste boundary — sits directly above Multifamily Subtotal.
-  const rowBanner = ws.addRow(['Copy/Paste Below This Line to Proforma', '', '', '', '', '', '', '', '', '', '', '', '']);
+  const rowBanner = ws.addRow(['Copy/Paste Below This Line to Proforma', '', '', '', '', '', '', '', '', '', '', '', '', '']);
   rowBanner.eachCell({ includeEmpty: true }, (c) => {
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF16A34A' } };
     c.font = { bold: true, size: 13, color: { argb: WHITE } };
     c.alignment = { horizontal: 'center', vertical: 'middle' };
   });
   rowBanner.height = 26;
-  ws.mergeCells(`A${rowBanner.number}:M${rowBanner.number}`);
+  ws.mergeCells(`A${rowBanner.number}:N${rowBanner.number}`);
 
   const stRow = mkSummary('MULTIFAMILY SUBTOTAL', NAVY, WHITE, true);
   // The MULTIFAMILY SUBTOTAL is the first row the proforma-import worker maps into
@@ -6097,7 +6113,7 @@ async function buildCapexWorkbook() {
   workbook._exportFirstDataRow = stRow.number;
 
   ws.addRow([]);
-  const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', 'GL Account', 'Notes', 'Photos']);
+  const colHeaderRow = ws.addRow(['Section', 'Item Name', 'Options', '% Orig', '% Part', '% Reno', '# Qty', 'Qty Type', '$/Qty', 'Total', '$/Unit', 'Notes', 'Photos', 'GL Account']);
   colHeaderRow.font = { bold: true, color: { argb: WHITE } };
   colHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   colHeaderRow.height = 22;
@@ -6148,7 +6164,7 @@ async function buildCapexWorkbook() {
     const groupFontArgb = argb(textOn(groupColorHex));
     const rowTintArgb = argb(lightenHex(groupColorHex, 0.9));
 
-    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '', '']);
+    const gh = ws.addRow([group.name.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '', '', '']);
     gh.eachCell({ includeEmpty: true }, (c) => {
       c.font = { bold: true, size: 12, color: { argb: groupFontArgb } };
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
@@ -6156,6 +6172,7 @@ async function buildCapexWorkbook() {
     gh.getCell(1).alignment = { vertical: 'middle', indent: 1 };
     gh.height = 20;
     styleCurrency(gh.getCell(COL_TOTAL));
+    styleCurrency(gh.getCell(COL_PER_UNIT));
 
     let firstItemRowInGroup = null;
     let lastItemRowInGroup = null;
@@ -6195,17 +6212,21 @@ async function buildCapexWorkbook() {
         const notesText = [worked ? v.notes : '', noteExtra].filter(Boolean).join(' — ');
         const rowFill = worked ? rowTintArgb : GRAY;
 
-        // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty | J Total | K GL | L Notes | M Photos
+        // A Section | B Item | C Options | D/E/F % | G #Qty | H Qty Type | I $/Qty |
+        // J Total | K $/Unit | L Notes | M Photos | N GL Account
         const r = ws.addRow([
           sec.name, item.name, finish,
           pO, pP, pR,
           exportQty || '', qtyType, (rate === '' ? '' : (rate || 0)),
           '', // Total (col J) — live formula below
-          item.gl_account || '', notesText,
+          '', // $/Unit (col K) — live formula below
+          notesText,
           '', // Photos (col M) — hyperlink set below
+          item.gl_account || '', // GL Account (col N)
         ]);
         // Total never shows an error (blank/text $/Qty) — falls back to 0.
         r.getCell(COL_TOTAL).value = { formula: `IFERROR(G${r.number}*I${r.number},0)`, result: (Number(exportQty) || 0) * (Number(rate) || 0) };
+        setPerUnit(r.getCell(COL_PER_UNIT), `J${r.number}`, (Number(exportQty) || 0) * (Number(rate) || 0));
         stylePct(r.getCell(4)); stylePct(r.getCell(5)); stylePct(r.getCell(6));
         styleCurrency(r.getCell(9));
         styleCurrency(r.getCell(COL_TOTAL));   // per-row Total stays regular weight
@@ -6254,10 +6275,13 @@ async function buildCapexWorkbook() {
           worked ? pctv(ci.pct_orig) : '', worked ? pctv(ci.pct_part) : '', worked ? pctv(ci.pct_reno) : '',
           qty || '', ci.unit_type || '', (rate === '' ? '' : (rate || 0)),
           '', // Total (col J) — live formula below
-          '', worked ? (ci.notes || '') : '',
+          '', // $/Unit (col K) — live formula below
+          worked ? (ci.notes || '') : '',
           '', // Photos (col M) — customs have none
+          '', // GL Account (col N) — customs have none
         ]);
         cr.getCell(COL_TOTAL).value = { formula: `IFERROR(G${cr.number}*I${cr.number},0)`, result: (Number(qty) || 0) * (Number(rate) || 0) };
+        setPerUnit(cr.getCell(COL_PER_UNIT), `J${cr.number}`, (Number(qty) || 0) * (Number(rate) || 0));
         stylePct(cr.getCell(4)); stylePct(cr.getCell(5)); stylePct(cr.getCell(6));
         styleCurrency(cr.getCell(9));
         styleCurrency(cr.getCell(COL_TOTAL));
@@ -6267,9 +6291,9 @@ async function buildCapexWorkbook() {
           c.border = { bottom: { style: 'hair', color: { argb: BORDER_LIGHT } } };
           c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cFill } };
         });
-        // Hidden marker (col N) so the proforma-import worker can deterministically
-        // tell a user-added row (to INSERT) from a schema row (to align 1:1). Never
-        // pasted into the proforma (the worker reads cols A–L); column stays hidden.
+        // Hidden marker (col O) tagging a user-added row. The v4 worker treats custom
+        // rows identically to schema rows (dynamic block-rebuild), so it no longer
+        // depends on this — kept as a hidden provenance flag only, never pasted.
         cr.getCell(COL_CUSTOM_FLAG).value = 'CUSTOM';
         if (firstItemRowInGroup === null) firstItemRowInGroup = cr.number;
         lastItemRowInGroup = cr.number;
@@ -6277,7 +6301,7 @@ async function buildCapexWorkbook() {
     });
 
     // Group subtotal row — same coloring as this group's header banner.
-    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '', '', '', '']);
+    const subr = ws.addRow([`${group.name} Subtotal`, '', '', '', '', '', '', '', '', '', '', '', '', '']);
     subr.eachCell({ includeEmpty: true }, (c) => {
       c.font = { bold: true, color: { argb: groupFontArgb } };
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: groupFillArgb } };
@@ -6285,8 +6309,10 @@ async function buildCapexWorkbook() {
     });
     if (firstItemRowInGroup !== null) {
       subr.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
+      setPerUnit(subr.getCell(COL_PER_UNIT), `J${subr.number}`, 0);   // $/Unit on the group subtotal
       // Group header total = same range
       gh.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
+      setPerUnit(gh.getCell(COL_PER_UNIT), `J${gh.number}`, 0);       // $/Unit on the group header
       groupSubtotalAddrs.push(`J${subr.number}`);
     }
     styleCurrency(subr.getCell(COL_TOTAL));
@@ -6301,6 +6327,8 @@ async function buildCapexWorkbook() {
   rowCont.getCell(COL_TOTAL).value = 0;
   rowComm.getCell(COL_TOTAL).value = 0;
   rowTotal.getCell(COL_TOTAL).value = { formula: `J${stRow.number}+J${rowComm.number}+J${rowCont.number}+J${rowFee.number}`, result: 0 };
+  // $/Unit on every summary row (Total ÷ # Units) — mirrors the proforma's top block.
+  [rowTotal, rowFee, rowCont, rowComm, stRow].forEach((rw) => setPerUnit(rw.getCell(COL_PER_UNIT), `J${rw.number}`, 0));
 
   if (STATE.phase4.notes) {
     ws.addRow([]);
