@@ -4214,8 +4214,8 @@ function recomputePctRowsAndSummary(summaryNode) {
   if (summaryNode) updateDetailSummary(summaryNode);
   refreshBudgetBadges();
 }
-// Update the per-section / per-group "$ subtotal" badges shown on collapsed
-// Budget headers (sum of $ Amt across each section's / group's checked items).
+// Update the per-section / per-group "$ subtotal" badges on the Budget headers
+// (sum of $ Amt across each section's / group's checked items).
 // Active (non-skipped) $ total for a whole group, including its custom items.
 function groupActiveTotal(gi) {
   const g = SCHEMA.phase3[gi]; if (!g) return 0;
@@ -4241,7 +4241,7 @@ function perUnitStr(total) {
   const u = Number(STATE.phase1.mf_units) || 0;
   return u > 0 ? fmtMoney(total / u) + '/unit' : '—/unit';
 }
-// "N item"/"N items" — used by the group + section collapsed-header badges.
+// "N item"/"N items" — used by the group + section header badges.
 function itemCountStr(n) {
   return `${n} item${n === 1 ? '' : 's'}`;
 }
@@ -4256,7 +4256,7 @@ function budgetMarkupPcts() {
 function refreshBudgetBadges() {
   const root = $('#phase-content');
   if (!root) return;
-  // Section header badge: # items + $ amount + $/unit (shown when the section is collapsed).
+  // Section header badge: # items + $ amount + $/unit (always visible, open or collapsed).
   root.querySelectorAll('[data-b-badge]').forEach(b => {
     const [gi, si] = b.dataset.bBadge.split('.').map(Number);
     const sec = SCHEMA.phase3[gi] && SCHEMA.phase3[gi].sections[si];
@@ -4278,7 +4278,7 @@ function refreshBudgetBadges() {
     const amt = b.querySelector('[data-bs-amt]'); if (amt) amt.textContent = fmtMoney(sum);
     const pu = b.querySelector('[data-bs-pu]'); if (pu) pu.textContent = perUnitStr(sum);
   });
-  // Group header badge: # items + $ amount + $/unit (shown when the group is collapsed).
+  // Group header badge: # items + $ amount + $/unit (always visible, open or collapsed).
   root.querySelectorAll('[data-b-badge-group]').forEach(b => {
     const gi = Number(b.dataset.bBadgeGroup);
     if (!SCHEMA.phase3[gi]) return;
@@ -4581,8 +4581,8 @@ function renderPhase3() {
       const secHeaderStyle = subHeaderBg
         ? `background:${subHeaderBg};color:${subHeaderTxt}`
         : '';
-      // Collapsed-section header badge: # items, $ amount, AND $/unit.
-      const secBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge': gi + '.' + si },
+      // Section header badge: # items, $ amount, AND $/unit — always visible.
+      const secBadge = el('span', { class: 'budget-header-badge', 'data-b-badge': gi + '.' + si },
         el('span', { 'data-bs-count': '' }, itemCountStr(secItemCount)),
         el('span', { 'data-bs-amt': '', style: 'margin-left:10px' }, fmtMoney(secSum)),
         el('span', { 'data-bs-pu': '', style: 'font-weight:600;margin-left:10px;opacity:0.85' }, perUnitStr(secSum)));
@@ -4598,8 +4598,8 @@ function renderPhase3() {
       );
       groupBody.appendChild(secNode);
     });
-    // Collapsed-group header badge: # items, $ amount, AND $/unit side by side.
-    const groupBadge = el('span', { class: 'section-collapsed-badge', 'data-b-badge-group': gi },
+    // Group header badge: # items, $ amount, AND $/unit side by side — always visible.
+    const groupBadge = el('span', { class: 'budget-header-badge', 'data-b-badge-group': gi },
       el('span', { 'data-bg-count': '' }, itemCountStr(groupItemCount)),
       el('span', { 'data-bg-amt': '', style: 'margin-left:10px' }, fmtMoney(groupSum)),
       el('span', { 'data-bg-pu': '', style: 'font-weight:600;margin-left:10px;opacity:0.85' }, perUnitStr(groupSum)));

@@ -148,10 +148,10 @@ main {
   outline: 2px solid var(--primary-light);
   outline-offset: -2px;
 }
-/* Per-section summary badge (Questionnaire "N selected" / Budget "$ subtotal"):
-   shown only when the section is collapsed, so it summarizes what's hidden. */
-.section-collapsed-badge {
-  display: none;
+/* Budget group/section header badge (# items · $ amount · $/unit): ALWAYS
+   visible, whether the group/section is open or collapsed. */
+.budget-header-badge {
+  display: inline-block;
   font-size: 11px;
   font-weight: 700;
   padding: 1px 9px;
@@ -162,7 +162,6 @@ main {
   text-transform: none;
   letter-spacing: 0;
 }
-.section.collapsed > .section-header .section-collapsed-badge { display: inline-block; }
 /* Rich-text notes editor (Basics Notes / Physical Notes). Ensure list markers
    render inside the contenteditable, and show a placeholder while empty. */
 .notes-editor ul { list-style: disc; margin: 4px 0 4px 24px; }
