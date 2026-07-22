@@ -1737,7 +1737,7 @@ window.SCHEMA = {
         "items": [
           {
             "name": "Asphalt Overlay",
-            "default_cost_per_item": 5.0,
+            "default_cost_per_item": 3.0,
             "notes": null,
             "gl_account": "17535: CIP Parking Lot - Asphalt (15 Yrs)",
             "default_qty_type": "Sqft"
@@ -2428,7 +2428,7 @@ window.SCHEMA = {
         "items": [
           {
             "name": "Dumpsters",
-            "default_cost_per_item": 500.0,
+            "default_cost_per_item": 45.0,
             "notes": null,
             "gl_account": "17570: CIP Trash/Dumpster",
             "default_qty_type": "Cubic Yard"
