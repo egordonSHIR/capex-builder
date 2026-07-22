@@ -608,6 +608,15 @@ window.SCHEMA = {
         "row": "bs_bldg"
       },
       {
+        "key": "building_height_ft",
+        "label": "Building Height (ft)",
+        "type": "number",
+        "min": 0,
+        "decimals": 1,
+        "hint": "Typical / footprint-weighted avg from survey",
+        "row": "bs_bldg"
+      },
+      {
         "key": "roofs_connected",
         "label": "Roofs Connected?",
         "type": "select",
@@ -677,7 +686,43 @@ window.SCHEMA = {
         "label": "Total All Buildings Sqft",
         "type": "number",
         "min": 0,
-        "hint": "Sum across all buildings",
+        "hint": "Footprint sum \u2014 ALL buildings (MF + other)",
+        "inline": true
+      },
+      {
+        "key": "mf_footprint_sf",
+        "label": "MF Buildings Footprint Sqft",
+        "type": "number",
+        "min": 0,
+        "decimals": 0,
+        "hint": "Multifamily buildings only (ground floor)",
+        "inline": true
+      },
+      {
+        "key": "gross_building_area_sf",
+        "label": "Gross Building Area Sqft",
+        "type": "number",
+        "min": 0,
+        "decimals": 0,
+        "hint": "Total floor area, all levels, ALL buildings (\u03a3 footprint \u00d7 floors)",
+        "inline": true
+      },
+      {
+        "key": "mf_gross_building_area_sf",
+        "label": "MF Gross Building Area Sqft",
+        "type": "number",
+        "min": 0,
+        "decimals": 0,
+        "hint": "Multifamily buildings only, all floors",
+        "inline": true
+      },
+      {
+        "key": "building_envelope_cf",
+        "label": "Building Envelope (cu ft)",
+        "type": "number",
+        "min": 0,
+        "decimals": 0,
+        "hint": "3D volume \u2014 \u03a3 footprint \u00d7 height",
         "inline": true
       },
       {
@@ -769,6 +814,13 @@ window.SCHEMA = {
         "label": "# Vehicle Gates",
         "show_if": "fence_feet > 0",
         "hint": "Enter 0 if none"
+      },
+      {
+        "key": "curb_cuts",
+        "type": "number",
+        "label": "# Curb Cuts",
+        "min": 0,
+        "hint": "Driveway aprons / street-curb openings \u00b7 0 if none"
       },
       {
         "key": "fencing_notes",
@@ -3107,4 +3159,4 @@ window.SCHEMA = {
   }
 ]
 };
-window.SURVEY_EXTRACTION_PROMPT = "You are a real estate survey analyst. Extract physical site specs from the survey PDF and return a JSON object. Return ONLY the raw JSON \u2014 no markdown fences, no explanation.\n\nJSON schema:\n{\n  \"flat\": {\n    \"parking_regular\": number|null,\n    \"parking_spots_hc\": number|null,\n    \"parking_spots_existing\": number|null,\n    \"land_sf\": number|null,\n    \"land_acres\": number|null,\n    \"site_perimeter_lf\": number|null,\n    \"fencing_notes\": \"string or n/a\",\n    \"gates_notes\": \"string or n/a\",\n    \"fence_feet\": number|null,\n    \"vehicle_gates\": number|null,\n    \"pedestrian_gates\": number|null,\n    \"parking_lot_sf\": number|null,\n    \"other_impervious_sf\": number|null,\n    \"num_buildings\": number|null,\n    \"total_footprint_sf\": number|null,\n    \"total_roof_sf\": number|null,\n    \"total_facade_sf\": number|null,\n    \"landscaping_sf\": number|null\n  },\n  \"buildings\": [\n    {\n      \"label\": \"string\",\n      \"footprint_sf\": number|null,\n      \"width_ft\": number|null,\n      \"length_ft\": number|null,\n      \"dimensions\": \"footprint shape / dimension notes for irregular plans, else empty\",\n      \"stories\": number|null,\n      \"height_ft\": number|null,\n      \"roof_pitch\": \"e.g. 4:12 or flat\",\n      \"roof_sf\": number|null,\n      \"facade_sf\": number|null\n    }\n  ],\n  \"meta\": {\n    \"property_name\": \"string\",\n    \"survey_date\": \"YYYY-MM-DD\",\n    \"address\": \"string\",\n    \"scale_paper\": \"e.g. 1 inch = 30 feet\",\n    \"ft_per_pixel\": number|null\n  },\n  \"notes\": \"any cross-reference notes as a single string\",\n  \"discrepancies\": [\"array of discrepancy strings\"]\n}\n\nRules:\n- Use null (not 0, not empty string) for any value you cannot determine.\n- fencing_notes / gates_notes: use \"n/a\" if the survey shows none.\n- fence_feet = total linear feet of fencing shown on the survey (0 if none drawn); vehicle_gates / pedestrian_gates = counts of gate symbols (0 if none).\n- other_impervious_sf = sidewalk / concrete flatwork SF (walks, patios, pads \u2014 excluding the parking lot).\n- parking_spots_existing = regular + HC total.\n- Buildings with sections of DIFFERENT floor counts (e.g. a 1-story lobby wing + 10-story tower): list each section as its own buildings-array entry with its own footprint/stories/height, labeled \"<Building> \u2014 <N>-story <section>\".\n- width_ft / length_ft = the rectangular envelope of that building/section from survey dimension callouts or the scaled drawing; for irregular plans leave them null and describe the shape in \"dimensions\".\n- total_footprint_sf = sum of all buildings footprint_sf.\n- total_roof_sf = sum of all buildings roof_sf.\n- total_facade_sf = sum of all buildings facade_sf.\n- landscaping_sf \u2248 land_sf \u2212 total_footprint_sf \u2212 parking_lot_sf.\n- roof_sf per building = footprint_sf multiplied by pitch factor: flat=1.02, 3:12=1.031, 4:12=1.054, 5:12=1.083, 6:12=1.118, 8:12=1.202.\n- List each building separately in the buildings array.\n- Extract the graphic scale bar or stated paper scale to populate meta fields.";
+window.SURVEY_EXTRACTION_PROMPT = "You are a real estate survey analyst. Extract physical site specs from the survey PDF and return a JSON object. Return ONLY the raw JSON \u2014 no markdown fences, no explanation.\n\nJSON schema:\n{\n  \"flat\": {\n    \"parking_regular\": number|null,\n    \"parking_spots_hc\": number|null,\n    \"parking_spots_existing\": number|null,\n    \"land_sf\": number|null,\n    \"land_acres\": number|null,\n    \"site_perimeter_lf\": number|null,\n    \"fencing_notes\": \"string or n/a\",\n    \"gates_notes\": \"string or n/a\",\n    \"fence_feet\": number|null,\n    \"vehicle_gates\": number|null,\n    \"pedestrian_gates\": number|null,\n    \"curb_cuts\": number|null,\n    \"parking_lot_sf\": number|null,\n    \"other_impervious_sf\": number|null,\n    \"num_buildings\": number|null,\n    \"total_footprint_sf\": number|null,\n    \"total_roof_sf\": number|null,\n    \"total_facade_sf\": number|null,\n    \"gross_building_area_sf\": number|null,\n    \"building_envelope_cf\": number|null,\n    \"mf_footprint_sf\": number|null,\n    \"mf_gross_building_area_sf\": number|null,\n    \"landscaping_sf\": number|null\n  },\n  \"buildings\": [\n    {\n      \"label\": \"string\",\n      \"footprint_sf\": number|null,\n      \"width_ft\": number|null,\n      \"length_ft\": number|null,\n      \"dimensions\": \"footprint shape / dimension notes for irregular plans, else empty\",\n      \"stories\": number|null,\n      \"height_ft\": number|null,\n      \"roof_pitch\": \"e.g. 4:12 or flat\",\n      \"roof_sf\": number|null,\n      \"facade_sf\": number|null\n    }\n  ],\n  \"meta\": {\n    \"property_name\": \"string\",\n    \"survey_date\": \"YYYY-MM-DD\",\n    \"address\": \"string\",\n    \"scale_paper\": \"e.g. 1 inch = 30 feet\",\n    \"ft_per_pixel\": number|null\n  },\n  \"notes\": \"any cross-reference notes as a single string\",\n  \"discrepancies\": [\"array of discrepancy strings\"]\n}\n\nRules:\n- Use null (not 0, not empty string) for any value you cannot determine.\n- fencing_notes / gates_notes: use \"n/a\" if the survey shows none.\n- fence_feet = total linear feet of fencing shown on the survey (0 if none drawn); vehicle_gates / pedestrian_gates = counts of gate symbols (0 if none).\n- curb_cuts = count of curb cuts / driveway aprons (openings in the street-frontage curb), 0 if none. Independent of fencing.\n- other_impervious_sf = sidewalk / concrete flatwork SF (walks, patios, pads \u2014 excluding the parking lot).\n- parking_spots_existing = regular + HC total.\n- Buildings with sections of DIFFERENT floor counts (e.g. a 1-story lobby wing + 10-story tower): list each section as its own buildings-array entry with its own footprint/stories/height, labeled \"<Building> \u2014 <N>-story <section>\".\n- width_ft / length_ft = the rectangular envelope of that building/section from survey dimension callouts or the scaled drawing; for irregular plans leave them null and describe the shape in \"dimensions\".\n- total_footprint_sf = sum of all buildings footprint_sf.\n- total_roof_sf = sum of all buildings roof_sf.\n- total_facade_sf = sum of all buildings facade_sf.\n- gross_building_area_sf = total floor area across all levels = \u03a3 (each building/section footprint_sf \u00d7 its stories). NOT total_footprint_sf \u00d7 a single blanket floor count \u2014 sum per section so a stepped tower + low-rise wings aren't overstated.\n- building_envelope_cf = 3D envelope volume = \u03a3 (each building/section footprint_sf \u00d7 its height_ft), in cubic feet.\n- mf_footprint_sf / mf_gross_building_area_sf = the footprint and gross building area of the MULTIFAMILY (apartment/dwelling) buildings ONLY \u2014 exclude clubhouse/leasing/office/maintenance/garage/amenity (and, on a hotel deal, the hotel structure). If EVERY building is multifamily, these equal total_footprint_sf / gross_building_area_sf. Classify each building the same way you set its category.\n- landscaping_sf \u2248 land_sf \u2212 total_footprint_sf \u2212 parking_lot_sf.\n- roof_sf per building = footprint_sf multiplied by pitch factor: flat=1.02, 3:12=1.031, 4:12=1.054, 5:12=1.083, 6:12=1.118, 8:12=1.202.\n- List each building separately in the buildings array.\n- Extract the graphic scale bar or stated paper scale to populate meta fields.";

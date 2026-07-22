@@ -2155,6 +2155,14 @@ function parseSurveyXlsx(wb) {
     if (tableMode === 'rows') {
       // "Roof connectivity: <text>" / a "Gross SF = …" legend line end the table.
       if (/^roof\s*connectivity/i.test(labelRaw) || /^gross\s*sf\s*=/i.test(labelRaw)) { tableMode = null; continue; }
+      // "SUBTOTAL — Multifamily" carries the residential-only footprint + gross
+      // (emitted only when the site has BOTH uses). Capture it before the generic
+      // subtotal skip below; the "Other" subtotal is left for the display only.
+      if (/^SUBTOTAL\s*[—–-]+\s*Multifamily/i.test(labelRaw)) {
+        if (tcol.footprint != null) flat.mf_footprint_sf = _surveyNum(row[tcol.footprint]);
+        if (tcol.gross != null) flat.mf_gross_building_area_sf = _surveyNum(row[tcol.gross]);
+        continue;
+      }
       // "▼ <group> — connected building (N sections)" group-header rows and
       // "↳ … building subtotal" rollups are display-only — never buildings.
       if (/^▼/.test(labelRaw) || /↳/.test(labelRaw) || /subtotal/i.test(labelRaw)) continue;
@@ -2165,6 +2173,10 @@ function parseSurveyXlsx(wb) {
         if (tcol.footprint != null) flat.total_footprint_sf = _surveyNum(row[tcol.footprint]);
         if (tcol.roof != null) flat.total_roof_sf = _surveyNum(row[tcol.roof]);
         if (tcol.facade != null) flat.total_facade_sf = _surveyNum(row[tcol.facade]);
+        // Gross building area (Σ footprint × floors) and envelope volume
+        // (Σ footprint × height) — the site-wide totals underwriting needs.
+        if (tcol.gross != null) flat.gross_building_area_sf = _surveyNum(row[tcol.gross]);
+        if (tcol.envelope != null) flat.building_envelope_cf = _surveyNum(row[tcol.envelope]);
         tableMode = null; continue;
       }
       // Anything else is one building/section row. Non-numeric Width/Length
@@ -2208,12 +2220,11 @@ function parseSurveyXlsx(wb) {
     if (/^2\.\s*Land\s*area\s*\(acres\)/i.test(labelRaw)) { flat.land_acres = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^3\.\s*Perimeter\s*[—-]+\s*TOTAL/i.test(labelRaw)) { flat.site_perimeter_lf = _surveyNum(siteVal); currentSection = null; continue; }
     // v3 numeric fencing/gates rows — map straight onto the Basics number
-    // fields (fence_feet / vehicle_gates / pedestrian_gates; 0 = none).
-    // "# Curb Cuts" has no Basics field yet — recognized but skipped.
+    // fields (fence_feet / vehicle_gates / pedestrian_gates / curb_cuts; 0 = none).
     if (/^4\.\s*Fencing\s*[—–-]+\s*total/i.test(labelRaw)) { flat.fence_feet = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Vehicle/i.test(labelRaw)) { flat.vehicle_gates = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Pedestrian/i.test(labelRaw)) { flat.pedestrian_gates = _surveyNum(siteVal); currentSection = null; continue; }
-    if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Curb/i.test(labelRaw)) { currentSection = null; continue; }
+    if (/^4\.\s*Gates\s*[—–-]+\s*#\s*Curb/i.test(labelRaw)) { flat.curb_cuts = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^4\.\s*Fencing/i.test(labelRaw)) {
       // Legacy free-text row: per-tract cells, else the single Value column.
       const txts = tractCols.map(t => _surveyStr(row[t.col])).filter(s => s && s.toLowerCase() !== 'n/a');
@@ -2229,6 +2240,11 @@ function parseSurveyXlsx(wb) {
     }
     if (/^5\.\s*Parking\s*lot\s*SF/i.test(labelRaw)) { flat.parking_lot_sf = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^5b\.\s*Sidewalk/i.test(labelRaw)) { flat.other_impervious_sf = _surveyNum(siteVal); currentSection = null; continue; }
+    // Building count is split Multifamily / Other / Total; capture the MF + Other
+    // counts (used to infer the MF sqft split on single-use sites) before the
+    // generic "Total" row sets num_buildings.
+    if (/^6\.\s*Building\s*count\s*[—–-]+\s*Multifamily/i.test(labelRaw)) { flat.num_buildings_mf = _surveyNum(siteVal); currentSection = null; continue; }
+    if (/^6\.\s*Building\s*count\s*[—–-]+\s*Other/i.test(labelRaw)) { flat.num_buildings_other = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^6\.\s*Building\s*count/i.test(labelRaw)) { flat.num_buildings = _surveyNum(siteVal); currentSection = null; continue; }
     if (/^7\.\s*Building\s*footprint/i.test(labelRaw)) { flat.total_footprint_sf = _surveyNum(siteVal); currentSection = '7'; bldIdx = 0; continue; }
     if (/^7a\.\s*Dimensions/i.test(labelRaw)) { currentSection = '7a'; bldIdx = 0; continue; }
@@ -2236,7 +2252,7 @@ function parseSurveyXlsx(wb) {
     // 7d appears twice: the per-building block header AND a "— TOTAL" summary
     // row (Σ footprint × floors). Same regex handles both; the TOTAL row has no
     // indented rows after it before item 8 resets the section.
-    if (/^7d\.\s*Gross\s*building\s*area/i.test(labelRaw)) { currentSection = '7d'; bldIdx = 0; continue; }
+    if (/^7d\.\s*Gross\s*building\s*area/i.test(labelRaw)) { if (/total/i.test(labelRaw)) flat.gross_building_area_sf = _surveyNum(siteVal); currentSection = '7d'; bldIdx = 0; continue; }
     if (/^8\.\s*Roof\s*SF/i.test(labelRaw)) { flat.total_roof_sf = _surveyNum(siteVal); currentSection = '8'; bldIdx = 0; continue; }
     if (/^9\.\s*Facade\s*SF/i.test(labelRaw)) { flat.total_facade_sf = _surveyNum(siteVal); currentSection = '9'; bldIdx = 0; continue; }
     if (/^10\.\s*Landscaping/i.test(labelRaw)) { flat.landscaping_sf = _surveyNum(siteVal); currentSection = null; continue; }
@@ -2346,6 +2362,26 @@ function surveyWeightedFloors(buildings) {
   return avg == null ? null : Math.round(avg * 10) / 10;
 }
 
+// Combine per-building/section heights into one "Building Height (ft)" value —
+// the same footprint-weighted average used for floors: Σ(height × footprint) /
+// Σ(footprint). Weighting by footprint makes a sprawling low wing count more
+// than a slim tower, so the number reflects the typical height across the built
+// area. Uniform-height deals return the exact height. Falls back to a plain
+// average when no footprints are present. Rounded to 1 decimal, or null.
+function surveyWeightedHeight(buildings) {
+  let wSum = 0, fpSum = 0;      // Σ(height×footprint), Σ(footprint)
+  let hSum = 0, n = 0;          // plain-average fallback
+  for (const b of (buildings || [])) {
+    const ht = Number(b.height_ft);
+    if (!isFinite(ht) || ht <= 0) continue;
+    hSum += ht; n++;
+    const fp = Number(b.footprint_sf) || 0;
+    if (fp > 0) { wSum += ht * fp; fpSum += fp; }
+  }
+  const avg = fpSum > 0 ? (wSum / fpSum) : (n > 0 ? (hSum / n) : null);
+  return avg == null ? null : Math.round(avg * 10) / 10;
+}
+
 // Apply parsed survey data to STATE.phase1 (flat fields) and STATE.survey
 // (per-building + meta). Overwrites existing values. Returns a summary string.
 function applySurveyParsedData(parsed, sourcePdf) {
@@ -2354,8 +2390,10 @@ function applySurveyParsedData(parsed, sourcePdf) {
     'parking_spots_hc', 'parking_spots_existing', 'land_sf', 'land_acres',
     'site_perimeter_lf', 'parking_lot_sf', 'other_impervious_sf', 'num_buildings',
     'total_footprint_sf', 'total_roof_sf', 'total_facade_sf', 'landscaping_sf',
+    'gross_building_area_sf', 'building_envelope_cf',    // v3 site-wide massing totals
+    'mf_footprint_sf', 'mf_gross_building_area_sf',       // multifamily-only split (vs the overall totals above)
     'fencing_notes', 'gates_notes',
-    'fence_feet', 'vehicle_gates', 'pedestrian_gates',   // v3 numeric fencing/gates
+    'fence_feet', 'vehicle_gates', 'pedestrian_gates', 'curb_cuts',   // v3 numeric fencing/gates
   ];
   let filled = 0;
   for (const k of flatKeys) {
@@ -2367,6 +2405,39 @@ function applySurveyParsedData(parsed, sourcePdf) {
   }
   STATE.survey.buildings = parsed.buildings || [];
 
+  // Gross building area + envelope volume: prefer the workbook's BUILDINGS TOTAL
+  // row (exact Σ); otherwise sum the parsed per-section values as a fallback.
+  const _blankP1 = (k) => STATE.phase1[k] == null || STATE.phase1[k] === '';
+  if (_blankP1('gross_building_area_sf')) {
+    const g = (STATE.survey.buildings || []).reduce((s, b) => s + (Number(b.gross_sf) || 0), 0);
+    if (g > 0) { STATE.phase1.gross_building_area_sf = g; filled++; }
+  }
+  if (_blankP1('building_envelope_cf')) {
+    const e = (STATE.survey.buildings || []).reduce((s, b) => s + (Number(b.envelope_cf) || 0), 0);
+    if (e > 0) { STATE.phase1.building_envelope_cf = e; filled++; }
+  }
+
+  // Multifamily-only footprint + GBA. The workbook only writes a
+  // "SUBTOTAL — Multifamily" row when the site has BOTH uses; a single-use site
+  // has none, so infer from the MF/Other building-count split: all-MF → the MF
+  // total equals the overall total; all-Other → 0. Ambiguous (no split counts,
+  // e.g. a pre-MF/Other workbook) → leave blank rather than guess.
+  if (_blankP1('mf_footprint_sf') || _blankP1('mf_gross_building_area_sf')) {
+    const nMf = Number(parsed.flat.num_buildings_mf);
+    const nOther = Number(parsed.flat.num_buildings_other);
+    if (isFinite(nOther) && nOther === 0 && isFinite(nMf) && nMf > 0) {
+      if (_blankP1('mf_footprint_sf') && STATE.phase1.total_footprint_sf) {
+        STATE.phase1.mf_footprint_sf = STATE.phase1.total_footprint_sf; filled++;
+      }
+      if (_blankP1('mf_gross_building_area_sf') && STATE.phase1.gross_building_area_sf) {
+        STATE.phase1.mf_gross_building_area_sf = STATE.phase1.gross_building_area_sf; filled++;
+      }
+    } else if (isFinite(nMf) && nMf === 0) {
+      if (_blankP1('mf_footprint_sf')) { STATE.phase1.mf_footprint_sf = 0; filled++; }
+      if (_blankP1('mf_gross_building_area_sf')) { STATE.phase1.mf_gross_building_area_sf = 0; filled++; }
+    }
+  }
+
   // "# Floors (Per Bldg)" (vertical_floors) = the buildings' story counts, combined
   // into ONE number: a footprint-weighted average of stories across all building/
   // sections (Σ stories×footprint / Σ footprint). Uniform-height deals collapse to the
@@ -2375,6 +2446,14 @@ function applySurveyParsedData(parsed, sourcePdf) {
   const vf = surveyWeightedFloors(STATE.survey.buildings);
   if (vf != null) {
     STATE.phase1.vertical_floors = vf;
+    filled++;
+  }
+
+  // "Building Height (ft)" — footprint-weighted average height across the
+  // building/sections (same weighting as # Floors above).
+  const vh = surveyWeightedHeight(STATE.survey.buildings);
+  if (vh != null) {
+    STATE.phase1.building_height_ft = vh;
     filled++;
   }
 
