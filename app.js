@@ -1260,6 +1260,45 @@ function syncBasicsGroupChevrons() {
     if (chev) chev.textContent = allCollapsed ? '▸' : '▾';
     div.setAttribute('aria-expanded', allCollapsed ? 'false' : 'true');
   });
+  // Group-footer expand/collapse buttons (Budget + Basics) — keep each button's
+  // label/chevron in sync with its group's live section state.
+  document.querySelectorAll('[data-group-foot-toggle]').forEach(syncGroupFooterToggle);
+}
+
+// ---------- Per-group expand/collapse button (lives in a group footer) ----------
+// A state-aware toggle for the footer at the bottom of a group (Budget groups and
+// the Basics-page groups). `getSecs()` returns the group's collapsible .section
+// elements; clicking collapses them all if any are open, else expands them all —
+// mirroring toggleBasicsGroup, but driven from the footer so the footer itself
+// stays visible in both states. Labels are refreshed by syncBasicsGroupChevrons
+// (run from syncExpandToggles) after any collapse change anywhere on the tab.
+const FOOT_TOGGLE_STYLE = 'display:inline-flex;align-items:center;gap:6px;padding:3px 10px;font-size:12px;'
+  + 'font-weight:600;background:rgba(255,255,255,0.16);color:inherit;border:1px solid currentColor;'
+  + 'border-radius:5px;cursor:pointer;white-space:nowrap;line-height:1.4;flex-shrink:0';
+function syncGroupFooterToggle(btn) {
+  const secs = (btn._getSecs && btn._getSecs()) || [];
+  const anyOpen = secs.some(s => !s.classList.contains('collapsed'));
+  btn.textContent = anyOpen ? '▾ Collapse group' : '▸ Expand group';
+  btn.title = anyOpen ? 'Collapse every section in this group' : 'Expand every section in this group';
+}
+function makeGroupFooterToggle(getSecs) {
+  const btn = el('button', { type: 'button', style: FOOT_TOGGLE_STYLE });
+  btn.setAttribute('data-group-foot-toggle', '');
+  btn._getSecs = getSecs;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const secs = getSecs();
+    if (!secs.length) return;
+    const collapseAll = secs.some(s => !s.classList.contains('collapsed'));  // any open -> collapse; else expand
+    secs.forEach(s => {
+      s.classList.toggle('collapsed', collapseAll);
+      const nm = _sectionName(s);
+      if (nm) window['_collapsed_' + nm] = collapseAll;   // persist (Basics restores this on re-render)
+    });
+    syncExpandToggles();   // also runs syncBasicsGroupChevrons() -> resyncs every footer toggle
+  });
+  syncGroupFooterToggle(btn);
+  return btn;
 }
 // One SHIR-navy box (matches the Budget page summary bar): optional left content
 // (leftStat for a summary chip and/or leftItems for buttons) on the left, and the
@@ -1433,7 +1472,8 @@ function renderPhase1() {
   root.appendChild(renderExpandCollapseBar([importBtn, exportBtn]));
   // Group divider for the property-basics group (Identity / Units / Area /
   // Building & Site + Basics Notes) — clickable to collapse/expand the whole group.
-  root.appendChild(makeGroupDivider('Property Basics'));
+  const pbDivider = makeGroupDivider('Property Basics');
+  root.appendChild(pbDivider);
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units" schema section (split out from the
@@ -1471,14 +1511,21 @@ function renderPhase1() {
   root.appendChild(renderNotesSection('Basics Notes', 'Notes about the property basics, building & site…',
     () => (STATE.phase1 && STATE.phase1.basics_notes) || '',
     (html) => { STATE.phase1.basics_notes = html; saveState(); }));
+  // Colored footer closing the Property Basics group (mirrors the Budget group
+  // footers) — carries a per-group expand/collapse button. Placed before the next
+  // divider so basicsGroupSections(pbDivider) still stops at it correctly.
+  root.appendChild(renderBasicsGroupFooter('Property Basics', pbDivider));
   // Physical characteristics questionnaire lives here too (collapsible sections).
-  root.appendChild(makeGroupDivider('Physical Characteristics'));
+  const pcDivider = makeGroupDivider('Physical Characteristics');
+  root.appendChild(pcDivider);
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   // Physical Notes — same rich-text notes at the end of the Physical
   // Characteristics sections, i.e. right below Amenities - Indoor. Stored in phase2.
   root.appendChild(renderNotesSection('Physical Notes', 'Notes about the physical characteristics…',
     () => (STATE.phase2 && STATE.phase2.physical_notes) || '',
     (html) => { STATE.phase2.physical_notes = html; saveState(); }));
+  // Colored footer closing the Physical Characteristics group.
+  root.appendChild(renderBasicsGroupFooter('Physical Characteristics', pcDivider));
   return root;
 }
 
@@ -4381,7 +4428,7 @@ function refreshBudgetBadges() {
 // banner): the group total with its $/unit, then the total WITH contingency +
 // construction-mgmt fee added, also with its $/unit. Live-updated by
 // refreshBudgetBadges via the data-b-foot / data-foot-* hooks.
-function renderGroupFooter(gi, groupName, groupSum) {
+function renderGroupFooter(gi, groupName, groupSum, groupBody) {
   const color = GROUP_COLORS[groupName] || '#1E3A8A';
   const txt = textOn(color);
   const { cont, fee, mult } = budgetMarkupPcts();
@@ -4390,16 +4437,41 @@ function renderGroupFooter(gi, groupName, groupSum) {
   const mkVals = (amtAttr, puAttr, amt) => el('span', { style: 'display:inline-flex;align-items:baseline;gap:10px;white-space:nowrap' },
     el('span', Object.assign({ style: 'font-weight:700;font-variant-numeric:tabular-nums' }, amtAttr), fmtMoney(amt)),
     el('span', Object.assign({ style: 'font-size:12px;opacity:0.9;font-variant-numeric:tabular-nums' }, puAttr), perUnitStr(amt)));
+  // Per-group expand/collapse button — collapses/expands this group's own
+  // sub-sections (the .section children of the group body), leaving the footer
+  // visible so it works both ways from the bottom of the group.
+  const toggle = groupBody
+    ? makeGroupFooterToggle(() => Array.from(groupBody.querySelectorAll(':scope > .section')))
+    : null;
   return el('div', {
     class: 'group-footer', 'data-b-foot': gi,
     style: `background:${color};color:${txt};padding:8px 14px;border-top:2px solid rgba(0,0,0,0.18);border-radius:0 0 6px 6px;display:flex;flex-direction:column;gap:3px;margin-top:6px`
   },
     el('div', { style: rowStyle },
       el('span', { style: 'font-weight:600' }, `${groupName.toUpperCase()} — Total`),
-      mkVals({ 'data-foot-pre': '' }, { 'data-foot-pre-pu': '' }, groupSum)),
+      el('span', { style: 'display:inline-flex;align-items:center;gap:12px;flex-wrap:wrap' },
+        mkVals({ 'data-foot-pre': '' }, { 'data-foot-pre-pu': '' }, groupSum),
+        toggle || false)),
     el('div', { style: rowStyle },
       el('span', { style: 'font-size:12px;opacity:0.92' }, `+ Contingency ${Math.round(cont * 100)}% + Const. Mgmt ${Math.round(fee * 100)}%`),
       mkVals({ 'data-foot-post': '' }, { 'data-foot-post-pu': '' }, post))
+  );
+}
+
+// Colored footer bar for a Basics-page group ("Property Basics" / "Physical
+// Characteristics"), mirroring the Budget group footer's look. Basics groups have
+// no $ totals, so the footer carries the group name + a per-group expand/collapse
+// button (scoped to that group's sections, found live off its divider). Navy to
+// match the Basics group dividers. `divider` is the group's .group-divider node.
+function renderBasicsGroupFooter(label, divider) {
+  const toggle = makeGroupFooterToggle(() => basicsGroupSections(divider));
+  return el('div', {
+    class: 'group-footer basics-group-footer',
+    style: 'background:var(--primary);color:#fff;padding:8px 14px;border-radius:6px;'
+      + 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 2px 6px',
+  },
+    el('span', { style: 'font-weight:700;text-transform:uppercase;letter-spacing:0.5px;font-size:13px' }, label),
+    toggle,
   );
 }
 // Re-populate every visible % group dropdown when CAPEX Groups change
@@ -4688,7 +4760,7 @@ function renderPhase3() {
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     // Colored group footer (total + total-with-markups, each with $/unit) at the
     // bottom of the group body, so it collapses/expands with the group.
-    groupBody.appendChild(renderGroupFooter(gi, group.name, groupSum));
+    groupBody.appendChild(renderGroupFooter(gi, group.name, groupSum, groupBody));
     groupNode.appendChild(groupBody);
     root.appendChild(groupNode);
   });
