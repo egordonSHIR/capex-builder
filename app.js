@@ -4195,14 +4195,20 @@ function getCapexGroupTotal(groupId) {
 function getDetailItemTotal(gi, si, ii) {
   const v = getP3(gi, si, ii);
   const qty = Number(v.qty) || 0;
-  if (v.unit_type === '%') {
+  const item = getSchemaItemByKey(ckKey(gi, si, ii));
+  // Effective Qty Type = the row's saved pick, else the item's schema default.
+  // Falling back to the default (matching syncTypeRelatedUI + the Excel export)
+  // is what makes a row still showing its DEFAULT Avg-*/% Qty Type calculate
+  // correctly on FIRST render — previously the avg multiplier / % logic only
+  // kicked in after the user re-picked the Qty Type (which saved v.unit_type).
+  const effUT = v.unit_type || (item && item.default_qty_type) || '';
+  if (effUT === '%') {
     return (qty / 100) * getCapexGroupTotal(v.pct_group_id);
   }
   // Avg-* Qty Types multiply by the Unit-Mix average here (effectiveQtyForTotal
   // returns # Qty unchanged for every other type): $ Amt = (# Qty × avg) × $/Qty.
   // The item name lets effectiveQtyForTotal apply the +1 common-area bump where it does.
-  const item = getSchemaItemByKey(ckKey(gi, si, ii));
-  return effectiveQtyForTotal(qty, v.unit_type, item && item.name) * getEffectiveUnitCost(gi, si, ii);
+  return effectiveQtyForTotal(qty, effUT, item && item.name) * getEffectiveUnitCost(gi, si, ii);
 }
 // Look up the schema item for a ckKey (used by the CAPEX Groups UI to render
 // item names + filter the Add Item dropdown).
