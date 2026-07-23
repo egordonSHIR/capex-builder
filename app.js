@@ -1272,14 +1272,14 @@ function syncBasicsGroupChevrons() {
 // mirroring toggleBasicsGroup, but driven from the footer so the footer itself
 // stays visible in both states. Labels are refreshed by syncBasicsGroupChevrons
 // (run from syncExpandToggles) after any collapse change anywhere on the tab.
-const FOOT_TOGGLE_STYLE = 'display:inline-flex;align-items:center;gap:6px;padding:3px 10px;font-size:12px;'
+const FOOT_TOGGLE_STYLE = 'display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;font-size:13px;'
   + 'font-weight:600;background:rgba(255,255,255,0.16);color:inherit;border:1px solid currentColor;'
   + 'border-radius:5px;cursor:pointer;white-space:nowrap;line-height:1.4;flex-shrink:0';
 function syncGroupFooterToggle(btn) {
   const secs = (btn._getSecs && btn._getSecs()) || [];
   const anyOpen = secs.some(s => !s.classList.contains('collapsed'));
   const noun = btn._footNoun || 'group';
-  btn.textContent = (anyOpen ? '▾ Collapse ' : '▸ Expand ') + noun;
+  btn.textContent = anyOpen ? '▾' : '▸';   // arrow only (no label); descriptive text stays in the tooltip
   btn.title = (anyOpen ? 'Collapse ' : 'Expand ') + (noun === 'group' ? 'every section in this group' : 'this section');
 }
 function makeGroupFooterToggle(getSecs, noun) {
