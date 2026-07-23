@@ -141,6 +141,12 @@ main {
 }
 .section.collapsed > .section-header .chev::before { content: '\25B8'; /* ▸ collapsed */ }
 .section.collapsed .section-body { display: none; }
+/* Basics-page per-section footer strip (the arrow expand/collapse control,
+   appendBasicsSectionFooter) is a direct child of .section, so it survives the
+   .section-body collapse above — hide it too while the section is collapsed, so
+   it only shows when the section is expanded (matches the Budget group footers,
+   which live inside the collapsing body). */
+.section.collapsed > .section-footer { display: none !important; }  /* beats the footer's inline display:flex */
 /* Keyboard focus ring on section headers (they're role="button" tabindex="0"
    via wireSectionA11y — see app.js). Uses the outline-offset trick so the ring
    sits INSIDE the rounded section border without being clipped. */
