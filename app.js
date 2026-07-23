@@ -1280,7 +1280,7 @@ function syncGroupFooterToggle(btn) {
   const anyOpen = secs.some(s => !s.classList.contains('collapsed'));
   const noun = btn._footNoun || 'group';
   btn.textContent = anyOpen ? '▾' : '▸';   // arrow only (no label); descriptive text stays in the tooltip
-  btn.title = (anyOpen ? 'Collapse ' : 'Expand ') + (noun === 'group' ? 'every section in this group' : 'this section');
+  btn.title = (anyOpen ? 'Collapse ' : 'Expand ') + (noun === 'group' ? 'this entire group' : 'this section');
 }
 function makeGroupFooterToggle(getSecs, noun) {
   const btn = el('button', { type: 'button', style: FOOT_TOGGLE_STYLE });
@@ -4446,11 +4446,12 @@ function renderGroupFooter(gi, groupName, groupSum, groupBody) {
   const mkVals = (amtAttr, puAttr, amt) => el('span', { style: 'display:inline-flex;align-items:baseline;gap:10px;white-space:nowrap' },
     el('span', Object.assign({ style: 'font-weight:700;font-variant-numeric:tabular-nums' }, amtAttr), fmtMoney(amt)),
     el('span', Object.assign({ style: 'font-size:12px;opacity:0.9;font-variant-numeric:tabular-nums' }, puAttr), perUnitStr(amt)));
-  // Per-group expand/collapse button — collapses/expands this group's own
-  // sub-sections (the .section children of the group body), leaving the footer
-  // visible so it works both ways from the bottom of the group.
+  // Per-group expand/collapse button — collapses/expands the ENTIRE group (the
+  // whole .group-section, same as clicking the group header at the top), NOT the
+  // individual sub-sections. Resolved at click time via closest() since the
+  // group body isn't attached to its .group-section until after this returns.
   const toggle = groupBody
-    ? makeGroupFooterToggle(() => Array.from(groupBody.querySelectorAll(':scope > .section')))
+    ? makeGroupFooterToggle(() => { const gs = groupBody.closest('.group-section'); return gs ? [gs] : []; })
     : null;
   return el('div', {
     class: 'group-footer', 'data-b-foot': gi,
