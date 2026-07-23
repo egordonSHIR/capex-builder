@@ -1278,13 +1278,15 @@ const FOOT_TOGGLE_STYLE = 'display:inline-flex;align-items:center;gap:6px;paddin
 function syncGroupFooterToggle(btn) {
   const secs = (btn._getSecs && btn._getSecs()) || [];
   const anyOpen = secs.some(s => !s.classList.contains('collapsed'));
-  btn.textContent = anyOpen ? '▾ Collapse group' : '▸ Expand group';
-  btn.title = anyOpen ? 'Collapse every section in this group' : 'Expand every section in this group';
+  const noun = btn._footNoun || 'group';
+  btn.textContent = (anyOpen ? '▾ Collapse ' : '▸ Expand ') + noun;
+  btn.title = (anyOpen ? 'Collapse ' : 'Expand ') + (noun === 'group' ? 'every section in this group' : 'this section');
 }
-function makeGroupFooterToggle(getSecs) {
+function makeGroupFooterToggle(getSecs, noun) {
   const btn = el('button', { type: 'button', style: FOOT_TOGGLE_STYLE });
   btn.setAttribute('data-group-foot-toggle', '');
   btn._getSecs = getSecs;
+  btn._footNoun = noun || 'group';
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     const secs = getSecs();
@@ -1526,6 +1528,13 @@ function renderPhase1() {
     (html) => { STATE.phase2.physical_notes = html; saveState(); }));
   // Colored footer closing the Physical Characteristics group.
   root.appendChild(renderBasicsGroupFooter('Physical Characteristics', pcDivider));
+  // Give EVERY section box on the Basics page its own expand/collapse button —
+  // a matching-color footer strip on each top-level .section (schema sections +
+  // the Notes boxes). Direct children only, so blocks injected inside a section
+  // body (Unit Mix, Survey) don't get their own.
+  Array.from(root.children)
+    .filter(c => c.matches && c.matches('section.section'))
+    .forEach(appendBasicsSectionFooter);
   return root;
 }
 
@@ -4473,6 +4482,26 @@ function renderBasicsGroupFooter(label, divider) {
     el('span', { style: 'font-weight:700;text-transform:uppercase;letter-spacing:0.5px;font-size:13px' }, label),
     toggle,
   );
+}
+
+// Per-section expand/collapse footer for a Basics-page section box. Appended as a
+// direct child of the .section (AFTER .section-body) so it stays visible when the
+// section is collapsed — `.section.collapsed .section-body{display:none}` only
+// hides the body, so the footer + its toggle remain reachable to re-expand. The
+// strip is tinted to match the section's own header (its pastel), echoing the
+// "same coloring" footer treatment. Idempotent (skips if already added).
+function appendBasicsSectionFooter(sectionEl) {
+  if (!sectionEl || sectionEl.querySelector(':scope > .section-footer')) return;
+  const hdr = sectionEl.querySelector(':scope > .section-header');
+  const bg = (hdr && (hdr.style.background || hdr.style.backgroundColor)) || '#f1f5f9';
+  const fg = (hdr && hdr.style.color) || 'var(--primary)';
+  const toggle = makeGroupFooterToggle(() => [sectionEl], 'section');
+  const footer = el('div', {
+    class: 'section-footer',
+    style: `background:${bg};color:${fg};padding:5px 12px;border-top:1px solid rgba(0,0,0,0.10);`
+      + 'border-radius:0 0 6px 6px;display:flex;justify-content:flex-end;align-items:center;margin-top:2px',
+  }, toggle);
+  sectionEl.appendChild(footer);
 }
 // Re-populate every visible % group dropdown when CAPEX Groups change
 // (added / renamed / deleted) so the in-line item % selectors stay current
