@@ -428,6 +428,9 @@ function openProperty(id) {
   // refreshes our heartbeat, surfaces concurrent-editor banners.
   if (typeof startAutoSync === 'function') startAutoSync();
   if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();   // resume an in-flight survey job
+  // Cross-user: adopt a teammate's active survey job for this deal (shared folder)
+  // even if our local state didn't know about it — so its status shows here too.
+  if (typeof adoptRemoteSurveyJobIfAny === 'function') adoptRemoteSurveyJobIfAny();
   if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();   // resume an in-flight proforma import
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
   reconcileFromDrive();   // Drive-authoritative: adopt a newer remote copy if this device is clean
@@ -2795,6 +2798,19 @@ async function submitSurveyJob(rebuild) {
     return;
   }
   try {
+    // Cross-user dedup: a teammate may have already queued this deal (their job
+    // lives in the shared Survey Jobs folder even if our local state didn't know).
+    // Adopt theirs instead of creating a duplicate request.
+    toast('Checking for an existing survey request…');
+    const remote = await findActiveSurveyJobForDeal();
+    if (remote) {
+      setSurveyJob(remote);
+      startSurveyPoll();
+      if (rebuild) rebuild();
+      const who = (remote.requestedBy && (remote.requestedBy.name || remote.requestedBy.email)) || 'another user';
+      toast(`Survey already ${remote.status} (requested by ${who}) — tracking that job, no duplicate created.`, '');
+      return;
+    }
     // Confirm which survey PDF the worker should read (same confirm-walk as the
     // legacy path). Passing its id/name lets the worker skip re-discovery.
     toast('Finding the survey PDF in Drive…');
@@ -2897,6 +2913,73 @@ function stopSurveyPoll() {
 // Resume polling when a property with an active job is (re)opened.
 function maybeStartSurveyPoll() {
   if (surveyJobIsActive(getSurveyJob()) && !SURVEY_POLL_ID) startSurveyPoll();
+}
+
+// ---------- Cross-user survey-job awareness ----------
+// The job pointer lives on the per-property state, which syncs to Drive only
+// periodically (and is last-writer-wins), so a teammate's fresh request may not
+// be reflected in THIS user's local state yet — leading to duplicate requests.
+// The job FILES, however, live in the shared "Survey Jobs" folder org-wide, so
+// scan that folder for an ACTIVE job belonging to this DEAL. Match on the shared
+// deal folderId — property.id is a per-device local uuid and won't match across
+// users. Returns a pointer-shaped object (incl. requestedBy) or null.
+async function findActiveSurveyJobForDeal() {
+  if (!STATE || !STATE.drive || !STATE.drive.folderId) return null;
+  if (!getDriveToken()) return null;
+  const dealFolderId = STATE.drive.folderId;
+  let jobsFolderId, files;
+  try { jobsFolderId = await ensureSurveyJobsFolder(); } catch { return null; }
+  try { files = await driveListFilesInFolder(jobsFolderId); } catch { return null; }
+  // An active job is always recent (processing is 30–60 min); skip downloading
+  // stale job files (done/error leftovers can pile up — the worker can't always
+  // delete a cross-owner file) so this scan stays cheap on every sync tick.
+  const RECENT_MS = 24 * 60 * 60_000;
+  const now = Date.now();
+  for (const f of (files || [])) {
+    if (!/^job_.*\.json$/i.test(f.name || '')) continue;
+    const mt = f.modifiedTime ? Date.parse(f.modifiedTime) : 0;
+    if (mt && (now - mt) > RECENT_MS) continue;
+    let job;
+    try {
+      const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+      if (!r.ok) continue;
+      job = await r.json();
+    } catch { continue; }
+    if (job && (job.status === 'queued' || job.status === 'processing')
+        && job.deal && job.deal.folderId === dealFolderId) {
+      return {
+        jobId: job.jobId, fileId: f.id, jobsFolderId,
+        status: job.status, submittedAt: job.requestedAt,
+        pdfName: (job.surveyPdf && job.surveyPdf.name) || null, outputName: null,
+        requestedBy: job.requestedBy || null,
+      };
+    }
+  }
+  return null;
+}
+
+// If a teammate has an active survey job for this deal (in the shared folder) but
+// our local state doesn't know about it, ADOPT it: track the same job so the UI
+// shows "queued/processing (requested by X)", the Process Survey button disables,
+// and this user's poll auto-imports the result when it lands. Prevents duplicate
+// requests. No-op if we're already tracking a job or the survey is already done.
+let _surveyAdoptInFlight = false;
+async function adoptRemoteSurveyJobIfAny() {
+  if (!STATE || _surveyAdoptInFlight) return;
+  if (surveyJobIsActive(getSurveyJob())) return;   // already tracking one
+  _surveyAdoptInFlight = true;
+  try {
+    const remote = await findActiveSurveyJobForDeal();
+    if (!remote) return;
+    if (surveyJobIsActive(getSurveyJob())) return;   // re-check after the await
+    setSurveyJob(remote);
+    refreshSurveyUI();
+    if (!SURVEY_POLL_ID) startSurveyPoll();
+  } catch (e) {
+    console.warn('adoptRemoteSurveyJobIfAny failed:', e);
+  } finally {
+    _surveyAdoptInFlight = false;
+  }
 }
 
 // Read the current job file. The worker rewrites the file as it transitions the
@@ -3059,7 +3142,13 @@ function surveyJobStatusLine(rebuild) {
   if (!surveyJobIsActive(job)) return null;
   const since = job.submittedAt ? relativeTime(job.submittedAt) : '';
   const stale = job.submittedAt && (Date.now() - Date.parse(job.submittedAt) > SURVEY_JOB_STALE_MS);
+  // Name the requester when it's a DIFFERENT teammate (so everyone sees the same
+  // request and no one double-submits). Omitted when the current user requested it.
+  const rbEmail = job.requestedBy && job.requestedBy.email;
+  const byOther = rbEmail && (!CURRENT_USER || rbEmail !== CURRENT_USER.email);
+  const who = byOther ? (job.requestedBy.name || rbEmail) : '';
   const msg =
+    (byOther ? `🛰 Requested by ${who} — ` : '') +
     (job.status === 'processing'
       ? '⏳ A processing agent is running the survey-breakdown skill'
       : '⏳ Survey queued — waiting for a processing agent') +
@@ -9090,6 +9179,11 @@ async function syncTick() {
     // 4. Backstop the survey-job + proforma-import polls (restart if the interval died).
     if (typeof maybeStartSurveyPoll === 'function') maybeStartSurveyPoll();
     if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();
+    // 4b. Cross-user: if we're not already tracking a survey job, adopt a teammate's
+    // active request for this deal so it surfaces here (prevents duplicate requests).
+    if (typeof adoptRemoteSurveyJobIfAny === 'function' && !surveyJobIsActive(getSurveyJob())) {
+      adoptRemoteSurveyJobIfAny();
+    }
     // 5. Nudge the photo-upload queue (cheap no-op when empty).
     if (typeof drainPhotoQueue === 'function') drainPhotoQueue();
   } catch (e) {
