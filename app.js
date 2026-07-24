@@ -1474,8 +1474,7 @@ function renderPhase1() {
   root.appendChild(renderExpandCollapseBar([importBtn, exportBtn]));
   // Group divider for the property-basics group (Identity / Units / Area /
   // Building & Site + Basics Notes) — clickable to collapse/expand the whole group.
-  const pbDivider = makeGroupDivider('Property Basics');
-  root.appendChild(pbDivider);
+  root.appendChild(makeGroupDivider('Property Basics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase1, STATE.phase1));
 
   // Inject the Unit Mix block into the "Units" schema section (split out from the
@@ -1513,21 +1512,14 @@ function renderPhase1() {
   root.appendChild(renderNotesSection('Basics Notes', 'Notes about the property basics, building & site…',
     () => (STATE.phase1 && STATE.phase1.basics_notes) || '',
     (html) => { STATE.phase1.basics_notes = html; saveState(); }));
-  // Colored footer closing the Property Basics group (mirrors the Budget group
-  // footers) — carries a per-group expand/collapse button. Placed before the next
-  // divider so basicsGroupSections(pbDivider) still stops at it correctly.
-  root.appendChild(renderBasicsGroupFooter('Property Basics', pbDivider));
   // Physical characteristics questionnaire lives here too (collapsible sections).
-  const pcDivider = makeGroupDivider('Physical Characteristics');
-  root.appendChild(pcDivider);
+  root.appendChild(makeGroupDivider('Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
   // Physical Notes — same rich-text notes at the end of the Physical
   // Characteristics sections, i.e. right below Amenities - Indoor. Stored in phase2.
   root.appendChild(renderNotesSection('Physical Notes', 'Notes about the physical characteristics…',
     () => (STATE.phase2 && STATE.phase2.physical_notes) || '',
     (html) => { STATE.phase2.physical_notes = html; saveState(); }));
-  // Colored footer closing the Physical Characteristics group.
-  root.appendChild(renderBasicsGroupFooter('Physical Characteristics', pcDivider));
   // Give EVERY section box on the Basics page its own expand/collapse button —
   // a matching-color footer strip on each top-level .section (schema sections +
   // the Notes boxes). Direct children only, so blocks injected inside a section
@@ -4474,27 +4466,10 @@ function renderGroupFooter(gi, groupName, groupSum, groupBody) {
   );
 }
 
-// Colored footer bar for a Basics-page group ("Property Basics" / "Physical
-// Characteristics"), mirroring the Budget group footer's look. Basics groups have
-// no $ totals, so the footer carries the group name + a per-group expand/collapse
-// button (scoped to that group's sections, found live off its divider). Navy to
-// match the Basics group dividers. `divider` is the group's .group-divider node.
-function renderBasicsGroupFooter(label, divider) {
-  const toggle = makeGroupFooterToggle(() => basicsGroupSections(divider));
-  // Match the group DIVIDER look (no fill, navy text) but with a thin blue rule
-  // ABOVE and BELOW the text, plus a plain navy chevron (not a bordered button).
-  toggle.style.cssText = 'background:transparent;border:none;color:var(--primary);cursor:pointer;'
-    + 'font-size:13px;font-weight:400;line-height:1;padding:0 2px;flex-shrink:0';
-  return el('div', {
-    class: 'group-footer basics-group-footer',
-    style: 'background:transparent;color:var(--primary);padding:6px 2px;'
-      + 'border-top:2px solid var(--primary-light);border-bottom:2px solid var(--primary-light);'
-      + 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 2px 10px',
-  },
-    el('span', { style: 'font-weight:700;text-transform:uppercase;letter-spacing:0.6px;font-size:12px' }, label),
-    toggle,
-  );
-}
+// (renderBasicsGroupFooter removed 2026-07-24 — the group-level footers on the
+// Basics page were redundant with the group dividers, so they were dropped. The
+// group dividers still collapse/expand the whole group; each SECTION keeps its
+// own footer arrow via appendBasicsSectionFooter below.)
 
 // Per-section expand/collapse footer for a Basics-page section box. Appended as a
 // direct child of the .section (AFTER .section-body) so it stays visible when the
