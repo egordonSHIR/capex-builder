@@ -740,6 +740,12 @@ main {
   background-color: #f3f4f6;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5L11.5 11.5M11.5 4.5L4.5 11.5' stroke='%236b7280' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E");
 }
+/* On a GROUP header specifically, a partial skip (some sections/items skipped,
+   some not) reads as a GRAY CHECKMARK instead of the gray ✗ — the group still
+   has active items. Higher specificity (.group-header) beats the ✗ rule above. */
+.section-header.group-header .skip-toggle .skip-toggle-cb:indeterminate {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5L6.5 11.5L12.5 4.5' stroke='%236b7280' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
 /* A priced Budget row whose Qty Type pulls its # Qty from a Basics/computed
    field that's still blank — the auto-filled # Qty reads 0, so flag the cell red
    until the source field is filled (see qtyTypeMissingInputs /
