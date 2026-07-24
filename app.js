@@ -1263,6 +1263,8 @@ function syncBasicsGroupChevrons() {
   // Group-footer expand/collapse buttons (Budget + Basics) — keep each button's
   // label/chevron in sync with its group's live section state.
   document.querySelectorAll('[data-group-foot-toggle]').forEach(syncGroupFooterToggle);
+  // Budget group-header "Sections" buttons (collapse/expand all sub-sections).
+  document.querySelectorAll('[data-group-sections-toggle]').forEach(syncSectionsToggle);
 }
 
 // ---------- Per-group expand/collapse button (lives in a group footer) ----------
@@ -1300,6 +1302,40 @@ function makeGroupFooterToggle(getSecs, noun) {
     syncExpandToggles();   // also runs syncBasicsGroupChevrons() -> resyncs every footer toggle
   });
   syncGroupFooterToggle(btn);
+  return btn;
+}
+
+// ---------- Per-group "expand/collapse all sections" button (Budget group header) ----------
+// Toggles every sub-section inside a Budget group at once (the .section children
+// of the group body), leaving the GROUP itself open — distinct from the group
+// header/footer whole-group collapse. Labeled ("Sections") so it reads as a
+// sections control. Re-synced by syncBasicsGroupChevrons after any collapse change.
+const SECTIONS_TOGGLE_STYLE = 'display:inline-flex;align-items:center;gap:5px;padding:2px 9px;font-size:11px;'
+  + 'font-weight:600;background:rgba(255,255,255,0.18);color:inherit;border:1px solid currentColor;'
+  + 'border-radius:5px;cursor:pointer;white-space:nowrap;line-height:1.4;flex-shrink:0';
+function syncSectionsToggle(btn) {
+  const secs = (btn._getSecs && btn._getSecs()) || [];
+  const anyOpen = secs.some(s => !s.classList.contains('collapsed'));
+  btn.textContent = anyOpen ? '▾ Sections' : '▸ Sections';
+  btn.title = anyOpen ? 'Collapse all sections in this group' : 'Expand all sections in this group';
+}
+function makeSectionsToggle(getSecs) {
+  const btn = el('button', { type: 'button', style: SECTIONS_TOGGLE_STYLE });
+  btn.setAttribute('data-group-sections-toggle', '');
+  btn._getSecs = getSecs;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();   // don't also toggle the whole group (the header click does that)
+    const secs = getSecs();
+    if (!secs.length) return;
+    const collapseAll = secs.some(s => !s.classList.contains('collapsed'));  // any open -> collapse; else expand
+    secs.forEach(s => {
+      s.classList.toggle('collapsed', collapseAll);
+      const nm = _sectionName(s);
+      if (nm) window['_collapsed_' + nm] = collapseAll;
+    });
+    syncExpandToggles();   // also runs syncBasicsGroupChevrons() -> resyncs this + every toggle
+  });
+  syncSectionsToggle(btn);
   return btn;
 }
 // One SHIR-navy box (matches the Budget page summary bar): optional left content
@@ -3812,7 +3848,7 @@ function lightenHex(hex, blend) {
   return '#' + mix(r) + mix(g) + mix(b);
 }
 // Build a colored group <header> for the CAPEX group sections.
-function groupHeader(groupName, badgeNode, skipNode, hideNode) {
+function groupHeader(groupName, badgeNode, skipNode, hideNode, sectionsToggleNode) {
   const color = GROUP_COLORS[groupName];
   const txt = color ? textOn(color) : null;
   const headerAttrs = {
@@ -3821,12 +3857,13 @@ function groupHeader(groupName, badgeNode, skipNode, hideNode) {
   };
   if (color) headerAttrs.style = `background:${color};color:${txt};border-bottom-color:rgba(0,0,0,0.12)`;
   // Skip toggle sits on the LEFT (before the group name); the hide/show-skipped
-  // button + badge + chevron stay on the right.
+  // button + badge + the "Sections" toggle + chevron stay on the right.
   return el('header', headerAttrs,
     skipNode || false,
     el('span', { style: 'font-size:15px;font-weight:700;flex:1' + (txt ? `;color:${txt}` : '') }, groupName.toUpperCase()),
     hideNode || false,
     badgeNode || false,
+    sectionsToggleNode || false,
     el('span', { class: 'chev', style: txt ? `color:${txt}` : '' }, '▼')
   );
 }
@@ -4772,7 +4809,12 @@ function renderPhase3() {
       el('span', { 'data-bg-pu': '', style: 'font-weight:600;margin-left:10px;opacity:0.85' }, perUnitStr(groupSum)));
     const groupTxt = GROUP_COLORS[group.name] ? textOn(GROUP_COLORS[group.name]) : null;
     const groupSkip = renderSkipHeaderToggle(gi, null, summary, groupTxt);
-    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip));
+    // "Sections" button in the group header — collapses/expands all sub-sections
+    // in this group at once (leaving the group itself open). Distinct from the
+    // header/footer whole-group collapse. Sub-sections = the .section children of
+    // this group's body (built above), resolved live at click time.
+    const groupSectionsToggle = makeSectionsToggle(() => Array.from(groupBody.querySelectorAll(':scope > .section')));
+    const groupNode = el('section', { class: 'section group-section' }, groupHeader(group.name, groupBadge, groupSkip, null, groupSectionsToggle));
     if (isInterior) groupNode.appendChild(renderInteriorStatusHeader());
     // Colored group footer (total + total-with-markups, each with $/unit) at the
     // bottom of the group body, so it collapses/expands with the group.
