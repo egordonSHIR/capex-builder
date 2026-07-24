@@ -4481,12 +4481,17 @@ function renderGroupFooter(gi, groupName, groupSum, groupBody) {
 // match the Basics group dividers. `divider` is the group's .group-divider node.
 function renderBasicsGroupFooter(label, divider) {
   const toggle = makeGroupFooterToggle(() => basicsGroupSections(divider));
+  // Match the group DIVIDER look (no fill, navy text) but with a thin blue rule
+  // ABOVE and BELOW the text, plus a plain navy chevron (not a bordered button).
+  toggle.style.cssText = 'background:transparent;border:none;color:var(--primary);cursor:pointer;'
+    + 'font-size:13px;font-weight:400;line-height:1;padding:0 2px;flex-shrink:0';
   return el('div', {
     class: 'group-footer basics-group-footer',
-    style: 'background:var(--primary);color:#fff;padding:8px 14px;border-radius:6px;'
-      + 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 2px 6px',
+    style: 'background:transparent;color:var(--primary);padding:6px 2px;'
+      + 'border-top:2px solid var(--primary-light);border-bottom:2px solid var(--primary-light);'
+      + 'display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 2px 10px',
   },
-    el('span', { style: 'font-weight:700;text-transform:uppercase;letter-spacing:0.5px;font-size:13px' }, label),
+    el('span', { style: 'font-weight:700;text-transform:uppercase;letter-spacing:0.6px;font-size:12px' }, label),
     toggle,
   );
 }
