@@ -1830,6 +1830,13 @@ window.SCHEMA = {
             "default_qty_type": "Each"
           },
           {
+            "name": "Carports (New)",
+            "default_cost_per_item": 2500.0,
+            "notes": null,
+            "gl_account": "17530: CIP Parking Lot",
+            "default_qty_type": "Each"
+          },
+          {
             "name": "# Parks Added - New Asphalt",
             "default_cost_per_item": 2000.0,
             "notes": null,
