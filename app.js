@@ -9118,15 +9118,31 @@ function showConcurrentEditBanner(email, heartbeatAt) {
   if (!b) {
     b = el('div', {
       id: 'concurrent-edit-banner',
-      style: 'background:#fef3c7;color:#92400e;padding:8px 14px;text-align:center;font-size:12px;font-weight:600;border-bottom:1px solid #fbbf24;line-height:1.4'
+      style: 'background:#fef3c7;color:#92400e;padding:8px 14px;font-size:12px;font-weight:600;'
+        + 'border-bottom:1px solid #fbbf24;line-height:1.4;display:flex;align-items:center;'
+        + 'justify-content:center;gap:12px;flex-wrap:wrap'
     });
     const target = $('#phase-content');
     if (target && target.parentElement) target.parentElement.insertBefore(b, target);
     else document.body.appendChild(b);
   }
   const ago = heartbeatAt ? relativeTime(heartbeatAt) : 'just now';
-  b.textContent = `⚠️ ${email} is also editing this property (active ${ago}) — your edits may overwrite theirs.`;
-  b.style.display = 'block';
+  b.innerHTML = '';
+  b.appendChild(el('span', {},
+    `⚠️ ${email} is also editing this property (active ${ago}) — your edits may overwrite theirs.`));
+  // One-click "adopt their copy": pull the latest saved version from Drive (their
+  // most recent auto-saved edits) and continue from it. pullFromDrive() asks first
+  // if you have unpushed local changes, so this can't silently discard your work.
+  const pullBtn = el('button', {
+    type: 'button',
+    title: 'Pull the latest saved copy from Drive (their most recent saved edits) and continue from it. '
+      + 'If you have unpushed local changes you\'ll be asked to confirm first.',
+    style: 'padding:3px 12px;font-size:12px;font-weight:700;background:#92400e;color:#fff;border:none;'
+      + 'border-radius:5px;cursor:pointer;white-space:nowrap;flex-shrink:0'
+  }, '⤓ Load their latest');
+  pullBtn.addEventListener('click', () => pullFromDrive());
+  b.appendChild(pullBtn);
+  b.style.display = 'flex';
 }
 function hideConcurrentEditBanner() {
   const b = $('#concurrent-edit-banner');
