@@ -1376,7 +1376,7 @@ window.SCHEMA = {
     "name": "Soft Costs",
     "sections": [
       {
-        "name": "Zoning",
+        "name": "ZONING",
         "items": [
           {
             "name": "Legal",
@@ -2062,7 +2062,7 @@ window.SCHEMA = {
     "name": "Interior",
     "sections": [
       {
-        "name": "General",
+        "name": "GENERAL",
         "items": [
           {
             "name": "Interior Demo Labor",
