@@ -7250,6 +7250,22 @@ function setPropertyArchived(p, archived) {
   renderHome();
 }
 
+// Merge local properties + org-manifest entries by id -> [{local, remote}].
+// Shared by renderHome (display) and pullAllFromDrive (bulk pull) so both work
+// off exactly the same property set.
+function mergedHomeEntries() {
+  const merged = new Map();
+  Object.values(STORE.properties).forEach(p => merged.set(p.id, { local: p, remote: null }));
+  if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
+    MANIFEST_CACHE.data.properties.forEach(entry => {
+      const cur = merged.get(entry.id) || { local: null, remote: null };
+      cur.remote = entry;
+      merged.set(entry.id, cur);
+    });
+  }
+  return Array.from(merged.values());
+}
+
 function renderHome() {
   const main = $('#home-content');
   main.innerHTML = '';
@@ -7263,16 +7279,7 @@ function renderHome() {
   if (shouldShowOnboarding()) main.appendChild(renderOnboardingCard());
 
   // Merge local properties + manifest entries by id, then sort per the user's choice.
-  const merged = new Map();
-  Object.values(STORE.properties).forEach(p => merged.set(p.id, { local: p, remote: null }));
-  if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
-    MANIFEST_CACHE.data.properties.forEach(entry => {
-      const cur = merged.get(entry.id) || { local: null, remote: null };
-      cur.remote = entry;
-      merged.set(entry.id, cur);
-    });
-  }
-  const entries = Array.from(merged.values());
+  const entries = mergedHomeEntries();
   sortHomeEntries(entries);
   // Split into Live vs Archived; the current view mode picks which to show.
   const archivedCount = entries.filter(isEntryArchived).length;
@@ -7311,6 +7318,13 @@ function renderHome() {
         ? `📋 Index · ${MANIFEST_CACHE.fetchedAt ? relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) : 'loaded'}`
         : '📋 Tap Refresh');
   controls.appendChild(el('span', { style: 'color:#e2e8f0;white-space:nowrap', title: 'Org index' }, statusText));
+  // "Data pulled" stamp — set by the last completed ⤓ Pull All from Drive.
+  if (HOME_PULL_ALL_AT && !HOME_PULL_ALL_RUNNING) {
+    controls.appendChild(el('span', {
+      style: 'color:#86efac;white-space:nowrap;font-weight:600',
+      title: 'Every property’s data was pulled from Drive — the green ● icons are up to date as of this time',
+    }, `✓ Data pulled · ${relativeTime(HOME_PULL_ALL_AT)}`));
+  }
   if (visible.length) {
     controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap' }, 'Sort:'));
     const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;color:var(--primary)' });
@@ -7328,8 +7342,21 @@ function renderHome() {
   // Flexible spacer pushes the user + Refresh to the right edge of the row.
   controls.appendChild(el('span', { style: 'flex:1 1 auto;min-width:8px' }));
   if (CURRENT_USER && CURRENT_USER.email) controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap', title: CURRENT_USER.email }, CURRENT_USER.email.split('@')[0]));
+  // ⤓ Update All Props — downloads every property's latest saved data from its
+  // deal folder (not just the index), so every card flips ☁ -> green ● and any
+  // teammate's newer edits land on this device without opening each property.
+  const pullAllBtn = el('button', {
+    'data-pull-all-btn': '1',
+    style: 'background:rgba(255,255,255,0.14);color:#fff;border:1px solid rgba(255,255,255,0.55);border-radius:6px;'
+      + 'padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap',
+    title: 'Update every property from Google Drive — downloads each one’s latest saved data (☁ cards load and turn green ●)',
+    onClick: () => pullAllFromDrive(),
+  }, pullAllBtnLabel());
+  if (HOME_PULL_ALL_RUNNING) { pullAllBtn.disabled = true; pullAllBtn.style.opacity = '0.7'; pullAllBtn.style.cursor = 'default'; }
+  controls.appendChild(pullAllBtn);
   controls.appendChild(el('button', {
     style: 'background:none;border:none;color:#fff;font-size:12px;cursor:pointer;font-weight:600;padding:0;white-space:nowrap',
+    title: 'Refresh the org index only (property names/status) — does not download each property’s data',
     onClick: () => refreshHomeIndex(),
   }, '🔄 Refresh'));
   box.appendChild(controls);
@@ -7369,7 +7396,8 @@ function renderHomeLegend() {
   };
   body.appendChild(row('●', 'var(--success)', 'Saved to Drive — edits sync automatically to the deal folder'));
   body.appendChild(row('⊘', '#94a3b8', 'No Drive deal folder linked yet'));
-  body.appendChild(row('☁', '#1e3a8a', 'In the org index but not loaded on this device — tap the card to open it from Drive'));
+  body.appendChild(row('☁', '#1e3a8a', 'In the org index but not loaded on this device — tap the card to open it from Drive, or use “⤓ Update All Props” to load every one at once'));
+  body.appendChild(row('⤓', '#166534', '“updated” = this property’s data was just pulled from Drive by “⤓ Update All Props”'));
   body.appendChild(row('⋮', '#64748b', 'Property menu — rename, link/change Drive folder, archive, delete'));
   body.appendChild(row('📐', '#166534', '“survey” = survey processed (gray “no survey” = not yet)'));
   body.appendChild(row('🏠', '#166534', '“unit mix (N)” = N unit types imported (gray “no unit mix” = none)'));
@@ -7418,6 +7446,13 @@ function renderPropertyCard(local, remote) {
     title: unitMixOk ? `Unit mix imported (${unitMixCount} types)` : 'No unit mix imported',
     style: `font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:${unitMixOk ? '#dcfce7' : '#f1f5f9'};color:${unitMixOk ? '#166534' : '#94a3b8'}`,
   }, unitMixOk ? `🏠 unit mix${unitMixCount ? ` (${unitMixCount})` : ''}` : '🏠 no unit mix'));
+  // Transient "just updated from Drive" marker from the last ⤓ Update All Props.
+  if (HOME_PULL_ALL_IDS && HOME_PULL_ALL_IDS.has(p.id)) {
+    statusBadges.appendChild(el('span', {
+      title: `Data pulled from Drive${HOME_PULL_ALL_AT ? ' ' + relativeTime(HOME_PULL_ALL_AT) : ''}`,
+      style: 'font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:#dcfce7;color:#166534',
+    }, '⤓ updated'));
+  }
 
   // Drive-authoritative: edits auto-save to Drive, so a linked property is simply
   // "on Drive" (no local-vs-remote dirty state). ☁ = in the org index but not yet
@@ -8074,6 +8109,17 @@ async function driveEnsureSubfolder(parentId, name) {
   });
   const createJ = await createR.json();
   return createJ.id;
+}
+
+// Look up a subfolder WITHOUT creating it — returns its id or null. Used by the
+// bulk "Pull All from Drive" pass, which must not provision empty
+// `25. Capex/Capex Builder Budget` folders in deals that have no capex data yet.
+async function driveFindSubfolder(parentId, name) {
+  const safeName = name.replace(/'/g, "\\'");
+  const q = `'${parentId}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=10`);
+  const j = await r.json();
+  return ((j.files || [])[0] || {}).id || null;
 }
 
 // Resolve (and cache) the nested target folder where all capex artifacts live:
@@ -9268,6 +9314,147 @@ async function refreshHomeIndex() {
   }
 }
 
+// ---------- "⤓ Update All Props": bulk-refresh every property from Drive ----------
+// 🔄 Refresh only re-reads the org INDEX (names / status badges / presence).
+// This pulls each property's actual saved data (`capex_builder.json` in its deal
+// folder) down to this device: manifest-only (☁) properties get loaded — which
+// is what flips their card icon to the green ● "Saved to Drive" state — and
+// already-local properties adopt a teammate's newer copy. Never clobbers a
+// property with unsynced local edits (those are reported as skipped).
+let HOME_PULL_ALL_RUNNING = false;
+let HOME_PULL_ALL_PROGRESS = null;   // {done, total} while running
+let HOME_PULL_ALL_AT = null;         // ISO time of the last completed bulk pull
+let HOME_PULL_ALL_IDS = new Set();   // property ids that actually changed in it
+
+function pullAllBtnLabel() {
+  if (!HOME_PULL_ALL_RUNNING) return '⤓ Update All Props';
+  const p = HOME_PULL_ALL_PROGRESS;
+  return (p && p.total) ? `⤓ Updating ${p.done}/${p.total}…` : '⤓ Updating…';
+}
+// Update the button text in place — cheaper than a full renderHome per item and
+// it keeps the legend's open/closed state and scroll position untouched.
+function paintPullAllProgress() {
+  const b = document.querySelector('[data-pull-all-btn]');
+  if (b) b.textContent = pullAllBtnLabel();
+}
+
+// Pull one merged home entry. Returns a status string:
+//   'added' (was ☁, now local) | 'updated' (local adopted a newer Drive copy)
+//   'current' | 'dirty' (unsynced local edits — left alone) | 'open' | 'nofolder' | 'nofile'
+async function pullOnePropertyFromDrive(entry) {
+  const local = entry.local, remote = entry.remote;
+  if (local && STATE && STATE.id === local.id) return 'open';   // don't yank the open property out from under the editor
+  const folderId = (local && local.drive && local.drive.folderId) || (remote && remote.dealFolderId) || '';
+  if (!folderId) return 'nofolder';
+  // Reuse the cached budget-folder id when we have it; otherwise LOOK IT UP
+  // (find-only — a bulk pass must not create folders).
+  let budgetFolder = (local && local.drive && local.drive.capexFolderId) || null;
+  if (!budgetFolder) {
+    const capexParent = await driveFindSubfolder(folderId, '25. Capex');
+    if (!capexParent) return 'nofile';
+    budgetFolder = await driveFindSubfolder(capexParent, 'Capex Builder Budget');
+    if (!budgetFolder) return 'nofile';
+  }
+  const file = await driveFindFile(budgetFolder, STATE_FILENAME);
+  if (!file) return 'nofile';
+
+  if (local) {
+    local.drive.capexFolderId = budgetFolder;   // cache for next time
+    const remoteNewer = file.modifiedTime &&
+      (!local.drive.remoteModifiedTime || file.modifiedTime > local.drive.remoteModifiedTime);
+    if (!remoteNewer) return 'current';
+    const dirty = !local.drive.lastPushed || local.drive.lastPushed < local.updated;
+    if (dirty) return 'dirty';   // unsynced local edits — never overwrite silently
+  }
+
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
+  const data = await r.json();
+
+  if (local) {
+    // Same content swap as pullFromDrive, but on a property object that isn't STATE:
+    // keep our identity + drive metadata, replace every content field.
+    const keepId = local.id, keepDrive = { ...local.drive };
+    Object.keys(local).forEach(k => delete local[k]);
+    Object.assign(local, data);
+    local.id = keepId;
+    local.updated = file.modifiedTime || new Date().toISOString();
+    local.drive = { ...keepDrive, folderId, fileId: file.id, capexFolderId: budgetFolder,
+      lastPulled: new Date().toISOString(), remoteModifiedTime: file.modifiedTime, lastPushed: local.updated };
+    return 'updated';
+  }
+  // Manifest-only entry -> materialize it locally (same shape openRemoteProperty builds).
+  const now = new Date().toISOString();
+  const p = Object.assign(DEFAULT_PROPERTY(), data, {
+    id: remote.id,
+    drive: {
+      folderId,
+      fileId: file.id,
+      capexFolderId: budgetFolder,
+      lastPushed: now,          // freshly pulled == in sync (so it isn't re-pushed)
+      lastPulled: now,
+      remoteModifiedTime: file.modifiedTime,
+      autoSearchAttempted: true,
+    },
+  });
+  STORE.properties[p.id] = p;
+  return 'added';
+}
+
+async function pullAllFromDrive() {
+  if (HOME_PULL_ALL_RUNNING) return;
+  if (!getDriveToken()) {
+    try { await driveRequestToken({ silent: false }); }
+    catch (e) { toast('Connect Google Drive first', 'error'); return; }
+  }
+  HOME_PULL_ALL_RUNNING = true;
+  HOME_PULL_ALL_PROGRESS = { done: 0, total: 0 };
+  HOME_PULL_ALL_IDS = new Set();
+  if (CURRENT_VIEW === 'home') renderHome();
+  const stats = { added: 0, updated: 0, current: 0, dirty: 0, nofile: 0, nofolder: 0, open: 0, failed: 0 };
+  try {
+    if (!CURRENT_USER) { try { await fetchCurrentUser(); } catch (_) {} }
+    // Start from a fresh org index so properties added by teammates are included.
+    try { await fetchManifest(); } catch (e) { console.warn('pullAllFromDrive: manifest fetch failed', e); }
+    const entries = mergedHomeEntries()
+      .filter(e => HOME_VIEW_MODE === 'archived' ? isEntryArchived(e) : !isEntryArchived(e));
+    HOME_PULL_ALL_PROGRESS.total = entries.length;
+    paintPullAllProgress();
+    // Sequential on purpose: ~20 deals × a few Drive calls each is fast enough,
+    // and it keeps us well clear of Drive's per-user rate limits.
+    for (const entry of entries) {
+      try {
+        const res = await pullOnePropertyFromDrive(entry);
+        if (res === 'added' || res === 'updated') {
+          stats[res]++;
+          HOME_PULL_ALL_IDS.add((entry.local && entry.local.id) || entry.remote.id);
+        } else if (stats[res] !== undefined) stats[res]++;
+      } catch (e) {
+        stats.failed++;
+        console.warn('Pull All: failed for', entryDisplayName(entry), e);
+      }
+      HOME_PULL_ALL_PROGRESS.done++;
+      paintPullAllProgress();
+    }
+    // Persist WITHOUT saveState() so no property's `updated` is bumped (that would
+    // falsely mark it dirty and trigger a pointless re-push of identical data).
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+    HOME_PULL_ALL_AT = new Date().toISOString();
+    const bits = [];
+    if (stats.added) bits.push(`${stats.added} loaded`);
+    if (stats.updated) bits.push(`${stats.updated} updated`);
+    if (stats.current) bits.push(`${stats.current} already current`);
+    if (stats.dirty) bits.push(`${stats.dirty} kept local (unsynced edits)`);
+    if (stats.nofile + stats.nofolder) bits.push(`${stats.nofile + stats.nofolder} no Drive data`);
+    if (stats.open) bits.push('1 open');
+    if (stats.failed) bits.push(`${stats.failed} failed`);
+    toast(bits.length ? `Drive pull — ${bits.join(' · ')}` : 'Nothing to pull', stats.failed ? 'error' : 'success');
+  } finally {
+    HOME_PULL_ALL_RUNNING = false;
+    HOME_PULL_ALL_PROGRESS = null;
+    if (CURRENT_VIEW === 'home') renderHome();
+  }
+}
+
 // ---------- Init ----------
 // ============ Help chat: "Ask Claude" in-app assistant ============
 // A floating chat widget (bottom-right) that answers "how do I use this app"
@@ -9288,7 +9475,8 @@ GETTING IN
 HOME SCREEN
 - Your list of properties. "+ New Property" creates one — use the same name as the deal so the app can find its Drive folder and Asana task (names cap at 25 characters).
 - After creating a property you're asked to link its Drive deal folder: search pipelines by name (recommended), paste a folder URL/ID, or skip and link later from the ☰ menu ("Find Drive Folder"). Linking is what enables auto-save, imports, and export.
-- Sort by Name / Date Created / Date Modified. Card icons: ● saved to Drive, ⊘ no folder linked, ☁ stored in the team index (click to load), 📐 survey processed, 🏠 unit mix imported.
+- Sort by Name / Date Created / Date Modified. Card icons: ● saved to Drive, ⊘ no folder linked, ☁ stored in the team index (click to load), 📐 survey processed, 🏠 unit mix imported, ⤓ updated (just pulled from Drive).
+- UPDATING THE LIST: two buttons at the top right. "🔄 Refresh" re-reads the team index only (names, status badges, who's editing) — it does NOT download any property's data. "⤓ Update All Props" goes further and downloads EVERY property's latest saved data to this device in one pass — properties showing ☁ load and their icon turns green ●, and properties you already have pick up whatever a teammate saved most recently. It shows progress ("Updating 4/17…"), marks each property it refreshed with a green "⤓ updated" badge, and stamps "✓ Data pulled" at the top when it finishes. A property with your own unsaved edits is left alone rather than overwritten (the summary says "kept local").
 - Each property card has a ⋮ menu with: Open, Rename, Link Drive folder, Archive (or Unarchive), and Delete (Delete only removes your local copy — the Drive folder and its files are untouched).
 - ARCHIVING: the ⋮ menu's "Archive" option hides a property from the main "Live" list (useful for dead/closed deals). The home screen has a "🗄 Archived" toggle that switches to the archived list, and "← Live" to switch back. Archive/unarchive syncs to all devices and teammates.
 - TO UNARCHIVE / RESTORE a property: click the "🗄 Archived" toggle on the home screen to see archived properties, open that property's ⋮ menu, and choose "Unarchive (move to Live)". It returns to the main list.
