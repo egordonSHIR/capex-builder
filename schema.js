@@ -1613,18 +1613,18 @@ window.SCHEMA = {
             "default_qty_type": "Allowance"
           },
           {
-            "name": "Signage - Temporary Wrap",
-            "default_cost_per_item": 5000.0,
-            "notes": null,
-            "gl_account": "17560: CIP Signage (5 Yrs)",
-            "default_qty_type": "Allowance"
-          },
-          {
             "name": "Model Unit Furniture",
             "default_cost_per_item": 2500.0,
             "notes": null,
             "gl_account": "17685: CIP Model Unit Furniture (7 Yrs)",
             "default_qty_type": "Allowance"
+          },
+          {
+            "name": "Security/Patrol - Temporary",
+            "default_cost_per_item": 5000.0,
+            "notes": null,
+            "gl_account": "17596 - CIP Security Services",
+            "default_qty_type": "Month"
           }
         ]
       }
@@ -2599,6 +2599,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17560: CIP Signage (5 Yrs)",
             "default_qty_type": "Building"
+          },
+          {
+            "name": "Signage - Temporary Wrap",
+            "default_cost_per_item": 5000.0,
+            "notes": null,
+            "gl_account": "17560: CIP Signage (5 Yrs)",
+            "default_qty_type": "Allowance"
           }
         ]
       },
