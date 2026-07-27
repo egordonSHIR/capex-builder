@@ -287,7 +287,7 @@ const DEFAULT_PROPERTY = () => ({
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
   unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
   checklist: {}, // LEGACY (pre-2026-07-15 Questionnaire selection): `${gi}.${si}.${ii}` -> true. No longer gates the Budget page (every item now renders); kept so old deals load without loss.
-  excluded: {}, // Budget "N/A" toggles: `${gi}.${si}.${ii}` -> true means the row is turned OFF (grayed, inputs locked, $0, excluded from the subtotal). Absent = active/editable (default).
+  excluded: {}, // Budget "N/A" toggles: `${gi}.${si}.${ii}` -> true means the row is turned OFF (grayed, inputs locked, $0, excluded from the subtotal). Absent = active/editable. NOTE: createProperty() seeds every item's key true here (2026-07-27) so a brand-new property starts fully skipped; this empty literal is only what a bare DEFAULT_PROPERTY() gives an already-existing property being reconstituted from remote/local data (openRemoteProperty et al. overwrite it with that property's own map right after).
   phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id, finish}
   // User-defined CAPEX Groups: buckets of line items used as the base for any
   // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
@@ -401,6 +401,17 @@ function createProperty(name) {
   const p = DEFAULT_PROPERTY();
   p.name = (name || '').trim() || 'Untitled Property';
   p.phase1.prop_name = p.name;
+  // Every Budget line item starts skipped ("N/A") on a brand-new property — the
+  // user opts items in (unchecks Skip) as the deal's scope becomes clear, rather
+  // than starting from every item active and opting OUT the ones that don't
+  // apply. Existing properties are untouched: this only seeds a freshly-created
+  // one's own `excluded` map (openRemoteProperty/pullFromDrive overwrite it with
+  // the real remote data, so a pulled-in deal keeps its own history).
+  SCHEMA.phase3.forEach((g, gi) => {
+    g.sections.forEach((s, si) => {
+      s.items.forEach((_, ii) => { p.excluded[ckKey(gi, si, ii)] = true; });
+    });
+  });
   STORE.properties[p.id] = p;
   STORE.currentPropertyId = p.id;
   STATE = p;
@@ -3973,7 +3984,9 @@ function groupHeader(groupName, badgeNode, skipNode, hideNode, sectionsToggleNod
 // (see getDetailItemTotal / renderDetailItem); all others are display-only.
 const UNIT_TYPES = ['MF Unit', 'Building', 'Reno Unit', 'Each', 'Device', 'Allowance', 'Sqft', 'Linear Ft', 'Sq Yard', 'Cubic Yard', 'LS', 'Month', 'Hour', 'Day', '%', 'Park', 'Int. Hall', 'Avg Sqft', 'Avg # BRs', 'Avg # BAs',
   // Basics-linked Qty Types (2026-07-07): picking one auto-fills a Budget row's
-  // # Qty (read-only) from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
+  // # Qty from the mapped Basics/Physical field — see BASICS_QTY_TYPE_FIELDS.
+  // (2026-07-27: the field stays editable after the fill, not read-only — see
+  // renderDetailItem's Qty Type change handler / syncTypeRelatedUI.)
   'Multifamily RSF', 'Land Sqft', 'Parking Lot Sqft', 'Walkway Sqft', 'Railing Lin-ft', 'Railing Sqft', 'Total Facade Sqft', 'Other Pervious Sqft',
   '# Parking Spots', '# Vehicle Gates', '# Elevators', '# Private Yards', '# Garage',
   '# Hallways', '# Outdoor Pool(s)', '# Dog Park(s)', '# Laundry Facility(ies)', '# Indoor Pool(s)',
@@ -5107,20 +5120,29 @@ function renderSkipHeaderToggle(gi, si, summaryNode, txtColor) {
 }
 
 function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
-  const v = getP3(gi, si, ii);
+  let v = getP3(gi, si, ii);
   // Legacy migration: the old "=MF" checkbox (removed 2026-07-07) is superseded by
   // the "MF Unit" Basics-linked Qty Type. Convert any lingering mf_linked row to
   // unit_type 'MF Unit' so it keeps auto-filling # Qty from # of MF Units.
   if (v.mf_linked) {
     setP3(gi, si, ii, { unit_type: 'MF Unit', mf_linked: false });
   }
-  // Basics-linked Qty Type: force qty from the mapped property value before the
-  // initial total is computed (so $ Amt is right on first render, not just after
-  // the next recompute).
+  // Basics-linked Qty Type auto-fill. Two regimes, split on whether the user has
+  // ever explicitly picked a Qty Type for this row (cur0.unit_type non-empty):
+  //  - Still riding the item's SCHEMA DEFAULT (unit_type never set) — keep # Qty
+  //    live-synced to Basics on every render, same as the old always-force
+  //    behavior, so a row nobody has touched yet doesn't freeze at a stale/blank
+  //    value if the user fills in Basics AFTER first opening this tab.
+  //  - Explicitly picked at least once — leave qty alone here; it's a normal
+  //    editable field now (see below), and only re-fills when the user
+  //    (re-)selects a Basics-linked Qty Type via the <select> change handler.
   {
     const cur0 = getP3(gi, si, ii);
-    const bv0 = basicsQtyValue(cur0.unit_type || item.default_qty_type || '');
-    if (bv0 != null && (Number(cur0.qty) || 0) !== bv0) setP3(gi, si, ii, { qty: bv0 });
+    if (!cur0.unit_type) {
+      const bv0 = basicsQtyValue(item.default_qty_type || '');
+      if (bv0 != null) setP3(gi, si, ii, { qty: bv0 });
+    }
+    v = getP3(gi, si, ii);   // refresh so the rest of this render sees the seed
   }
   const total = getDetailItemTotal(gi, si, ii);
   // Group-derived tints: idle = very-light group color, priced = slightly more
@@ -5190,7 +5212,14 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   const utSel = el('select', { style: 'width:100%;padding:3px 4px;font-size:12px;box-sizing:border-box' });
   fillQtyTypeOptions(utSel, effectiveUT);
   utSel.addEventListener('change', () => {
-    setP3(gi, si, ii, { unit_type: utSel.value });
+    const patch = { unit_type: utSel.value };
+    // Re-fill # Qty from Basics every time this Qty Type is (re-)selected — even
+    // switching away and back — so the field always starts from the current
+    // Basics value; the user can still edit it afterward (see syncTypeRelatedUI).
+    const bv = basicsQtyValue(utSel.value);
+    if (bv != null) patch.qty = bv;
+    setP3(gi, si, ii, patch);
+    if (bv != null) setNumVal(qtyInp, bv || '');
     syncTypeRelatedUI();
     recomputePctRowsAndSummary(summaryNode);
   });
@@ -5275,15 +5304,16 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     // would leave DEFAULT-driven Basics-linked types (an item that defaults to
     // "Walkway Sqft" / "MF Unit") auto-filled but not locked read-only.
     const effUT = cur.unit_type || item.default_qty_type || '';
-    // # Qty: Basics-linked Qty Types auto-fill (read-only) from the property value.
+    // # Qty: Basics-linked Qty Types auto-fill from the property value the moment
+    // this Qty Type is (re-)selected (see the <select> change handler + the
+    // initial-seed block above) but stay a normal EDITABLE field from then on —
+    // re-picking the same Qty Type re-fills it fresh from Basics.
     const bv = basicsQtyValue(effUT);
     if (bv != null) {
-      if ((Number(cur.qty) || 0) !== bv) setP3(gi, si, ii, { qty: bv });
-      setNumVal(qtyInp, bv || '');
-      qtyInp.readOnly = true;
-      qtyInp.style.background = '#f1f5f9';
+      qtyInp.readOnly = false;
+      qtyInp.style.background = '';
       qtyInp.title = bv
-        ? basicsQtyTooltip(effUT)
+        ? basicsQtyTooltip(effUT) + ' — editable; re-select this Qty Type to re-fill it.'
         : basicsQtyTooltip(effUT) + ' (not set — enter the value(s) on the Basics tab)';
     } else if (AVG_QTY_TYPES.includes(effUT)) {
       // Avg-* "sizing" type: # Qty is a free unit/quantity count; the Unit-Mix
@@ -5557,27 +5587,27 @@ function renderCustomDetailItem(ci, opts, summaryNode) {
     qtyInp.classList.toggle('qty-missing-input', customMissingInputs(ci).length > 0);
     if (summaryNode) { updateDetailSummary(summaryNode); refreshBudgetBadges(); }
   }
-  // # Qty is read-only + auto-filled when buckets are on OR when a Basics-linked
-  // Qty Type is selected (buckets win); otherwise it's a free numeric input.
+  // # Qty is read-only + auto-computed when buckets are on (unchanged — that math
+  // has nothing to do with Basics). A Basics-linked Qty Type instead auto-FILLS #
+  // Qty the moment it's (re-)selected (see the Qty Type <select> change handler
+  // below) but stays a normal editable field afterward — re-picking the same Qty
+  // Type re-fills it fresh from Basics.
   function syncQtyUI() {
     const bucketsOn = !!ci.useBuckets;
-    const bv = basicsQtyValue(ci.unit_type);
-    const auto = bucketsOn || bv != null;
-    if (auto) {
-      const q = bucketsOn ? computeBucketQty(ci) : bv;
-      if (!bucketsOn && (Number(ci.qty) || 0) !== q) updateCustomItem(ci.id, { qty: q });
+    if (bucketsOn) {
+      const q = computeBucketQty(ci);
+      if ((Number(ci.qty) || 0) !== q) updateCustomItem(ci.id, { qty: q });
       setNumVal(qtyInp, q || '');
       qtyInp.readOnly = true;
       qtyInp.style.background = '#f1f5f9';
-      qtyInp.title = bucketsOn
-        ? 'Auto-computed from the Orig/Part/Reno % of the Unit Mix counts'
-        : basicsQtyTooltip(ci.unit_type);
-    } else {
-      qtyInp.readOnly = false;
-      qtyInp.style.background = '';
-      qtyInp.title = '';
-      setNumVal(qtyInp, (ci.qty === '' || ci.qty == null) ? '' : ci.qty);
+      qtyInp.title = 'Auto-computed from the Orig/Part/Reno % of the Unit Mix counts';
+      return;
     }
+    qtyInp.readOnly = false;
+    qtyInp.style.background = '';
+    const bv = basicsQtyValue(ci.unit_type);
+    qtyInp.title = bv != null ? basicsQtyTooltip(ci.unit_type) + ' — editable; re-select this Qty Type to re-fill it.' : '';
+    setNumVal(qtyInp, (ci.qty === '' || ci.qty == null) ? '' : ci.qty);
   }
 
   // Col 1: Skip checkbox.
@@ -5663,7 +5693,12 @@ function renderCustomDetailItem(ci, opts, summaryNode) {
   fillQtyTypeOptions(utSel, ci.unit_type || '');
   Array.from(utSel.options).forEach(o => { if (o.value === '%') o.remove(); });
   utSel.addEventListener('change', () => {
-    updateCustomItem(ci.id, { unit_type: utSel.value });
+    const patch = { unit_type: utSel.value };
+    if (!ci.useBuckets) {
+      const bv = basicsQtyValue(utSel.value);
+      if (bv != null) patch.qty = bv;   // re-fill from Basics every time this Qty Type is (re-)selected
+    }
+    updateCustomItem(ci.id, patch);
     syncQtyUI(); refresh();
   });
   wrap.appendChild(utSel);
