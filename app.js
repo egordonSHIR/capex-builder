@@ -7286,13 +7286,18 @@ function renderHome() {
   const visible = entries.filter(e => HOME_VIEW_MODE === 'archived' ? isEntryArchived(e) : !isEntryArchived(e));
 
   // ---- Home header box: New Property + org index status + sort + icon legend ----
-  // SHIR-navy box. Row 1 packs every control (New / status / sort / user / Refresh)
-  // onto one wrapping line; the icon legend is the only second row.
+  // SHIR-navy box, ALWAYS exactly TWO rows (never 3, never a reflow):
+  //   row 1 = New Property / Archived / index status / data-pulled stamp  ·  user / Update All Props / Refresh
+  //   row 2 = Sort controls + the (narrow) icon legend, which tucks into the leftover blue space
+  // Both rows use `.home-hdr-row` (nowrap + overflow-x:auto, hidden scrollbar),
+  // so a narrow phone scrolls a row sideways instead of wrapping it into a third
+  // line — same pattern as the Unit Mix button row. The legend sizes to its own
+  // content (see renderHomeLegend) so it no longer claims a full row of its own.
   const box = el('div', {
     style: 'margin:6px 0 12px;background:var(--primary);border:1px solid var(--primary);border-radius:8px;padding:9px 12px;font-size:12px;color:#cbd5e1;display:flex;flex-direction:column;gap:8px'
   });
 
-  const controls = el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
+  const controls = el('div', { class: 'home-hdr-row' });
   controls.appendChild(el('button', {
     style: 'background:#fff;color:var(--primary);border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap',
     onClick: () => promptNewProperty(),
@@ -7318,27 +7323,6 @@ function renderHome() {
         ? `📋 Index · ${MANIFEST_CACHE.fetchedAt ? relativeTime(new Date(MANIFEST_CACHE.fetchedAt).toISOString()) : 'loaded'}`
         : '📋 Tap Refresh');
   controls.appendChild(el('span', { style: 'color:#e2e8f0;white-space:nowrap', title: 'Org index' }, statusText));
-  // "Data pulled" stamp — set by the last completed ⤓ Pull All from Drive.
-  if (HOME_PULL_ALL_AT && !HOME_PULL_ALL_RUNNING) {
-    controls.appendChild(el('span', {
-      style: 'color:#86efac;white-space:nowrap;font-weight:600',
-      title: 'Every property’s data was pulled from Drive — the green ● icons are up to date as of this time',
-    }, `✓ Data pulled · ${relativeTime(HOME_PULL_ALL_AT)}`));
-  }
-  if (visible.length) {
-    controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap' }, 'Sort:'));
-    const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;color:var(--primary)' });
-    [['modified', 'Date Modified'], ['created', 'Date Created'], ['name', 'Name']].forEach(([v, l]) => {
-      const o = el('option', { value: v }, l); if (HOME_SORT_FIELD === v) o.selected = true; sel.appendChild(o);
-    });
-    sel.addEventListener('change', () => setHomeSort(sel.value, HOME_SORT_DIR));
-    controls.appendChild(sel);
-    controls.appendChild(el('button', {
-      style: 'font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;font-weight:600;color:var(--primary);white-space:nowrap',
-      title: 'Toggle sort direction',
-      onClick: () => setHomeSort(HOME_SORT_FIELD, HOME_SORT_DIR === 'asc' ? 'desc' : 'asc'),
-    }, homeSortDirLabel()));
-  }
   // Flexible spacer pushes the user + Refresh to the right edge of the row.
   controls.appendChild(el('span', { style: 'flex:1 1 auto;min-width:8px' }));
   if (CURRENT_USER && CURRENT_USER.email) controls.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap', title: CURRENT_USER.email }, CURRENT_USER.email.split('@')[0]));
@@ -7361,8 +7345,35 @@ function renderHome() {
   }, '🔄 Refresh'));
   box.appendChild(controls);
 
-  // Icon legend = the second row (collapsible), inside the same box.
-  if (visible.length) box.appendChild(renderHomeLegend());
+  // ---- Row 2: sort controls + the icon legend (narrow, in the leftover space) ----
+  if (visible.length) {
+    const controls2 = el('div', { class: 'home-hdr-row' });
+    // "Data pulled" stamp — set by the last completed ⤓ Update All Props. It rides
+    // on row 2 (not next to the button) so row 1 still fits the 688px container
+    // without clipping Refresh; row 2 has the free space.
+    if (HOME_PULL_ALL_AT && !HOME_PULL_ALL_RUNNING) {
+      controls2.appendChild(el('span', {
+        style: 'color:#86efac;white-space:nowrap;font-weight:600',
+        title: 'Every property’s data was pulled from Drive — the green ● icons are up to date as of this time',
+      }, `✓ Data pulled · ${relativeTime(HOME_PULL_ALL_AT)}`));
+    }
+    controls2.appendChild(el('span', { style: 'color:#94a3b8;white-space:nowrap' }, 'Sort:'));
+    const sel = el('select', { style: 'font-size:12px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;color:var(--primary)' });
+    [['modified', 'Date Modified'], ['created', 'Date Created'], ['name', 'Name']].forEach(([v, l]) => {
+      const o = el('option', { value: v }, l); if (HOME_SORT_FIELD === v) o.selected = true; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => setHomeSort(sel.value, HOME_SORT_DIR));
+    controls2.appendChild(sel);
+    controls2.appendChild(el('button', {
+      style: 'font-size:12px;padding:3px 8px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:#fff;font-weight:600;color:var(--primary);white-space:nowrap',
+      title: 'Toggle sort direction',
+      onClick: () => setHomeSort(HOME_SORT_FIELD, HOME_SORT_DIR === 'asc' ? 'desc' : 'asc'),
+    }, homeSortDirLabel()));
+    controls2.appendChild(renderHomeLegend());
+    // Trailing spacer keeps the legend hugging the sort controls instead of stretching.
+    controls2.appendChild(el('span', { style: 'flex:1 1 auto;min-width:8px' }));
+    box.appendChild(controls2);
+  }
 
   main.appendChild(box);
 
@@ -7382,12 +7393,31 @@ function renderHome() {
 // Collapsible legend explaining the per-property status icons + badges. Mirrors
 // the symbols set in renderPropertyCard; keep the two in sync.
 function renderHomeLegend() {
+  // Sized to its own content (not a full row): `flex:0 0 auto` + shrink-to-fit
+  // keeps it a compact pill next to the sort controls when collapsed, and the
+  // body's own width takes over when it's opened.
   const d = el('details', { class: 'home-legend',
-    style: 'margin:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden' });
+    style: 'margin:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;'
+      + 'flex:0 0 auto;align-self:center;max-width:100%' });
   d.appendChild(el('summary', {
-    style: 'padding:9px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;user-select:none'
+    style: 'padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;user-select:none;white-space:nowrap'
   }, 'ⓘ  What do the icons mean?'));
-  const body = el('div', { style: 'padding:2px 12px 10px;font-size:12px;color:#475569' });
+  // On a phone the header row scrolls sideways, so an opened legend can sit partly
+  // off-screen (it comes after the sort controls). Pull it into view on open;
+  // `block:'nearest'` keeps the page from jumping vertically.
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    // Deferred a macrotask so the just-revealed panel is laid out before we
+    // scroll (setTimeout, not rAF — rAF never fires in a backgrounded tab, which
+    // would leave the panel parked off-screen after a background→foreground open).
+    setTimeout(() => {
+      // Instant, not smooth — a smooth scroll is silently dropped in some
+      // embedded/background webviews, and this needs to be deterministic.
+      try { d.scrollIntoView({ inline: 'start', block: 'nearest' }); }
+      catch (_) { const row = d.parentElement; if (row) row.scrollLeft = d.offsetLeft - row.offsetLeft; }
+    });
+  });
+  const body = el('div', { style: 'padding:2px 12px 10px;font-size:12px;color:#475569;width:min(620px,74vw)' });
   const row = (icon, color, text) => {
     const r = el('div', { style: 'display:flex;align-items:flex-start;gap:9px;padding:3px 0;line-height:1.35' });
     r.appendChild(el('span', { style: `flex:0 0 18px;text-align:center;color:${color || 'inherit'};font-weight:700` }, icon));

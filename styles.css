@@ -470,6 +470,20 @@ main {
   border: 1px dashed var(--border);
 }
 .home-list { display: flex; flex-direction: column; gap: 10px; }
+/* Home header rows. The header is ALWAYS exactly two rows: nothing wraps to a
+   third line — a narrow screen scrolls the row sideways instead (same pattern as
+   the Unit Mix button row). The scrollbar is hidden so the navy bar stays clean;
+   the row still scrolls by touch/trackpad/shift-wheel. */
+.home-hdr-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.home-hdr-row::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .property-card {
   background: var(--surface);
   border: 1px solid var(--primary);   /* thin SHIR dark-blue border */
