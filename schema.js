@@ -2077,6 +2077,13 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
             "default_qty_type": "%"
+          },
+          {
+            "name": "Mold Remediation",
+            "default_cost_per_item": 250.0,
+            "notes": null,
+            "gl_account": "17230: CIP Interior - Freight/Overseas Shipping",
+            "default_qty_type": "Reno Unit"
           }
         ]
       },
