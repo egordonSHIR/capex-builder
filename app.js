@@ -466,6 +466,14 @@ function mutateBasicsFieldsInPlace(target, src) {
   target.name = src.name || target.name;
   if (src.asana) target.asana = Object.assign(target.asana || {}, src.asana);
   if ('archived' in src) target.archived = src.archived;
+  // Downstream-push provenance (which budget version's numbers are live in the
+  // deal's proforma) is a property-level shared fact — it must arrive on a pull
+  // like any other Basics field, or a teammate's push would stay invisible here.
+  if (src.pushProvenance) {
+    if (!target.pushProvenance) target.pushProvenance = {};
+    Object.keys(target.pushProvenance).forEach(kk => delete target.pushProvenance[kk]);
+    Object.assign(target.pushProvenance, src.pushProvenance);
+  }
 }
 
 function _persistStoreLocally() {
@@ -913,6 +921,71 @@ function deleteBudgetVersion(versionId) {
     removeBudgetVersionManifestEntry(versionId).catch((e) => console.warn('removeBudgetVersionManifestEntry failed', e));
   }
   return true;
+}
+
+// ---------- Push provenance: whose numbers are live downstream ----------
+// The deal's underwriting proforma is a SHARED, property-level artifact — there
+// is exactly ONE of it per deal no matter how many budget versions exist. So
+// "which version's numbers are currently in the proforma" is a property-level
+// fact: it lives on the Property (Basics) record, which means it Drive-syncs to
+// every teammate automatically and is readable without a manifest round trip.
+// Any version may push (no gating — a deliberate choice, see BUDGET_VERSIONING_PLAN.md);
+// the point of tracking this is to tell the user exactly whose work they'd
+// replace BEFORE they do it, and to leave a durable record of who pushed what.
+//
+// ⚠️ NOTE on Asana (intentionally NOT tracked here): the Asana "Capex Builder
+// Link" field holds `capexBuilderUrlForProperty()` = the PROPERTY url
+// (`#/prop/<slug>`), which is byte-identical regardless of which budget version
+// is open when it's written — opening it lands on the property, which then opens
+// its default version. There is nothing version-specific to clobber, so an
+// "are you sure you want to overwrite" prompt there would be pure noise. Asana
+// keeps its existing `p.asana.linkPushedAt`/`linkPushedUrl` stamps and is
+// otherwise untouched by this feature.
+function ensurePushProvenance(p) {
+  const prop = p || CURRENT_PROPERTY;
+  if (!prop) return null;
+  if (!prop.pushProvenance) prop.pushProvenance = {};
+  return prop.pushProvenance;
+}
+function getProformaPushProvenance() {
+  const pv = CURRENT_PROPERTY && CURRENT_PROPERTY.pushProvenance;
+  return (pv && pv.proforma) || null;
+}
+function recordProformaPushProvenance({ proformaName, jobId } = {}) {
+  const pv = ensurePushProvenance();
+  if (!pv || !CURRENT_BUDGET_VERSION) return;
+  pv.proforma = {
+    versionId: CURRENT_BUDGET_VERSION.versionId,
+    versionLabel: CURRENT_BUDGET_VERSION.label,
+    user: (CURRENT_USER && CURRENT_USER.email) || '',
+    at: new Date().toISOString(),
+    proformaName: proformaName || '',
+    jobId: jobId || '',
+  };
+  saveBasics();   // property-level fact -> rides the Basics file to every teammate
+}
+// The "you are about to replace someone else's numbers" preamble for the
+// proforma-import confirm. Returns '' when this same version pushed last (or
+// nothing has ever been pushed), so a normal re-push of your own work is not
+// nagged at.
+function proformaOverwriteWarning() {
+  const prev = getProformaPushProvenance();
+  if (!prev || !CURRENT_BUDGET_VERSION) return '';
+  if (prev.versionId === CURRENT_BUDGET_VERSION.versionId) return '';
+  const who = prev.user ? ` by ${prev.user}` : '';
+  const when = prev.at ? ` ${relativeTime(prev.at)}` : '';
+  const intoWhat = prev.proformaName ? ` (${prev.proformaName})` : '';
+  return `⚠️ THIS DEAL'S PROFORMA CURRENTLY HOLDS DIFFERENT NUMBERS.\n\n`
+    + `Last import: "${prev.versionLabel}"${who}${when}${intoWhat}.\n`
+    + `You are about to replace those with "${CURRENT_BUDGET_VERSION.label}".\n\n`;
+}
+// One-line "📥 proforma: <label>" summary for the Budget-tab switcher strip.
+function proformaProvenanceLine() {
+  const prev = getProformaPushProvenance();
+  if (!prev) return '';
+  const mine = CURRENT_BUDGET_VERSION && prev.versionId === CURRENT_BUDGET_VERSION.versionId;
+  return `📥 In proforma: ${prev.versionLabel}${mine ? ' (this one)' : ''}`
+    + (prev.at ? ` · ${relativeTime(prev.at)}` : '');
 }
 
 // ---------- Hash routing: a unique, shareable URL per property ----------
@@ -5202,15 +5275,27 @@ function renderBudgetVersionSwitcher() {
     .filter(e => !e.archived)
     .sort((a, b) => (b.isDefault - a.isDefault) || a.label.localeCompare(b.label));
 
+  // Which version's numbers are currently sitting in the deal's real proforma —
+  // marked 📥 on that pill, so "whose numbers are live downstream" is visible at
+  // a glance rather than something you have to go open the workbook to find out.
+  const prov = getProformaPushProvenance();
+  const inProformaVersionId = prov ? prov.versionId : null;
+
   entries.forEach(e => {
     const active = CURRENT_BUDGET_VERSION && CURRENT_BUDGET_VERSION.versionId === e.versionId;
+    const inProforma = inProformaVersionId && e.versionId === inProformaVersionId;
+    const provTitle = inProforma
+      ? `\n\n📥 This version's numbers were imported into the deal's proforma`
+        + (prov.user ? ` by ${prov.user}` : '') + (prov.at ? ` ${relativeTime(prov.at)}` : '')
+        + (prov.proformaName ? ` (${prov.proformaName})` : '')
+      : '';
     const pill = el('button', {
       type: 'button',
-      title: active ? 'Currently open — click to rename/set default/archive/delete' : `Switch to "${e.label}"`,
+      title: (active ? 'Currently open — click to rename/set default/archive/delete' : `Switch to "${e.label}"`) + provTitle,
       style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 12px;border-radius:14px;cursor:pointer;border:1px solid '
         + (active ? '#fff' : 'rgba(255,255,255,0.35)')
         + `;background:${active ? '#fff' : 'transparent'};color:${active ? '#0f172a' : '#fff'}`,
-    }, (e.isDefault ? '★ ' : '') + e.label);
+    }, (e.isDefault ? '★ ' : '') + e.label + (inProforma ? ' 📥' : ''));
     pill.addEventListener('click', () => { if (active) budgetVersionMenu(e.versionId); else switchBudgetVersion(e.versionId); });
     wrap.appendChild(pill);
   });
@@ -6835,6 +6920,23 @@ function renderPhase4() {
   ));
   root.appendChild(proformaStatus);
 
+  // Which budget version's numbers are currently in this deal's proforma. Shown
+  // right under the push buttons — this is the decision point where "am I about
+  // to replace a teammate's numbers?" actually matters. Amber when it's someone
+  // else's version, green when it's the one you're looking at.
+  const provLine = proformaProvenanceLine();
+  if (provLine) {
+    const prov = getProformaPushProvenance();
+    const mine = CURRENT_BUDGET_VERSION && prov && prov.versionId === CURRENT_BUDGET_VERSION.versionId;
+    root.appendChild(el('div', {
+      style: `margin-top:6px;font-size:12px;font-weight:600;padding:5px 9px;border-radius:5px;display:inline-block;`
+        + (mine ? 'background:#dcfce7;color:#166534' : 'background:#fef3c7;color:#92400e'),
+      title: mine
+        ? 'The proforma holds the budget version you currently have open'
+        : 'The proforma holds a DIFFERENT budget version — pushing from here will replace those numbers (you will be asked to confirm first)',
+    }, provLine + (prov && prov.user ? ` · by ${prov.user}` : '')));
+  }
+
   // Async: check Drive for an existing CapexB proforma and repaint the button/label.
   if (!proformaActive) {
     getExistingCapexBProforma(false).then((f) => { if (proformaBtn.isConnected) paintProforma(f); }).catch(() => {});
@@ -7262,7 +7364,15 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 async function buildCapexBlob() {
   const propName = STATE.phase1.prop_name || '';
   const workbook = await buildCapexWorkbook();
-  const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  // Non-default budget versions get their label baked into the filename, so two
+  // versions' exports don't land in the same Drive folder looking identical. The
+  // default version keeps the original filename shape (no gratuitous churn for
+  // the single-version case, which is still most deals).
+  const bv = CURRENT_BUDGET_VERSION;
+  const verPart = (bv && !bv.isDefault && bv.label)
+    ? '_' + String(bv.label).replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
+    : '';
+  const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}${verPart}_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const buf = await workbook.xlsx.writeBuffer();
   return { blob: new Blob([buf], { type: XLSX_MIME }), filename, firstDataRow: workbook._exportFirstDataRow };
 }
@@ -7416,7 +7526,22 @@ async function submitProformaCapexJob() {
   if (!STATE) return;
   if (!STATE.drive.folderId) { toast('Link this property to a Drive deal folder first (☰ → Find/Link).', 'error'); return; }
   if (!getDriveToken()) { toast('Connect Google Drive first (☰ → Connect).', 'error'); return; }
-  if (proformaJobIsActive(getProformaJob())) { toast('A proforma import is already ' + getProformaJob().status + ' for this property.', ''); return; }
+  // One in-flight proforma import per DEAL (not per version) — deliberately.
+  // Two versions queueing at once would have two workers racing to write the
+  // same physical proforma file, so the second is refused rather than allowed
+  // to clobber; the message names which version already has one running.
+  const activeJob = getProformaJob();
+  if (proformaJobIsActive(activeJob)) {
+    const whose = activeJob.versionLabel ? ` (from the "${activeJob.versionLabel}" budget version)` : '';
+    toast(`A proforma import is already ${activeJob.status} for this property${whose}.`, '');
+    return;
+  }
+  // Any budget version may push to the proforma — but if a DIFFERENT version's
+  // numbers are currently in it, say so plainly (naming the version, who pushed
+  // it, and when) and get an explicit go-ahead first. Asked up front, before the
+  // proforma-picking walk, so nobody invests clicks in a push they'd cancel.
+  const overwriteWarning = proformaOverwriteWarning();
+  if (overwriteWarning && !confirm(overwriteWarning + 'Continue with the import?')) return;
   // Custom (user-defined) line items need no special handling: the worker (v4)
   // dynamically rebuilds each CAPEX group to the exported row count, so custom rows
   // flow into the proforma exactly like schema rows — no dry-run, no confirm gate.
@@ -7458,6 +7583,14 @@ async function submitProformaCapexJob() {
     const job = {
       jobId, schemaVersion: 1, type: 'proforma-capex-import', status: 'queued',
       property: { id: STATE.id, name: STATE.name || (STATE.phase1 && STATE.phase1.prop_name) || 'Property', hash: propertyHash(STATE) },
+      // Which budget version produced these numbers. Passthrough metadata only —
+      // the worker locates its targets from deal.folderId / proforma.fileId (Drive
+      // ids this app already resolved) and reads the values out of capex.fileId,
+      // so it needs no changes for this; this is here for provenance/logging and
+      // so a delivered file can be traced back to the version that made it.
+      budgetVersion: CURRENT_BUDGET_VERSION
+        ? { id: CURRENT_BUDGET_VERSION.versionId, label: CURRENT_BUDGET_VERSION.label }
+        : null,
       deal: { folderId: STATE.drive.folderId },
       proforma: { fileId: chosen.id, fileName: chosen.name },
       suggestedOutputName: proformaCapexOutputName(chosen.name),
@@ -7474,7 +7607,16 @@ async function submitProformaCapexJob() {
     toast('Queuing proforma import…');
     const up = await driveUploadJson(jobsFolderId, `job_${jobId}.json`, job);
     setProformaJob({ jobId, fileId: up.id, jobsFolderId, status: 'queued', submittedAt: requestedAt,
-      proformaName: chosen.name, outputName: job.suggestedOutputName });
+      proformaName: chosen.name, outputName: job.suggestedOutputName,
+      // Stamped so the "already queued" guard above can name which version owns
+      // the in-flight import, even after a reload (this pointer is localStorage).
+      versionId: CURRENT_BUDGET_VERSION ? CURRENT_BUDGET_VERSION.versionId : '',
+      versionLabel: CURRENT_BUDGET_VERSION ? CURRENT_BUDGET_VERSION.label : '' });
+    // Record whose numbers are now headed into this deal's proforma. Done at
+    // QUEUE time (not on worker completion) on purpose: from here on, the next
+    // person to push must be warned, and the worker runs asynchronously ~30-60
+    // min later with no callback into this client.
+    recordProformaPushProvenance({ proformaName: chosen.name, jobId });
     delete PROFORMA_CAPEXB_CACHE[STATE.id];
     startProformaPoll();
     if (CURRENT_VIEW === 'property') renderApp();
