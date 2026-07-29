@@ -1,6 +1,20 @@
 ﻿// Capex Builder — multi-property web app
-// STORE = { version, properties: {[id]: Property}, currentPropertyId }
-// STATE = live reference to the current property (so existing render code keeps working).
+// STORE = { version, properties: {[id]: Property}, budgetVersions: {[versionId]: BudgetVersion},
+//           currentPropertyId, currentBudgetVersionId }
+// Property = Basics only (identity, unit mix, survey, physical characteristics) — ONE shared
+//   Drive file per property (capex_builder.json), edited live by any number of users exactly
+//   as before this split.
+// BudgetVersion = the CAPEX budget only (phase3/capexGroups/customItems/excluded/checklist/
+//   phase4) — its OWN Drive file per version (Versions/<Label>_<username>.json), so different
+//   teammates can hold independent budget "opinions" for the same property without clobbering
+//   each other, while Basics stays single-source-of-truth.
+// CURRENT_PROPERTY / CURRENT_BUDGET_VERSION = live references to the open property's two
+//   records. STATE = a flat merged VIEW composed from both (composeState()) so every existing
+//   render/compute function keeps reading/writing STATE.phase1.x / STATE.phase3[key] etc.
+//   unchanged — STATE.phase1 IS CURRENT_PROPERTY.phase1 (same object, by reference), and
+//   STATE.phase3 IS CURRENT_BUDGET_VERSION.phase3, so an edit through STATE always mutates the
+//   correct underlying record. See saveBasics()/saveBudget() for the two independent
+//   save/debounce paths this implies.
 
 const STORAGE_KEY = 'capex_builder_state_v1';   // legacy single-property key (read for migration)
 const STORE_KEY   = 'capex_builder_store_v2';   // current multi-property key
@@ -256,7 +270,7 @@ async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = 
         if (!idx || idx < 1 || idx > top.length) return;
         taskGid = top[idx - 1].gid;
       }
-      p.asana.taskGid = taskGid; saveState();
+      p.asana.taskGid = taskGid; saveBasics();
     }
     const url = capexBuilderUrlForProperty(p);
     await asanaFetch(`/tasks/${taskGid}`, {
@@ -265,7 +279,7 @@ async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = 
     });
     p.asana.linkPushedAt = new Date().toISOString();
     p.asana.linkPushedUrl = url;
-    saveState();
+    saveBasics();
     if (!silent) toast('Capex Builder link written to Asana ✓', 'success');
   } catch (e) {
     console.warn('syncCapexLinkToAsana:', e);
@@ -277,31 +291,18 @@ async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = 
 function newPropertyId() {
   return 'p_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
 }
+// Property = Basics only. Everything budget-related now lives on a separate
+// BudgetVersion record (see DEFAULT_BUDGET_VERSION below) so it can fork
+// per-user without touching this shared record.
 const DEFAULT_PROPERTY = () => ({
   id: newPropertyId(),
   name: '',
   created: new Date().toISOString(),
   updated: new Date().toISOString(),
-  drive: { folderId: '', fileId: '', capexFolderId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
+  drive: { folderId: '', fileId: '', capexFolderId: '', versionsFolderId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
   phase1: {},
   phase2: {}, // Physical characteristics questionnaire (rendered within the Basics tab)
   unitMix: [], // [{ type, count, beds, baths, sqft, status }] — part of the Physical section
-  checklist: {}, // LEGACY (pre-2026-07-15 Questionnaire selection): `${gi}.${si}.${ii}` -> true. No longer gates the Budget page (every item now renders); kept so old deals load without loss.
-  excluded: {}, // Budget "N/A" toggles: `${gi}.${si}.${ii}` -> true means the row is turned OFF (grayed, inputs locked, $0, excluded from the subtotal). Absent = active/editable. NOTE: createProperty() seeds every item's key true here (2026-07-27) so a brand-new property starts fully skipped; this empty literal is only what a bare DEFAULT_PROPERTY() gives an already-existing property being reconstituted from remote/local data (openRemoteProperty et al. overwrite it with that property's own map right after).
-  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id, finish}
-  // User-defined CAPEX Groups: buckets of line items used as the base for any
-  // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
-  capexGroups: [],
-  // User-defined custom line items (the first line-item type that lives in STATE
-  // rather than SCHEMA.phase3). Each item targets an existing schema Group+Section
-  // BY NAME (indices drift when schema.js is regenerated; names are stable). Skip
-  // state lives on the item (`excluded`), NOT in STATE.excluded (that map is
-  // ckKey-namespaced and walked with .map(Number)). id prefix `ci_` can never parse
-  // as a ckKey ("int.int.int"), so customs never leak into getP3/isExcluded.
-  // Shape: {id, groupName, sectionName, name, qty, unit_type, unit_cost, notes,
-  //         useBuckets, pct_orig, pct_part, pct_reno, excluded}
-  customItems: [],
-  phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
   // Survey-derived site specs (from survey-breakdown-specs skill).
   // Flat values land in phase1 (parking_spots_hc, site_perimeter_lf, etc.);
   // per-building, per-tract, and meta data live here.
@@ -316,10 +317,48 @@ const DEFAULT_PROPERTY = () => ({
     discrepancies: [],
   },
 });
-const DEFAULT_STORE = () => ({ version: 2, properties: {}, currentPropertyId: null });
+function newBudgetVersionId() {
+  return 'bv_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+}
+// BudgetVersion = the CAPEX budget for one property, for one "opinion"/scenario.
+// Field names deliberately avoid colliding with Property's own fields (versionId
+// not id, label not name, versionUpdated/versionLastEditor not updated/lastEditor,
+// versionDrive not drive) — composeState() flat-merges Property + BudgetVersion
+// into STATE, and a collision would silently let one clobber the other.
+const DEFAULT_BUDGET_VERSION = () => ({
+  versionId: newBudgetVersionId(),
+  propertyId: '',
+  label: 'Original',
+  isDefault: true,
+  versionCreatedAt: new Date().toISOString(),
+  versionCreatedBy: '',
+  versionUpdated: new Date().toISOString(),
+  versionLastEditor: '',
+  versionDrive: { fileId: '', lastPushed: null, lastPulled: null, remoteModifiedTime: null },
+  checklist: {}, // LEGACY (pre-2026-07-15 Questionnaire selection): `${gi}.${si}.${ii}` -> true. No longer gates the Budget page (every item now renders); kept so old deals load without loss.
+  excluded: {}, // Budget "N/A" toggles: `${gi}.${si}.${ii}` -> true means the row is turned OFF (grayed, inputs locked, $0, excluded from the subtotal). Absent = active/editable. NOTE: createProperty() seeds every item's key true here (2026-07-27) so a brand-new property starts fully skipped.
+  phase3: {}, // Details: keyed `${gi}.${si}.${ii}` -> {qty, unit_type, unit_cost, notes, mf_linked, pct_group_id, finish}
+  // User-defined CAPEX Groups: buckets of line items used as the base for any
+  // line item priced as a percentage. Each group = {id, name, itemKeys:[ckKey]}.
+  capexGroups: [],
+  // User-defined custom line items. Each item targets an existing schema
+  // Group+Section BY NAME (indices drift when schema.js is regenerated; names
+  // are stable). Skip state lives on the item (`excluded`), NOT in this
+  // record's own `excluded` map (that map is ckKey-namespaced and walked with
+  // .map(Number)). id prefix `ci_` can never parse as a ckKey ("int.int.int"),
+  // so customs never leak into getP3/isExcluded.
+  // Shape: {id, groupName, sectionName, name, qty, unit_type, unit_cost, notes,
+  //         useBuckets, pct_orig, pct_part, pct_reno, excluded}
+  customItems: [],
+  phase4: { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' },
+});
+const DEFAULT_STORE = () => ({ version: 3, properties: {}, budgetVersions: {}, currentPropertyId: null, currentBudgetVersionId: null });
 
 let STORE = loadStore();
-let STATE = STORE.currentPropertyId ? STORE.properties[STORE.currentPropertyId] : null;
+let CURRENT_PROPERTY = STORE.currentPropertyId ? STORE.properties[STORE.currentPropertyId] : null;
+let CURRENT_BUDGET_VERSION = STORE.currentBudgetVersionId ? STORE.budgetVersions[STORE.currentBudgetVersionId] : null;
+let STATE = null;
+composeState();
 let CURRENT_VIEW = STATE ? 'property' : 'home';
 let CURRENT_PHASE = 1;
 
@@ -330,12 +369,24 @@ function loadStore() {
     if (rawV2) {
       const s = JSON.parse(rawV2);
       if (s && s.properties) {
-        // Ensure currentPropertyId still references a live property
+        // Additive migration to v3 (Property/BudgetVersion split) — never destroys
+        // v2 data; a still-combined property object is detected and split lazily
+        // the first time it's actually opened (see attachBudgetVersionForOpen).
+        if (!s.budgetVersions) s.budgetVersions = {};
+        if (s.currentBudgetVersionId === undefined) s.currentBudgetVersionId = null;
+        // Ensure currentPropertyId/currentBudgetVersionId still reference live records
         if (s.currentPropertyId && !s.properties[s.currentPropertyId]) s.currentPropertyId = null;
+        if (s.currentBudgetVersionId && !s.budgetVersions[s.currentBudgetVersionId]) s.currentBudgetVersionId = null;
+        s.version = 3;
         return s;
       }
     }
-    // One-time migration from v1 single-property state
+    // One-time migration from v1 single-property state. Left in its original
+    // (pre-split) shape on purpose — DEFAULT_PROPERTY() no longer has phase3/
+    // phase4 fields, so Object.assign still attaches `old.phase3`/`old.phase4`
+    // directly onto `p`, producing exactly the "still-combined legacy property"
+    // shape that the lazy split-on-open migration already knows how to detect
+    // and fix — no special-casing needed for this ancient path.
     const rawV1 = localStorage.getItem(STORAGE_KEY);
     if (rawV1) {
       const old = JSON.parse(rawV1);
@@ -358,79 +409,221 @@ function loadStore() {
   return DEFAULT_STORE();
 }
 const PROP_NAME_MAX = 25;
-function saveState() {
-  if (STATE) {
-    STATE.updated = new Date().toISOString();
+
+// Build the flat STATE view every existing render/compute function reads —
+// STATE.phase1 IS CURRENT_PROPERTY.phase1 (same object, by reference), and
+// STATE.phase3 IS CURRENT_BUDGET_VERSION.phase3, so a mutation through STATE
+// always lands on the correct underlying record with no re-pointing needed.
+// Rebuilt fresh (not incrementally patched) on open and on every version switch.
+function composeState() {
+  if (!CURRENT_PROPERTY) { STATE = null; return; }
+  const s = {};
+  Object.assign(s, CURRENT_PROPERTY);
+  if (CURRENT_BUDGET_VERSION) Object.assign(s, CURRENT_BUDGET_VERSION);
+  STATE = s;
+}
+
+// Fields that belong to a BudgetVersion. Presence of any of these directly on a
+// Property object (rather than on a separate BudgetVersion record) means that
+// object is still in the pre-split "combined" shape — either an old
+// capex_builder.json from before this feature, or the v1-migration path above.
+const LEGACY_BUDGET_FIELDS = ['phase3', 'capexGroups', 'customItems', 'excluded', 'checklist', 'phase4'];
+
+// If `data` (a parsed capex_builder.json — local, remote, or an in-memory
+// Property object) still carries the old combined shape, build a standalone
+// BudgetVersion from its budget fields and return it (not yet saved anywhere).
+// Returns null if `data` is already Basics-only (post-split / never combined).
+function extractLegacyBudgetVersion(data, propertyId, creatorEmail) {
+  if (!data || !LEGACY_BUDGET_FIELDS.some(k => Object.prototype.hasOwnProperty.call(data, k))) return null;
+  const bv = DEFAULT_BUDGET_VERSION();
+  bv.propertyId = propertyId;
+  bv.label = 'Original';
+  bv.isDefault = true;
+  bv.versionCreatedBy = data.lastEditor || creatorEmail || '';
+  bv.versionCreatedAt = data.created || new Date().toISOString();
+  bv.versionUpdated = data.updated || new Date().toISOString();
+  bv.versionLastEditor = data.lastEditor || '';
+  LEGACY_BUDGET_FIELDS.forEach(k => { if (k in data) bv[k] = data[k]; });
+  return bv;
+}
+
+// Copy only the Basics-owned fields from `src` into `target`, IN PLACE — never
+// replace target's own sub-objects (phase1/phase2/unitMix/survey) by reference,
+// so anything holding onto those exact objects (STATE, via composeState) sees
+// the refreshed values automatically with no re-pointing step anywhere.
+function mutateBasicsFieldsInPlace(target, src) {
+  ['phase1', 'phase2'].forEach(k => {
+    if (!target[k]) target[k] = {};
+    Object.keys(target[k]).forEach(kk => delete target[k][kk]);
+    Object.assign(target[k], src[k] || {});
+  });
+  if (!Array.isArray(target.unitMix)) target.unitMix = [];
+  target.unitMix.length = 0;
+  target.unitMix.push(...(Array.isArray(src.unitMix) ? src.unitMix : []));
+  if (!target.survey) target.survey = DEFAULT_PROPERTY().survey;
+  Object.keys(target.survey).forEach(kk => delete target.survey[kk]);
+  Object.assign(target.survey, src.survey || {});
+  target.name = src.name || target.name;
+  if (src.asana) target.asana = Object.assign(target.asana || {}, src.asana);
+  if ('archived' in src) target.archived = src.archived;
+}
+
+function _persistStoreLocally() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+}
+// Two independent save paths, replacing the old single saveState(): editing a
+// Basics field (Basics tab, unit mix, survey) calls saveBasics(); editing the
+// budget (Budget tab, CAPEX groups, custom items, phase4 markups) calls
+// saveBudget(). Each bumps only its own record's timestamp and schedules only
+// its own record's debounced Drive push, so the two files never cross-clobber.
+function saveBasics() {
+  if (CURRENT_PROPERTY) {
+    CURRENT_PROPERTY.updated = new Date().toISOString();
     // Remember who most recently edited this deal (for the export provenance
     // stamp). Falls back to any prior value if the signed-in user isn't known yet.
-    STATE.lastEditor = (CURRENT_USER && CURRENT_USER.email) || STATE.lastEditor || '';
+    CURRENT_PROPERTY.lastEditor = (CURRENT_USER && CURRENT_USER.email) || CURRENT_PROPERTY.lastEditor || '';
     // Property Name is capped at PROP_NAME_MAX chars (truncate anything longer).
-    if (STATE.phase1 && typeof STATE.phase1.prop_name === 'string' && STATE.phase1.prop_name.length > PROP_NAME_MAX) {
-      STATE.phase1.prop_name = STATE.phase1.prop_name.slice(0, PROP_NAME_MAX);
+    if (CURRENT_PROPERTY.phase1 && typeof CURRENT_PROPERTY.phase1.prop_name === 'string' && CURRENT_PROPERTY.phase1.prop_name.length > PROP_NAME_MAX) {
+      CURRENT_PROPERTY.phase1.prop_name = CURRENT_PROPERTY.phase1.prop_name.slice(0, PROP_NAME_MAX);
     }
     // Keep displayed name in sync with phase1.prop_name when the user edits it on the form
-    if (STATE.phase1 && STATE.phase1.prop_name) STATE.name = STATE.phase1.prop_name;
+    if (CURRENT_PROPERTY.phase1 && CURRENT_PROPERTY.phase1.prop_name) CURRENT_PROPERTY.name = CURRENT_PROPERTY.phase1.prop_name;
+    if (STATE) { STATE.updated = CURRENT_PROPERTY.updated; STATE.lastEditor = CURRENT_PROPERTY.lastEditor; STATE.name = CURRENT_PROPERTY.name; }
   }
-  localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
-  scheduleAutoPush();   // Drive-authoritative: converge the cache to Drive shortly after each edit
+  _persistStoreLocally();
+  scheduleAutoPushBasics();   // Drive-authoritative: converge the cache to Drive shortly after each edit
+}
+function saveBudget() {
+  if (CURRENT_BUDGET_VERSION) {
+    CURRENT_BUDGET_VERSION.versionUpdated = new Date().toISOString();
+    CURRENT_BUDGET_VERSION.versionLastEditor = (CURRENT_USER && CURRENT_USER.email) || CURRENT_BUDGET_VERSION.versionLastEditor || '';
+    if (STATE) { STATE.versionUpdated = CURRENT_BUDGET_VERSION.versionUpdated; STATE.versionLastEditor = CURRENT_BUDGET_VERSION.versionLastEditor; }
+  }
+  _persistStoreLocally();
+  scheduleAutoPushBudget();
 }
 
 // ---- Drive-authoritative auto-push ----------------------------------------
 // localStorage is a transient write-behind cache; Drive is the source of truth.
-// Every saveState() schedules a debounced silent push so the device never holds
-// divergent data for more than ~2s. The 60s syncTick remains as a backstop +
-// heartbeat. _syncState feeds the single sync-bar status.
-let _autoPushTimer = null;
+// saveBasics()/saveBudget() each schedule their own debounced silent push so
+// neither file holds divergent data for more than ~2s. The 60s syncTick remains
+// as a Basics-side backstop + heartbeat (see "Multi-user / multi-device sync").
+// _syncState feeds the single shared sync-bar status for both records in Phase 1
+// (Phase 2 can split this into two indicators once the version-switcher UI ships).
+let _autoPushBasicsTimer = null;
 let _syncState = 'idle';   // 'idle' | 'saving' | 'error' | 'conflict'
 const AUTO_PUSH_DEBOUNCE_MS = 2000;
-function scheduleAutoPush() {
-  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;          // nothing to sync to yet
+function scheduleAutoPushBasics() {
+  if (!CURRENT_PROPERTY || !CURRENT_PROPERTY.drive || !CURRENT_PROPERTY.drive.folderId) return;   // nothing to sync to yet
   if (typeof getDriveToken === 'function' && !getDriveToken()) return;  // Drive not connected
   _syncState = 'saving';
   if (typeof updateSyncBar === 'function') updateSyncBar();
-  if (_autoPushTimer) clearTimeout(_autoPushTimer);
-  _autoPushTimer = setTimeout(async () => {
-    _autoPushTimer = null;
-    const ok = await pushToDrive({ silent: true });   // true=ok, false=fail, 'conflict'=remote newer, undefined=skip
+  if (_autoPushBasicsTimer) clearTimeout(_autoPushBasicsTimer);
+  _autoPushBasicsTimer = setTimeout(async () => {
+    _autoPushBasicsTimer = null;
+    const ok = await pushBasicsToDrive({ silent: true });   // true=ok, false=fail, 'conflict'=remote newer, undefined=skip
     _syncState = (ok === false) ? 'error' : (ok === 'conflict') ? 'conflict' : 'idle';
     if (typeof updateSyncBar === 'function') updateSyncBar();
   }, AUTO_PUSH_DEBOUNCE_MS);
+}
+let _autoPushBudgetTimer = null;
+function scheduleAutoPushBudget() {
+  if (!CURRENT_BUDGET_VERSION || !CURRENT_PROPERTY || !CURRENT_PROPERTY.drive || !CURRENT_PROPERTY.drive.folderId) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;
+  _syncState = 'saving';
+  if (typeof updateSyncBar === 'function') updateSyncBar();
+  if (_autoPushBudgetTimer) clearTimeout(_autoPushBudgetTimer);
+  _autoPushBudgetTimer = setTimeout(async () => {
+    _autoPushBudgetTimer = null;
+    const ok = await pushBudgetToDrive({ silent: true });
+    _syncState = (ok === false) ? 'error' : (ok === 'conflict') ? 'conflict' : 'idle';
+    if (typeof updateSyncBar === 'function') updateSyncBar();
+  }, AUTO_PUSH_DEBOUNCE_MS);
+}
+
+// Resolve (splitting a legacy combined property if needed, else attaching an
+// existing or freshly-created BudgetVersion) which budget version a just-opened
+// property should use, into CURRENT_BUDGET_VERSION. Order: (1) `p` itself is
+// still in the old combined shape -> split it now (persists both files right
+// after, so every teammate's next open adopts the split too); (2) an existing
+// local BudgetVersion for this property (prefer isDefault, else most-recently-
+// updated); (3) create a fresh default version (defensive — should only happen
+// for a property that somehow has neither).
+function attachBudgetVersionForOpen(p) {
+  const legacy = extractLegacyBudgetVersion(p, p.id, (CURRENT_USER && CURRENT_USER.email) || p.lastEditor || '');
+  if (legacy) {
+    LEGACY_BUDGET_FIELDS.forEach(k => delete p[k]);
+    STORE.budgetVersions[legacy.versionId] = legacy;
+    STORE.currentBudgetVersionId = legacy.versionId;
+    CURRENT_BUDGET_VERSION = legacy;
+    _persistStoreLocally();
+    saveBudget();
+    saveBasics();
+    return;
+  }
+  const versionsForThisProperty = Object.values(STORE.budgetVersions).filter(v => v.propertyId === p.id);
+  let chosen = versionsForThisProperty.find(v => v.isDefault) ||
+    versionsForThisProperty.sort((a, b) => String(b.versionUpdated || '').localeCompare(String(a.versionUpdated || '')))[0];
+  if (!chosen) {
+    chosen = DEFAULT_BUDGET_VERSION();
+    chosen.propertyId = p.id;
+    chosen.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+    STORE.budgetVersions[chosen.versionId] = chosen;
+  }
+  STORE.currentBudgetVersionId = chosen.versionId;
+  CURRENT_BUDGET_VERSION = chosen;
 }
 
 function createProperty(name) {
   const p = DEFAULT_PROPERTY();
   p.name = (name || '').trim() || 'Untitled Property';
   p.phase1.prop_name = p.name;
+  STORE.properties[p.id] = p;
+
+  const bv = DEFAULT_BUDGET_VERSION();
+  bv.propertyId = p.id;
+  bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
   // Every Budget line item starts skipped ("N/A") on a brand-new property — the
   // user opts items in (unchecks Skip) as the deal's scope becomes clear, rather
   // than starting from every item active and opting OUT the ones that don't
   // apply. Existing properties are untouched: this only seeds a freshly-created
-  // one's own `excluded` map (openRemoteProperty/pullFromDrive overwrite it with
-  // the real remote data, so a pulled-in deal keeps its own history).
+  // one's own `excluded` map (openRemoteProperty/pullBudgetFromDrive overwrite it
+  // with the real remote data, so a pulled-in deal keeps its own history).
   SCHEMA.phase3.forEach((g, gi) => {
     g.sections.forEach((s, si) => {
-      s.items.forEach((_, ii) => { p.excluded[ckKey(gi, si, ii)] = true; });
+      s.items.forEach((_, ii) => { bv.excluded[ckKey(gi, si, ii)] = true; });
     });
   });
-  STORE.properties[p.id] = p;
+  STORE.budgetVersions[bv.versionId] = bv;
+
   STORE.currentPropertyId = p.id;
-  STATE = p;
-  saveState();
+  STORE.currentBudgetVersionId = bv.versionId;
+  CURRENT_PROPERTY = p;
+  CURRENT_BUDGET_VERSION = bv;
+  composeState();
+  saveBasics();
+  saveBudget();
   return p;
 }
 function openProperty(id) {
   if (!STORE.properties[id]) return;
   STORE.currentPropertyId = id;
-  STATE = STORE.properties[id];
+  CURRENT_PROPERTY = STORE.properties[id];
+  const p = CURRENT_PROPERTY;
   // Enforce the 25-char Property Name cap on existing records as they're opened.
-  if (STATE.phase1 && typeof STATE.phase1.prop_name === 'string' && STATE.phase1.prop_name.length > PROP_NAME_MAX) {
-    STATE.phase1.prop_name = STATE.phase1.prop_name.slice(0, PROP_NAME_MAX);
-    STATE.name = STATE.phase1.prop_name;
-    saveState();   // persist + sync the truncation
+  let truncated = false;
+  if (p.phase1 && typeof p.phase1.prop_name === 'string' && p.phase1.prop_name.length > PROP_NAME_MAX) {
+    p.phase1.prop_name = p.phase1.prop_name.slice(0, PROP_NAME_MAX);
+    p.name = p.phase1.prop_name;
+    truncated = true;
   }
+  attachBudgetVersionForOpen(p);
+  composeState();
+  if (truncated) saveBasics();   // persist + sync the truncation
   maybeGuessMarketMSA();   // backfill an empty Market (MSA) — bumps updated + auto-pushes only if it fills one
-  // Persist currentPropertyId WITHOUT bumping `updated` (opening a property is not
-  // an edit — bumping it would falsely mark the cache dirty and risk a stale push).
+  // Persist currentPropertyId/currentBudgetVersionId WITHOUT bumping `updated`
+  // (opening a property is not an edit — bumping it would falsely mark the
+  // cache dirty and risk a stale push).
   localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
   CURRENT_PHASE = 1;
   CURRENT_VIEW = 'property';
@@ -444,29 +637,54 @@ function openProperty(id) {
   if (typeof adoptRemoteSurveyJobIfAny === 'function') adoptRemoteSurveyJobIfAny();
   if (typeof maybeStartProformaPoll === 'function') maybeStartProformaPoll();   // resume an in-flight proforma import
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
-  reconcileFromDrive();   // Drive-authoritative: adopt a newer remote copy if this device is clean
+  reconcileBasicsFromDrive();   // Drive-authoritative: adopt a newer remote Basics copy if this device is clean
+  reconcileBudgetFromDrive();   // same, for the currently-selected budget version's own file
 }
-// Drive-authoritative reconcile: after a cache-first open, if the deal-folder copy
-// is newer than our cache AND we have no unsynced local edits, adopt Drive (Drive
-// wins). If local is dirty and remote is newer, we leave it — pushToDrive's silent
-// bail + the concurrent-editor banner handle that conflict without clobbering.
-function reconcileFromDrive() {
-  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;
+// Drive-authoritative reconcile (Basics): after a cache-first open, if the
+// deal-folder copy is newer than our cache AND we have no unsynced local edits,
+// adopt Drive (Drive wins). If local is dirty and remote is newer, we leave it —
+// pushBasicsToDrive's silent bail + the concurrent-editor banner handle that
+// conflict without clobbering.
+function reconcileBasicsFromDrive() {
+  const p = CURRENT_PROPERTY;
+  if (!p || !p.drive || !p.drive.folderId) return;
   if (typeof getDriveToken === 'function' && !getDriveToken()) return;
-  const targetId = STATE.id;
+  const targetId = p.id;
   (async () => {
     try {
       const targetFolder = await resolveCapexFolder();
       const existing = await driveFindFile(targetFolder, STATE_FILENAME);
-      if (!existing || !STATE || STATE.id !== targetId) return;   // gone/navigated away
-      const localDirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
+      if (!existing || !CURRENT_PROPERTY || CURRENT_PROPERTY.id !== targetId) return;   // gone/navigated away
+      const localDirty = !p.drive.lastPushed || p.drive.lastPushed < p.updated;
       const remoteNewer = existing.modifiedTime &&
-        (!STATE.drive.remoteModifiedTime || existing.modifiedTime > STATE.drive.remoteModifiedTime);
+        (!p.drive.remoteModifiedTime || existing.modifiedTime > p.drive.remoteModifiedTime);
       if (remoteNewer && !localDirty) {
         _syncState = 'saving'; updateSyncBar();
-        await pullFromDrive({ auto: true });
+        await pullBasicsFromDrive({ auto: true });
       }
-    } catch (e) { console.warn('reconcileFromDrive failed:', e); }
+    } catch (e) { console.warn('reconcileBasicsFromDrive failed:', e); }
+  })();
+}
+// Same reconcile pattern, for the currently-open BudgetVersion's own file.
+function reconcileBudgetFromDrive() {
+  const bv = CURRENT_BUDGET_VERSION;
+  const p = CURRENT_PROPERTY;
+  if (!bv || !p || !p.drive.folderId || !bv.versionDrive.fileId) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;
+  const targetVersionId = bv.versionId;
+  (async () => {
+    try {
+      const metaR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${bv.versionDrive.fileId}?fields=id,modifiedTime`);
+      if (!metaR.ok) return;
+      const meta = await metaR.json();
+      if (!CURRENT_BUDGET_VERSION || CURRENT_BUDGET_VERSION.versionId !== targetVersionId) return;
+      const localDirty = !bv.versionDrive.lastPushed || bv.versionDrive.lastPushed < bv.versionUpdated;
+      const remoteNewer = meta.modifiedTime &&
+        (!bv.versionDrive.remoteModifiedTime || meta.modifiedTime > bv.versionDrive.remoteModifiedTime);
+      if (remoteNewer && !localDirty) {
+        await pullBudgetFromDrive({ auto: true });
+      }
+    } catch (e) { console.warn('reconcileBudgetFromDrive failed:', e); }
   })();
 }
 function closeProperty() {
@@ -478,8 +696,11 @@ function closeProperty() {
   if (typeof stopProformaPoll === 'function') stopProformaPoll();
   if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
   STORE.currentPropertyId = null;
+  STORE.currentBudgetVersionId = null;
+  CURRENT_PROPERTY = null;
+  CURRENT_BUDGET_VERSION = null;
   STATE = null;
-  saveState();
+  _persistStoreLocally();
   CURRENT_VIEW = 'home';
   renderShell();
   // Refresh the home screen with the latest manifest snapshot.
@@ -488,13 +709,20 @@ function closeProperty() {
 }
 function deleteProperty(id) {
   delete STORE.properties[id];
+  // Also drop every budget version that belonged to this property.
+  Object.keys(STORE.budgetVersions).forEach(vid => {
+    if (STORE.budgetVersions[vid].propertyId === id) delete STORE.budgetVersions[vid];
+  });
   if (STORE.currentPropertyId === id) {
     STORE.currentPropertyId = null;
+    STORE.currentBudgetVersionId = null;
+    CURRENT_PROPERTY = null;
+    CURRENT_BUDGET_VERSION = null;
     STATE = null;
     CURRENT_VIEW = 'home';
     setHash('#/');   // deleted the open property -> drop to the home URL
   }
-  saveState();
+  _persistStoreLocally();
   // Best-effort: remove from the org manifest too. If a teammate still has
   // the property locally, their next sync tick will recreate the entry —
   // which is what we want (delete = drop my local copy, not org-wide remove).
@@ -595,7 +823,9 @@ function routeFromHash() {
       if (typeof stopAutoSync === 'function') stopAutoSync();
       if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
     }
-    STORE.currentPropertyId = null; STATE = null; saveState();
+    STORE.currentPropertyId = null; STORE.currentBudgetVersionId = null;
+    CURRENT_PROPERTY = null; CURRENT_BUDGET_VERSION = null; STATE = null;
+    _persistStoreLocally();
     CURRENT_VIEW = 'home'; renderShell();
     if (getDriveToken()) refreshHomeIndex().catch(() => {});
     else tryOpenPendingDeepLink();
@@ -1069,7 +1299,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
           }
         }
         rendered.forEach(rs => refreshSection(rs.sec, rs.body, bag));   // refresh ALL sections (cross-section deps)
-        saveState();
+        saveBasics();
         onUpdate && onUpdate();
       };
       const fieldNode = renderField(f, value, handleChange);
@@ -1094,7 +1324,7 @@ function renderSchemaForm(sections, bag, onUpdate) {
         cb.checked = !!bag[permfKey];
         cb.addEventListener('change', () => {
           bag[permfKey] = cb.checked;
-          if (cb.checked) applyPerMf(); else { releasePerMf(); saveState(); }
+          if (cb.checked) applyPerMf(); else { releasePerMf(); saveBasics(); }
         });
         // Sits in the middle grid column (grid-column 2) of the inline field so the
         // checkbox lines up between the label and the input box instead of wrapping
@@ -1561,7 +1791,7 @@ function renderPhase1() {
   // sections, i.e. right below Building & Site. Stored as HTML in phase1.
   root.appendChild(renderNotesSection('Basics Notes', 'Notes about the property basics, building & site…',
     () => (STATE.phase1 && STATE.phase1.basics_notes) || '',
-    (html) => { STATE.phase1.basics_notes = html; saveState(); }));
+    (html) => { STATE.phase1.basics_notes = html; saveBasics(); }));
   // Physical characteristics questionnaire lives here too (collapsible sections).
   root.appendChild(makeGroupDivider('Physical Characteristics'));
   root.appendChild(renderSchemaForm(SCHEMA.phase2, STATE.phase2));
@@ -1569,7 +1799,7 @@ function renderPhase1() {
   // Characteristics sections, i.e. right below Amenities - Indoor. Stored in phase2.
   root.appendChild(renderNotesSection('Physical Notes', 'Notes about the physical characteristics…',
     () => (STATE.phase2 && STATE.phase2.physical_notes) || '',
-    (html) => { STATE.phase2.physical_notes = html; saveState(); }));
+    (html) => { STATE.phase2.physical_notes = html; saveBasics(); }));
   // Give EVERY section box on the Basics page its own expand/collapse button —
   // a matching-color footer strip on each top-level .section (schema sections +
   // the Notes boxes). Direct children only, so blocks injected inside a section
@@ -1650,20 +1880,20 @@ function getUnitMix() {
 }
 function addUnitRow(row) {
   getUnitMix().push(row || { type: '', count: '', beds: '', baths: '', sqft: '', status: '' });
-  saveState();
+  saveBasics();
 }
 function updateUnitRow(i, patch) {
   const m = getUnitMix();
   if (m[i]) {
     Object.assign(m[i], patch);
     syncUnitMixSumsToPhase1();   // refresh mf_units / mf_rsf / overall_rsf as user types
-    saveState();
+    saveBasics();
   }
 }
 function removeUnitRow(i) {
   getUnitMix().splice(i, 1);
   syncUnitMixSumsToPhase1();
-  saveState();
+  saveBasics();
 }
 
 // Sums from the unit mix populate the mf_units and mf_rsf fields in the
@@ -1852,15 +2082,15 @@ function addSurveyBuilding(row) {
     label: '', footprint_sf: '', width_ft: '', length_ft: '', dimensions: '',
     stories: '', height_ft: '', roof_pitch: '', roof_sf: '', facade_sf: '', envelope_cf: '',
   });
-  saveState();
+  saveBasics();
 }
 function updateSurveyBuilding(i, patch) {
   const arr = ensureSurveyState().buildings;
-  if (arr[i]) { Object.assign(arr[i], patch); saveState(); }
+  if (arr[i]) { Object.assign(arr[i], patch); saveBasics(); }
 }
 function removeSurveyBuilding(i) {
   ensureSurveyState().buildings.splice(i, 1);
-  saveState();
+  saveBasics();
 }
 
 function renderSurveyBlock() {
@@ -2561,7 +2791,7 @@ function applySurveyParsedData(parsed, sourcePdf) {
   STATE.survey.ft_per_pixel = parsed.meta && parsed.meta.ft_per_pixel || null;
   STATE.survey.google_maps_notes = parsed.notes || '';
   STATE.survey.discrepancies = parsed.discrepancies || [];
-  saveState();
+  saveBasics();
   return `${filled} field${filled === 1 ? '' : 's'} + ${(parsed.buildings || []).length} building${(parsed.buildings || []).length === 1 ? '' : 's'}`;
 }
 
@@ -2785,7 +3015,7 @@ function getSurveyJob() { return (STATE && STATE.survey && STATE.survey.job) || 
 function setSurveyJob(job) {
   ensureSurveyState();
   STATE.survey.job = job || null;
-  saveState();
+  saveBasics();
 }
 function surveyJobIsActive(job) {
   return !!job && (job.status === 'queued' || job.status === 'processing');
@@ -3498,7 +3728,7 @@ function importProformaUnitMix(file, rebuild) {
       if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from the proforma?`)) return;
       STATE.unitMix = out;
       syncUnitMixSumsToPhase1();
-      saveState();
+      saveBasics();
       // Full re-render (not just the unit-mix block) so every derived field —
       // mf_units / mf_rsf / overall_rsf and anything conditional on them —
       // shows the imported values without a manual page refresh.
@@ -3688,7 +3918,7 @@ async function pullProformaFromDrive(rebuild) {
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
     STATE.unitMix = out;
     syncUnitMixSumsToPhase1();
-    saveState();
+    saveBasics();
     // Full re-render so all derived fields reflect the import immediately.
     renderShell();
     toast(`Imported ${out.length} unit row(s) from ${f.name}`, 'success');
@@ -3820,7 +4050,7 @@ function guessMarketMSA(o) {
 function maybeGuessMarketMSA() {
   if (!STATE || !STATE.phase1 || STATE.phase1.market_msa) return;
   const mm = guessMarketMSA({ city: STATE.phase1.city, state: STATE.phase1.state });
-  if (mm) { STATE.phase1.market_msa = mm; STATE.updated = Date.now(); saveState(); }
+  if (mm) { STATE.phase1.market_msa = mm; STATE.updated = Date.now(); saveBasics(); }
 }
 
 // Import identity fields from the Dash sheet AND unit mix from the RR tab in one shot.
@@ -3877,7 +4107,7 @@ async function pullBasicsAndUnitsFromDrive() {
     }
 
     if (!filled.length) { toast('Nothing could be extracted from the Dash or RR tab in this file.', 'error'); return; }
-    saveState();
+    saveBasics();
     renderShell();
     toast(`Imported from ${f.name}: ${filled.join(', ')}`, 'success');
   } catch (e) {
@@ -3894,7 +4124,7 @@ function setChecked(gi, si, ii, val) {
   if (!STATE.checklist) STATE.checklist = {};
   const k = ckKey(gi, si, ii);
   if (val) STATE.checklist[k] = true; else delete STATE.checklist[k];
-  saveState();
+  saveBudget();
 }
 function countChecked() {
   return STATE.checklist ? Object.keys(STATE.checklist).length : 0;
@@ -3915,7 +4145,7 @@ function setExcluded(gi, si, ii, val) {
   if (!STATE.excluded) STATE.excluded = {};
   const k = ckKey(gi, si, ii);
   if (val) STATE.excluded[k] = true; else delete STATE.excluded[k];
-  saveState();
+  saveBudget();
 }
 
 // CAPEX group header colors, matched to the source Excel "CAPEX" tab. Used by the
@@ -4268,7 +4498,7 @@ function recomputeInteriorRowQty(gi, si, ii, countsOpt) {
 function setP3(gi, si, ii, patch) {
   const k = ckKey(gi, si, ii);
   STATE.phase3[k] = Object.assign(getP3(gi, si, ii), patch);
-  saveState();
+  saveBudget();
 }
 
 // ---------- CAPEX Groups (user-defined buckets for percentage-based line items) ----------
@@ -4285,12 +4515,12 @@ function findCapexGroup(id) {
 function createCapexGroup() {
   const g = { id: 'cg_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36), name: '', itemKeys: [] };
   ensureCapexGroups().push(g);
-  saveState();
+  saveBudget();
   return g;
 }
 function updateCapexGroup(id, patch) {
   const g = findCapexGroup(id);
-  if (g) { Object.assign(g, patch); saveState(); }
+  if (g) { Object.assign(g, patch); saveBudget(); }
 }
 function removeCapexGroup(id) {
   const arr = ensureCapexGroups();
@@ -4301,7 +4531,7 @@ function removeCapexGroup(id) {
   Object.values(STATE.phase3 || {}).forEach(v => {
     if (v && v.pct_group_id === id) v.pct_group_id = '';
   });
-  saveState();
+  saveBudget();
 }
 // Group total = sum of $ Amts of non-% items in the group (anti-recursion).
 function getCapexGroupTotal(groupId) {
@@ -4371,12 +4601,12 @@ function createCustomItem(groupName, sectionName) {
     excluded: false,
   };
   ensureCustomItems().push(ci);
-  saveState();
+  saveBudget();
   return ci;
 }
 function updateCustomItem(id, patch) {
   const ci = findCustomItem(id);
-  if (ci) { Object.assign(ci, patch); saveState(); }
+  if (ci) { Object.assign(ci, patch); saveBudget(); }
   return ci;
 }
 function removeCustomItem(id) {
@@ -4384,7 +4614,7 @@ function removeCustomItem(id) {
   const idx = arr.findIndex(ci => ci.id === id);
   if (idx < 0) return;
   arr.splice(idx, 1);
-  saveState();
+  saveBudget();
 }
 function getCustomItemsFor(groupName, sectionName) {
   return ensureCustomItems().filter(ci => ci.groupName === groupName && ci.sectionName === sectionName);
@@ -5053,7 +5283,7 @@ function groupSkipState(gi) {
   return tot === 0 ? 'none' : (ex === 0 ? 'none' : (ex === tot ? 'all' : 'some'));
 }
 // Exclude/include every item across the given section indices in one shot: batch
-// STATE.excluded (single saveState), then live-update each rendered row + its
+// STATE.excluded (single saveBudget), then live-update each rendered row + its
 // per-row checkbox, recompute the summary, and refresh every Skip toggle.
 function bulkSetExcluded(gi, siList, excluded, summaryNode) {
   const g = SCHEMA.phase3[gi]; if (!g) return;
@@ -5065,7 +5295,7 @@ function bulkSetExcluded(gi, siList, excluded, summaryNode) {
       if (excluded) STATE.excluded[k] = true; else delete STATE.excluded[k];
     });
   });
-  saveState();
+  saveBudget();
   siList.forEach(si => {
     const sec = g.sections[si]; if (!sec) return;
     sec.items.forEach((_, ii) => {
@@ -5943,7 +6173,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
     if (!addSel.value) return;
     grp.itemKeys = grp.itemKeys || [];
     grp.itemKeys.push(addSel.value);
-    saveState();
+    saveBudget();
     addSel.value = '';
     rebuildList();
     refreshAllPctGroupSelects();
@@ -5954,7 +6184,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
     style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:6px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer',
     title: 'Persist this group and refresh % dropdowns',
     onClick: () => {
-      saveState();
+      saveBudget();
       refreshAllPctGroupSelects();
       recomputePctRowsAndSummary(summaryNode);
       const label = (grp.name || '').trim() || '(unnamed)';
@@ -6009,7 +6239,7 @@ function renderCapexGroupCard(grp, rebuildList, summaryNode) {
         style: 'width:26px;height:26px;font-size:13px;background:transparent;color:#991b1b;border:1px solid #fecaca;border-radius:4px;cursor:pointer;padding:0;line-height:1',
         onClick: () => {
           grp.itemKeys.splice(idx, 1);
-          saveState();
+          saveBudget();
           rebuildList();
           refreshAllPctGroupSelects();
           recomputePctRowsAndSummary(summaryNode);
@@ -6231,7 +6461,7 @@ function renderPhase4() {
   // so the Capex Builder no longer models them.)
   // Notes box stays gray until it has text (matches the flag boxes above).
   const notesField = renderField({ key: 'notes', label: 'Overall Notes', type: 'textarea', inline: false },
-    STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveState(); grayWhenEmpty(notesBox); });
+    STATE.phase4.notes, (v) => { STATE.phase4.notes = v; saveBudget(); grayWhenEmpty(notesBox); });
   const notesBox = notesField.querySelector('textarea, input');
   grayWhenEmpty(notesBox);
   if (notesBox) notesBox.addEventListener('input', () => grayWhenEmpty(notesBox));
@@ -7274,7 +7504,7 @@ async function setManifestArchived(p, archived) {
 }
 function setPropertyArchived(p, archived) {
   p.archived = archived;                       // local hint (menu label / offline)
-  if (STATE && STATE.id === p.id) { STATE.archived = archived; saveState(); }
+  if (STATE && STATE.id === p.id) { STATE.archived = archived; saveBasics(); }
   else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));   // persist without bumping the open property
   if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.properties)) {
     const e = MANIFEST_CACHE.data.properties.find(x => x.id === p.id);
@@ -7665,7 +7895,7 @@ function propertyMenu(p) {
     if (n !== null && n.trim()) {
       p.name = n.trim();
       if (p.phase1) p.phase1.prop_name = p.name;
-      saveState();
+      saveBasics();
       renderHome();
     }
   } else if (choice === '3') {
@@ -7705,7 +7935,7 @@ function promptLinkFolder(p, after) {
     p.drive.folderId = '';
     p.drive.fileId = '';
     p.drive.capexFolderId = '';
-    saveState();
+    saveBasics();
     if (after) after();
     toast('Folder unlinked');
     return;
@@ -7721,7 +7951,7 @@ function promptLinkFolder(p, after) {
   p.drive.folderId = id;
   p.drive.fileId = '';        // reset; will be discovered on next push/pull
   p.drive.capexFolderId = ''; // reset cached nested folder id
-  saveState();
+  saveBasics();
   if (after) after();
   toast('Drive folder linked', 'success');
   // Folder linked -> write this property's Capex Builder link to its Asana deal task.
@@ -7785,20 +8015,22 @@ function updateSyncBar() {
 // Offers a 2-way resolution: load the Drive version (discard unsynced local edits)
 // or overwrite Drive with the local version. Either path clears the conflict.
 async function resolveSyncConflict() {
-  if (!STATE || !STATE.drive || !STATE.drive.folderId) return;
+  if (!CURRENT_PROPERTY || !CURRENT_PROPERTY.drive || !CURRENT_PROPERTY.drive.folderId) return;
   const useRemote = confirm(
-    'A newer version of this property is on Drive.\n\n' +
+    'A newer version of this property (or its open budget version) is on Drive.\n\n' +
     'OK — Load the Drive version (your unsynced local edits will be replaced).\n\n' +
     'Cancel — Keep your local version and overwrite the Drive copy.'
   );
   try {
     if (useRemote) {
-      await pullFromDrive({ auto: true });   // silent adopt: sets _syncState idle + re-renders
+      await pullBasicsFromDrive({ auto: true });   // silent adopt: sets _syncState idle + re-renders
+      if (CURRENT_BUDGET_VERSION) await pullBudgetFromDrive({ auto: true });
       toast('Loaded the Drive version', 'success');
     } else {
-      const r = await pushToDrive({ force: true });   // override the newer-remote guard
-      _syncState = (r === false) ? 'error' : 'idle';
-      if (r !== false) toast('Overwrote the Drive copy with your local version', 'success');
+      const r1 = await pushBasicsToDrive({ force: true });   // override the newer-remote guard
+      const r2 = CURRENT_BUDGET_VERSION ? await pushBudgetToDrive({ force: true }) : true;
+      _syncState = (r1 === false || r2 === false) ? 'error' : 'idle';
+      if (r1 !== false && r2 !== false) toast('Overwrote the Drive copy with your local version', 'success');
     }
   } catch (e) {
     _syncState = 'error';
@@ -7834,7 +8066,7 @@ function bindShell() {
         && STATE.phase1 && STATE.phase1.prop_name
         && GOOGLE_CLIENT_ID) {
       STATE.drive.autoSearchAttempted = true;
-      saveState();
+      saveBasics();
       autoLinkDealFolder({ silent: true });
     }
   }));
@@ -7863,7 +8095,7 @@ function bindShell() {
     if (n !== null && n.trim()) {
       STATE.name = n.trim();
       STATE.phase1.prop_name = STATE.name;
-      saveState();
+      saveBasics();
       renderShell();
     }
     closeDrawer();
@@ -7879,7 +8111,11 @@ function bindShell() {
 
   // Recovery only: re-pull the authoritative Drive copy (prompts if this device
   // has unsynced edits). Routine sync is automatic.
-  $('#btn-resync').addEventListener('click', async () => { closeDrawer(); await pullFromDrive(); });
+  $('#btn-resync').addEventListener('click', async () => {
+    closeDrawer();
+    await pullBasicsFromDrive();
+    if (CURRENT_BUDGET_VERSION) await pullBudgetFromDrive();
+  });
 
   $('#btn-export-xlsx').addEventListener('click', () => { exportXlsx(); closeDrawer(); });
   $('#btn-export-json').addEventListener('click', () => {
@@ -8195,7 +8431,7 @@ async function resolveCapexFolder() {
   const capexParent = await driveEnsureSubfolder(STATE.drive.folderId, '25. Capex');
   const budgetFolder = await driveEnsureSubfolder(capexParent, 'Capex Builder Budget');
   STATE.drive.capexFolderId = budgetFolder;
-  saveState();
+  saveBasics();
   return budgetFolder;
 }
 
@@ -8325,7 +8561,7 @@ async function autoLinkDealFolder({ silent = false } = {}) {
     STATE.drive.folderId = chosen.id;
     STATE.drive.fileId = '';
     STATE.drive.capexFolderId = '';
-    saveState();
+    saveBasics();
     // Eagerly create the nested target folder.
     try { await resolveCapexFolder(); } catch (e) { console.warn('resolveCapexFolder after auto-link failed', e); }
     renderShell();
@@ -8631,8 +8867,8 @@ function renderPhotoButton(gi, si, ii, item) {
 // ---- per-line-item note (📝) ----
 // A short free-text note per Budget line item. Stored on phase3[k].notes (the
 // SAME field the Excel export / proforma paste already read as the Notes
-// column), so saving syncs to the deal's capex_builder.json on Drive via
-// setP3→saveState→auto-push, and the note ships in every export.
+// column), so saving syncs to this budget version's own Drive file via
+// setP3→saveBudget→auto-push, and the note ships in every export.
 function renderNoteButton(gi, si, ii, item) {
   const k = ckKey(gi, si, ii);
   const btn = el('button', { type: 'button', class: 'note-btn', 'data-note-btn': k }, '📝');
@@ -8859,27 +9095,38 @@ async function resolveItemPhotoFolder(dealFolderId, itemFolderName) {
 }
 // Record the line item's photo subfolder id on the row (for the Excel export's
 // folder link). Same open-vs-closed-property handling as patchPhotoEntry.
+// Photo metadata (photoFolderId, the photos[] queue) lives on the BudgetVersion's
+// phase3[k] entry, not on the Property — find the right version for `propId`
+// whether or not that property is the one currently open (this queue can drain
+// in the background for a property the user isn't looking at).
+function findBudgetVersionForProperty(propId, preferVersionId) {
+  if (preferVersionId && STORE.budgetVersions[preferVersionId] && STORE.budgetVersions[preferVersionId].propertyId === propId) {
+    return STORE.budgetVersions[preferVersionId];
+  }
+  const matches = Object.values(STORE.budgetVersions).filter(v => v.propertyId === propId);
+  return matches.find(v => v.isDefault) || matches[0] || null;
+}
 function setItemPhotoFolderId(propId, k, folderId) {
-  const p = (STATE && STATE.id === propId) ? STATE : STORE.properties[propId];
-  if (!p || !p.phase3 || !p.phase3[k]) return;
-  if (p.phase3[k].photoFolderId === folderId) return;
-  p.phase3[k].photoFolderId = folderId;
-  p.updated = new Date().toISOString();
-  if (p === STATE) saveState();
-  else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+  const isOpen = STATE && STATE.id === propId;
+  const bv = isOpen ? CURRENT_BUDGET_VERSION : findBudgetVersionForProperty(propId);
+  if (!bv || !bv.phase3 || !bv.phase3[k]) return;
+  if (bv.phase3[k].photoFolderId === folderId) return;
+  bv.phase3[k].photoFolderId = folderId;
+  if (isOpen) { saveBudget(); }
+  else { bv.versionUpdated = new Date().toISOString(); _persistStoreLocally(); }
 }
 // Update a photo entry on its row — works whether or not that property is the
 // one currently open. For a non-open property we patch its localStorage record
-// and bump `updated`, so the pointer pushes to Drive next time it's opened.
+// and bump the version's `versionUpdated`, so it pushes to Drive next time it's opened.
 function patchPhotoEntry(propId, k, qid, patch) {
-  const p = (STATE && STATE.id === propId) ? STATE : STORE.properties[propId];
-  if (!p || !p.phase3 || !p.phase3[k]) return;
-  const entry = (p.phase3[k].photos || []).find(x => x.qid === qid);
+  const isOpen = STATE && STATE.id === propId;
+  const bv = isOpen ? CURRENT_BUDGET_VERSION : findBudgetVersionForProperty(propId);
+  if (!bv || !bv.phase3 || !bv.phase3[k]) return;
+  const entry = (bv.phase3[k].photos || []).find(x => x.qid === qid);
   if (!entry) return;
   Object.assign(entry, patch);
-  p.updated = new Date().toISOString();
-  if (p === STATE) saveState();                                    // auto-pushes
-  else localStorage.setItem(STORE_KEY, JSON.stringify(STORE));     // pushes when next opened
+  if (isOpen) { saveBudget(); }                                     // auto-pushes
+  else { bv.versionUpdated = new Date().toISOString(); _persistStoreLocally(); }   // pushes when next opened
   refreshPhotoBadge(k, propId);
 }
 let PHOTO_DRAIN_RUNNING = false;
@@ -8955,10 +9202,11 @@ function initPhotoQueue() {
   setTimeout(() => { updatePhotoQueueChip(); drainPhotoQueue(); }, 3000);
 }
 
-async function pushToDrive(opts = {}) {
+async function pushBasicsToDrive(opts = {}) {
   const { silent = false, force = false } = opts;
-  if (!STATE) return;
-  if (!STATE.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
+  const p = CURRENT_PROPERTY;
+  if (!p) return;
+  if (!p.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
     if (!silent) toast('Pushing to Drive…');
@@ -8966,25 +9214,25 @@ async function pushToDrive(opts = {}) {
     // Guard: don't clobber a Drive copy that's newer than our watermark (unless
     // force — the user explicitly chose "overwrite Drive" from the conflict bar).
     const existing = await driveFindFile(targetFolder, STATE_FILENAME);
-    if (!force && existing && STATE.drive.remoteModifiedTime
-        && existing.modifiedTime > STATE.drive.remoteModifiedTime
-        && (!STATE.drive.lastPushed || existing.modifiedTime > STATE.drive.lastPushed)) {
+    if (!force && existing && p.drive.remoteModifiedTime
+        && existing.modifiedTime > p.drive.remoteModifiedTime
+        && (!p.drive.lastPushed || existing.modifiedTime > p.drive.lastPushed)) {
       if (silent) {
         // Auto-sync mustn't silently clobber a newer remote. Signal a conflict so
         // the sync bar stops lying "Saving…" and offers the user a resolution
         // (load Drive vs. overwrite) via resolveSyncConflict(); retries next tick.
-        console.warn('pushToDrive: remote newer than local — conflict (awaiting user resolve)');
+        console.warn('pushBasicsToDrive: remote newer than local — conflict (awaiting user resolve)');
         return 'conflict';
       }
       if (!confirm('The Drive copy was modified more recently than your last sync. Overwrite it with your local data?')) {
         return;
       }
     }
-    const res = await driveUploadJson(targetFolder, STATE_FILENAME, STATE, existing && existing.id);
-    STATE.drive.fileId = res.id;
-    STATE.drive.lastPushed = new Date().toISOString();   // > STATE.updated (edit time) => not dirty
-    STATE.drive.remoteModifiedTime = res.modifiedTime;
-    // Persist the drive metadata WITHOUT saveState() — saveState bumps `updated`
+    const res = await driveUploadJson(targetFolder, STATE_FILENAME, p, existing && existing.id);
+    p.drive.fileId = res.id;
+    p.drive.lastPushed = new Date().toISOString();   // > p.updated (edit time) => not dirty
+    p.drive.remoteModifiedTime = res.modifiedTime;
+    // Persist the drive metadata WITHOUT saveBasics() — saveBasics bumps `updated`
     // and re-schedules a push, which would loop the auto-push.
     localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
     updateSyncBar();
@@ -8998,31 +9246,184 @@ async function pushToDrive(opts = {}) {
   }
 }
 
-async function pullFromDrive(opts = {}) {
+async function pullBasicsFromDrive(opts = {}) {
   const { auto = false } = opts;   // auto = silent Drive-authoritative reconcile (no toasts / no prompt)
-  if (!STATE) return;
-  if (!STATE.drive.folderId) { if (!auto) toast('Link a Drive folder first', 'error'); return; }
+  const p = CURRENT_PROPERTY;
+  if (!p) return;
+  if (!p.drive.folderId) { if (!auto) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!auto) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
     if (!auto) toast('Pulling from Drive…');
     const targetFolder = await resolveCapexFolder();
     const remote = await driveDownloadJson(targetFolder, STATE_FILENAME);
     if (!remote) { if (!auto) toast('No ' + STATE_FILENAME + ' found in 25. Capex/Capex Builder Budget', 'error'); return; }
-    const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
+    const dirty = !p.drive.lastPushed || p.drive.lastPushed < p.updated;
     if (dirty && !auto && !confirm('You have unpushed local changes. Replace them with the Drive copy?')) return;
-    // Preserve local identity + drive metadata; overwrite content fields.
-    const keep = { id: STATE.id, drive: { ...STATE.drive } };
-    Object.keys(STATE).forEach(k => delete STATE[k]);
-    Object.assign(STATE, remote.data);
-    STATE.id = keep.id;
-    STATE.updated = remote.modifiedTime || new Date().toISOString();
-    STATE.drive = { ...keep.drive, fileId: remote.id, lastPulled: new Date().toISOString(), remoteModifiedTime: remote.modifiedTime, lastPushed: STATE.updated };
-    // Local now matches remote (lastPushed == updated => not dirty). Persist WITHOUT
-    // saveState() so `updated` isn't bumped (which would re-flag dirty + auto-push).
+    // A still-combined legacy file may arrive here (e.g. this is the very first
+    // pull after this feature shipped, or a teammate is on old code). Detect +
+    // split it out before applying the Basics fields.
+    const legacy = extractLegacyBudgetVersion(remote.data, p.id, (CURRENT_USER && CURRENT_USER.email) || p.lastEditor || '');
+    // In-place field mutation — never replace `p` or its sub-objects by reference,
+    // so STATE.phase1/phase2/unitMix/survey (aliased to these same objects via
+    // composeState) stay live with no re-pointing step.
+    mutateBasicsFieldsInPlace(p, remote.data);
+    p.updated = remote.modifiedTime || new Date().toISOString();
+    p.drive.fileId = remote.id;
+    p.drive.lastPulled = new Date().toISOString();
+    p.drive.remoteModifiedTime = remote.modifiedTime;
+    // Local now matches remote (lastPushed == updated => not dirty).
+    p.drive.lastPushed = p.updated;
     localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
     _syncState = 'idle';
+    if (legacy) {
+      // Persist the just-split-out version locally, adopt it if we have none yet
+      // for this property, then push both files so Drive reflects the split for
+      // every teammate (not just this device).
+      STORE.budgetVersions[legacy.versionId] = legacy;
+      if (!CURRENT_BUDGET_VERSION || CURRENT_BUDGET_VERSION.propertyId !== p.id) {
+        CURRENT_BUDGET_VERSION = legacy;
+        STORE.currentBudgetVersionId = legacy.versionId;
+      }
+      localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+      pushBudgetToDrive({ silent: true });
+      pushBasicsToDrive({ silent: true });
+    }
+    composeState();
     renderShell();
     if (!auto) toast('Pulled from Drive', 'success');
+  } catch (e) {
+    toast('Pull failed: ' + e.message, 'error');
+  }
+}
+
+// ---------- Budget Version Drive sync (its own file per version) ----------
+// Folder for per-version budget files: <capexFolder>/Versions/
+async function resolveVersionsFolder() {
+  if (!CURRENT_PROPERTY || !CURRENT_PROPERTY.drive.folderId) throw new Error('No Drive folder linked');
+  if (CURRENT_PROPERTY.drive.versionsFolderId) return CURRENT_PROPERTY.drive.versionsFolderId;
+  const capexFolder = await resolveCapexFolder();
+  const versionsFolder = await driveEnsureSubfolder(capexFolder, 'Versions');
+  CURRENT_PROPERTY.drive.versionsFolderId = versionsFolder;
+  saveBasics();
+  return versionsFolder;
+}
+// Human-readable Drive filename for a budget version: "<Label>_<username>.json".
+// Sanitized the same way the Excel-export filename already is (buildCapexBlob).
+// `username` should be the STABLE creator (versionCreatedBy), not whoever is
+// currently editing — so the filename only moves if the label is renamed later
+// (harmless metadata-only Drive rename via the normal push path, see below),
+// never because someone else touched the version.
+function budgetVersionFilename(label, username) {
+  const safeLabel = String(label || 'Budget').trim().replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'Budget';
+  const safeUser = String(username || 'user').trim().replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'user';
+  return `${safeLabel}_${safeUser}.json`;
+}
+// Pick a filename for a brand-new version, appending _2/_3/… if the Versions
+// folder already has a file with the same generated name (e.g. two "Draft"
+// versions by the same person). Only matters at creation — once a version has
+// a fileId, pushBudgetToDrive updates it by id, never by re-searching a name.
+async function uniqueBudgetVersionFilename(versionsFolderId, label, username) {
+  const base = budgetVersionFilename(label, username);
+  const existingFiles = await driveListFilesInFolder(versionsFolderId);
+  const taken = new Set(existingFiles.map(f => f.name));
+  if (!taken.has(base)) return base;
+  const stem = base.slice(0, base.length - 5);   // strip ".json"
+  for (let i = 2; i < 50; i++) {
+    const candidate = `${stem}_${i}.json`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${stem}_${Date.now().toString(36)}.json`;
+}
+async function pushBudgetToDrive(opts = {}) {
+  const { silent = false, force = false } = opts;
+  const bv = CURRENT_BUDGET_VERSION;
+  const p = CURRENT_PROPERTY;
+  if (!bv || !p) return;
+  if (!p.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
+  if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
+  try {
+    if (!silent) toast('Pushing budget to Drive…');
+    const versionsFolder = await resolveVersionsFolder();
+    let fileId = bv.versionDrive.fileId || null;
+    let filename;
+    if (fileId) {
+      // Re-sent every push; PATCHes the Drive filename automatically if the
+      // label was renamed since the last push (safe metadata-only rename).
+      filename = budgetVersionFilename(bv.label, bv.versionCreatedBy);
+      if (!force && bv.versionDrive.remoteModifiedTime) {
+        const metaR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,modifiedTime`);
+        const meta = metaR.ok ? await metaR.json() : null;
+        if (meta && meta.modifiedTime > bv.versionDrive.remoteModifiedTime
+            && (!bv.versionDrive.lastPushed || meta.modifiedTime > bv.versionDrive.lastPushed)) {
+          if (silent) { console.warn('pushBudgetToDrive: remote newer than local — conflict (awaiting user resolve)'); return 'conflict'; }
+          if (!confirm(`The Drive copy of "${bv.label}" was modified more recently than your last sync. Overwrite it with your local data?`)) return;
+        }
+      }
+    } else {
+      filename = await uniqueBudgetVersionFilename(versionsFolder, bv.label, bv.versionCreatedBy);
+    }
+    const res = await driveUploadJson(versionsFolder, filename, bv, fileId);
+    bv.versionDrive.fileId = res.id;
+    bv.versionDrive.lastPushed = new Date().toISOString();
+    bv.versionDrive.remoteModifiedTime = res.modifiedTime;
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+    if (!silent) toast('Budget pushed to Drive', 'success');
+    return true;
+  } catch (e) {
+    if (silent) console.warn('Silent budget push failed:', e);
+    else toast('Budget push failed: ' + e.message, 'error');
+    return false;
+  }
+}
+// Copy only the Budget-owned fields from `src` into `target`, IN PLACE — same
+// never-replace-the-object discipline as mutateBasicsFieldsInPlace, so
+// STATE.phase3/capexGroups/customItems/excluded/checklist/phase4 (aliased to
+// these same objects via composeState) stay live with no re-pointing step.
+function mutateBudgetFieldsInPlace(target, src) {
+  ['excluded', 'checklist'].forEach(k => {
+    if (!target[k]) target[k] = {};
+    Object.keys(target[k]).forEach(kk => delete target[k][kk]);
+    Object.assign(target[k], src[k] || {});
+  });
+  if (!target.phase3) target.phase3 = {};
+  Object.keys(target.phase3).forEach(kk => delete target.phase3[kk]);
+  Object.assign(target.phase3, src.phase3 || {});
+  if (!Array.isArray(target.capexGroups)) target.capexGroups = [];
+  target.capexGroups.length = 0;
+  target.capexGroups.push(...(Array.isArray(src.capexGroups) ? src.capexGroups : []));
+  if (!Array.isArray(target.customItems)) target.customItems = [];
+  target.customItems.length = 0;
+  target.customItems.push(...(Array.isArray(src.customItems) ? src.customItems : []));
+  const defPhase4 = { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' };
+  if (!target.phase4) target.phase4 = defPhase4;
+  Object.keys(target.phase4).forEach(kk => delete target.phase4[kk]);
+  Object.assign(target.phase4, src.phase4 || defPhase4);
+  target.label = src.label || target.label;
+}
+async function pullBudgetFromDrive(opts = {}) {
+  const { auto = false } = opts;
+  const bv = CURRENT_BUDGET_VERSION;
+  const p = CURRENT_PROPERTY;
+  if (!bv || !p) return;
+  if (!p.drive.folderId) { if (!auto) toast('Link a Drive folder first', 'error'); return; }
+  if (!bv.versionDrive.fileId) { if (!auto) toast('This budget version has not been pushed to Drive yet', 'error'); return; }
+  try {
+    if (!auto) toast('Pulling budget from Drive…');
+    const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${bv.versionDrive.fileId}?alt=media`);
+    const remoteData = await r.json();
+    const metaR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${bv.versionDrive.fileId}?fields=id,modifiedTime`);
+    const meta = metaR.ok ? await metaR.json() : {};
+    const dirty = !bv.versionDrive.lastPushed || bv.versionDrive.lastPushed < bv.versionUpdated;
+    if (dirty && !auto && !confirm('You have unpushed local changes to this budget version. Replace them with the Drive copy?')) return;
+    mutateBudgetFieldsInPlace(bv, remoteData);
+    bv.versionUpdated = meta.modifiedTime || new Date().toISOString();
+    bv.versionDrive.lastPulled = new Date().toISOString();
+    bv.versionDrive.remoteModifiedTime = meta.modifiedTime;
+    bv.versionDrive.lastPushed = bv.versionUpdated;
+    localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+    composeState();
+    renderShell();
+    if (!auto) toast('Pulled budget from Drive', 'success');
   } catch (e) {
     toast('Pull failed: ' + e.message, 'error');
   }
@@ -9215,6 +9616,7 @@ async function openRemoteProperty(entry) {
         folderId: entry.dealFolderId,
         fileId: remote.id,
         capexFolderId: budgetFolder,
+        versionsFolderId: (remote.data.drive && remote.data.drive.versionsFolderId) || '',
         lastPushed: now,
         lastPulled: now,
         remoteModifiedTime: remote.modifiedTime,
@@ -9223,7 +9625,51 @@ async function openRemoteProperty(entry) {
     });
     STORE.properties[p.id] = p;
     STORE.currentPropertyId = p.id;
-    STATE = p;
+    CURRENT_PROPERTY = p;
+
+    const legacy = extractLegacyBudgetVersion(p, p.id, (CURRENT_USER && CURRENT_USER.email) || p.lastEditor || '');
+    let justSplit = false;
+    if (legacy) {
+      LEGACY_BUDGET_FIELDS.forEach(k => delete p[k]);
+      STORE.budgetVersions[legacy.versionId] = legacy;
+      STORE.currentBudgetVersionId = legacy.versionId;
+      CURRENT_BUDGET_VERSION = legacy;
+      justSplit = true;
+    } else {
+      // Not combined — look for an already-split Versions/ file (another
+      // teammate split it first, on a different device).
+      const versionsFolder = await driveEnsureSubfolder(budgetFolder, 'Versions');
+      p.drive.versionsFolderId = versionsFolder;
+      const files = await driveListFilesInFolder(versionsFolder);
+      let bv = null;
+      if (files.length) {
+        const sorted = files.slice().sort((a, b) => String(b.modifiedTime || '').localeCompare(String(a.modifiedTime || '')));
+        for (const f of sorted) {
+          try {
+            const dl = await driveDownloadJson(versionsFolder, f.name);
+            if (dl && dl.data) {
+              const cand = Object.assign(DEFAULT_BUDGET_VERSION(), dl.data, {
+                versionId: dl.data.versionId || newBudgetVersionId(),
+                propertyId: p.id,
+                versionDrive: { fileId: dl.id, lastPushed: now, lastPulled: now, remoteModifiedTime: dl.modifiedTime },
+              });
+              if (cand.isDefault || !bv) bv = cand;
+              if (cand.isDefault) break;
+            }
+          } catch (e) { console.warn('openRemoteProperty: failed reading Versions/' + f.name, e); }
+        }
+      }
+      if (!bv) {
+        bv = DEFAULT_BUDGET_VERSION();
+        bv.propertyId = p.id;
+        bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+      }
+      STORE.budgetVersions[bv.versionId] = bv;
+      STORE.currentBudgetVersionId = bv.versionId;
+      CURRENT_BUDGET_VERSION = bv;
+    }
+
+    composeState();
     maybeGuessMarketMSA();   // backfill an empty Market (MSA) — bumps + pushes only if it fills one
     // Freshly pulled from Drive = already in sync; persist WITHOUT bumping `updated`
     // (bumping would falsely mark it dirty and re-push identical data).
@@ -9232,7 +9678,8 @@ async function openRemoteProperty(entry) {
     CURRENT_VIEW = 'property';
     renderShell();
     startAutoSync();
-    setHash(propertyHash(p));   // reflect the opened remote property in the URL
+    setHash(propertyHash(STATE));   // reflect the opened remote property in the URL
+    if (justSplit) { saveBudget(); saveBasics(); }   // persist the split back to Drive for every teammate
     toast('Opened from Drive', 'success');
   } catch (e) {
     toast('Open failed: ' + e.message, 'error');
@@ -9262,11 +9709,22 @@ async function syncTick() {
   }
   if (!STATE.drive.folderId) return; // cannot sync property data without a deal folder
   try {
-    // 1. Push local changes if dirty.
-    const dirty = !STATE.drive.lastPushed || STATE.drive.lastPushed < STATE.updated;
-    if (dirty) {
-      const r = await pushToDrive({ silent: true });
-      _syncState = (r === false) ? 'error' : (r === 'conflict') ? 'conflict' : 'idle';
+    // 1. Push local changes if dirty — Basics and the open budget version each
+    // have their own independent dirty-check + push, since they're now two files.
+    const p = CURRENT_PROPERTY, bv = CURRENT_BUDGET_VERSION;
+    const basicsDirty = p && (!p.drive.lastPushed || p.drive.lastPushed < p.updated);
+    const budgetDirty = bv && (!bv.versionDrive.lastPushed || bv.versionDrive.lastPushed < bv.versionUpdated);
+    let anyError = false, anyConflict = false;
+    if (basicsDirty) {
+      const r = await pushBasicsToDrive({ silent: true });
+      if (r === false) anyError = true; else if (r === 'conflict') anyConflict = true;
+    }
+    if (budgetDirty) {
+      const r = await pushBudgetToDrive({ silent: true });
+      if (r === false) anyError = true; else if (r === 'conflict') anyConflict = true;
+    }
+    if (basicsDirty || budgetDirty) {
+      _syncState = anyError ? 'error' : anyConflict ? 'conflict' : 'idle';
     } else if (_syncState === 'conflict') {
       _syncState = 'idle';   // no longer dirty => the conflict was resolved elsewhere
     }
@@ -9335,9 +9793,9 @@ function showConcurrentEditBanner(email, heartbeatAt) {
   b.innerHTML = '';
   b.appendChild(el('span', {},
     `⚠️ ${email} is also editing this property (active ${ago}) — your edits may overwrite theirs.`));
-  // One-click "adopt their copy": pull the latest saved version from Drive (their
-  // most recent auto-saved edits) and continue from it. pullFromDrive() asks first
-  // if you have unpushed local changes, so this can't silently discard your work.
+  // One-click "adopt their copy": pull the latest saved Basics from Drive (their
+  // most recent auto-saved edits) and continue from it. pullBasicsFromDrive() asks
+  // first if you have unpushed local changes, so this can't silently discard your work.
   const pullBtn = el('button', {
     type: 'button',
     title: 'Pull the latest saved copy from Drive (their most recent saved edits) and continue from it. '
@@ -9345,7 +9803,7 @@ function showConcurrentEditBanner(email, heartbeatAt) {
     style: 'padding:3px 12px;font-size:12px;font-weight:700;background:#92400e;color:#fff;border:none;'
       + 'border-radius:5px;cursor:pointer;white-space:nowrap;flex-shrink:0'
   }, '⤓ Load their latest');
-  pullBtn.addEventListener('click', () => pullFromDrive());
+  pullBtn.addEventListener('click', () => pullBasicsFromDrive());
   b.appendChild(pullBtn);
   b.style.display = 'flex';
 }
@@ -9715,17 +10173,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const _localProp = findLocalPropertyByHash(_parsed);
   if (_localProp) {
     STORE.currentPropertyId = _localProp.id;
-    STATE = _localProp;
+    CURRENT_PROPERTY = _localProp;
+    attachBudgetVersionForOpen(_localProp);
+    composeState();
     CURRENT_PHASE = 1;
     CURRENT_VIEW = 'property';
-    saveState();
+    saveBasics();
     renderShell();
     setHash(propertyHash(STATE));
   } else if (_parsed) {
     // Deep link to a property not on this device yet — show home; it opens once
     // the org manifest loads (tryOpenPendingDeepLink). Keep the URL intact.
     _pendingDeepLink = _parsed;
-    STATE = null; STORE.currentPropertyId = null; CURRENT_VIEW = 'home';
+    STATE = null; CURRENT_PROPERTY = null; CURRENT_BUDGET_VERSION = null;
+    STORE.currentPropertyId = null; STORE.currentBudgetVersionId = null; CURRENT_VIEW = 'home';
     renderShell();
   } else {
     // No deep link: render the localStorage last-open default and mirror it in the URL.
