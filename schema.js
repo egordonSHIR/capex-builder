@@ -1618,6 +1618,18 @@ window.SCHEMA = {
             "notes": null,
             "gl_account": "17685: CIP Model Unit Furniture (7 Yrs)",
             "default_qty_type": "Allowance"
+          }
+        ]
+      },
+      {
+        "name": "CAPPED OPEX",
+        "items": [
+          {
+            "name": "Lease-Up Agents/Locators",
+            "default_cost_per_item": 5000.0,
+            "notes": null,
+            "gl_account": "17635 - CIP Leasing Center Build Out",
+            "default_qty_type": "Month"
           },
           {
             "name": "Security/Patrol - Temporary",
