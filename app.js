@@ -8543,7 +8543,7 @@ function updateSyncBar() {
   } else if (_syncState === 'error') {
     bar.className = 'sync-bar warn';
     bar.textContent = '⚠ Can’t reach Drive — retrying…' + (lastPush ? ' Last saved ' + relativeTime(lastPush) : '');
-  } else if (_syncState === 'saving' || _autoPushTimer || dirty) {
+  } else if (_syncState === 'saving' || _autoPushBasicsTimer || _autoPushBudgetTimer || dirty) {
     bar.className = 'sync-bar';
     bar.textContent = 'Saving to Drive…';
   } else {
