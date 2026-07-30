@@ -240,6 +240,11 @@ async function findAsanaCandidates(token, propName) {
 async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = {}) {
   p = p || STATE;
   if (!p) return;
+  // Callers pass STATE (the merged VIEW over CURRENT_PROPERTY) — `p.asana = {}`
+  // on the view would create the object there only, so the taskGid we cache a
+  // few lines down would render fine but never persist to the real record.
+  // Re-point to the underlying Property record before touching p.asana.
+  if (STATE && p === STATE && CURRENT_PROPERTY) p = CURRENT_PROPERTY;
   let token = await resolveAsanaToken();
   if (!token) {
     if (!interactive) return;   // no token + non-interactive: skip quietly
@@ -573,13 +578,73 @@ function attachBudgetVersionForOpen(p) {
   let chosen = versionsForThisProperty.find(v => v.isDefault) ||
     versionsForThisProperty.sort((a, b) => String(b.versionUpdated || '').localeCompare(String(a.versionUpdated || '')))[0];
   if (!chosen) {
-    chosen = DEFAULT_BUDGET_VERSION();
-    chosen.propertyId = p.id;
-    chosen.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+    // No local version — before fabricating a blank one, check the org manifest
+    // (already in memory when the home screen loaded): if a teammate created
+    // versions for this deal, adopt the default one as a STUB carrying its Drive
+    // fileId, stamped not-dirty, so reconcileBudgetFromDrive (called right after
+    // open) pulls its real content instead of us showing an empty budget.
+    const manifestRows = (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.budgetVersions))
+      ? MANIFEST_CACHE.data.budgetVersions.filter(r => r && r.propertyId === p.id && r.fileId)
+      : [];
+    const row = manifestRows.find(r => r.isDefault) || manifestRows[0];
+    if (row) {
+      chosen = DEFAULT_BUDGET_VERSION();
+      chosen.versionId = row.id;
+      chosen.propertyId = p.id;
+      chosen.label = row.label || 'Original';
+      chosen.isDefault = !!row.isDefault;
+      chosen.versionCreatedAt = row.createdAt || chosen.versionCreatedAt;
+      chosen.versionCreatedBy = row.createdBy || '';
+      chosen.versionDrive.fileId = row.fileId;
+      chosen.versionDrive.lastPushed = chosen.versionUpdated;   // not dirty -> reconcile pulls, sync never pushes the empty stub
+    } else {
+      // Genuinely nothing anywhere (defensive). Stamp it not-dirty so this empty
+      // placeholder is NEVER auto-pushed to Drive — it only becomes real (dirty)
+      // once the user actually edits the budget (saveBudget bumps versionUpdated).
+      chosen = DEFAULT_BUDGET_VERSION();
+      chosen.propertyId = p.id;
+      chosen.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+      chosen.versionDrive.lastPushed = chosen.versionUpdated;
+    }
     STORE.budgetVersions[chosen.versionId] = chosen;
   }
   STORE.currentBudgetVersionId = chosen.versionId;
   CURRENT_BUDGET_VERSION = chosen;
+}
+
+// Late recovery for the case attachBudgetVersionForOpen couldn't handle at open
+// time: the manifest hadn't loaded yet, so a pristine blank placeholder was
+// created — but the org DOES have real versions for this deal. Fetches the
+// manifest, and only if the open version is still that untouched placeholder
+// (no Drive file, zero budget data — a seeded/edited/pushed version never
+// matches), swaps it for the real default version's content. Never replaces
+// anything the user has touched.
+async function adoptManifestBudgetVersionsIfAny() {
+  if (!CURRENT_PROPERTY || !CURRENT_BUDGET_VERSION) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;
+  const propId = CURRENT_PROPERTY.id;
+  const bv = CURRENT_BUDGET_VERSION;
+  const pristine = !bv.versionDrive.fileId
+    && !Object.keys(bv.phase3 || {}).length
+    && !Object.keys(bv.excluded || {}).length
+    && !Object.keys(bv.checklist || {}).length
+    && !(bv.customItems || []).length;
+  if (!pristine) return;
+  try { if (!MANIFEST_CACHE || !MANIFEST_CACHE.data) await fetchManifest(); } catch { return; }
+  const rows = ((MANIFEST_CACHE.data && MANIFEST_CACHE.data.budgetVersions) || [])
+    .filter(r => r && r.propertyId === propId && r.fileId && r.id !== bv.versionId);
+  if (!rows.length) return;
+  const row = rows.find(r => r.isDefault) || rows[0];
+  const adopted = await downloadBudgetVersionFile(row.id);
+  // Re-check nothing changed while we were fetching (user may have navigated or edited).
+  if (!adopted || !CURRENT_PROPERTY || CURRENT_PROPERTY.id !== propId) return;
+  if (!CURRENT_BUDGET_VERSION || CURRENT_BUDGET_VERSION.versionId !== bv.versionId) return;
+  delete STORE.budgetVersions[bv.versionId];   // drop the untouched placeholder
+  STORE.currentBudgetVersionId = adopted.versionId;
+  CURRENT_BUDGET_VERSION = adopted;
+  composeState();
+  _persistStoreLocally();
+  if (CURRENT_VIEW === 'property') renderApp();
 }
 
 function createProperty(name) {
@@ -647,6 +712,7 @@ function openProperty(id) {
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
   reconcileBasicsFromDrive();   // Drive-authoritative: adopt a newer remote Basics copy if this device is clean
   reconcileBudgetFromDrive();   // same, for the currently-selected budget version's own file
+  adoptManifestBudgetVersionsIfAny().catch((e) => console.warn('adoptManifestBudgetVersionsIfAny failed:', e));
 }
 // Drive-authoritative reconcile (Basics): after a cache-first open, if the
 // deal-folder copy is newer than our cache AND we have no unsynced local edits,
@@ -2132,8 +2198,26 @@ function notesHtmlToLines(html) {
 const UNIT_STATUS = ['Original', 'Partial', 'Reno'];
 
 function getUnitMix() {
-  if (!Array.isArray(STATE.unitMix)) STATE.unitMix = [];
+  // ⚠️ STATE is a merged VIEW over CURRENT_PROPERTY (see composeState) — if the
+  // array is missing, it must be created on the underlying record and mirrored,
+  // never on the view alone (a view-only array would render but never persist).
+  if (!Array.isArray(STATE.unitMix)) {
+    const arr = [];
+    if (CURRENT_PROPERTY) CURRENT_PROPERTY.unitMix = arr;
+    STATE.unitMix = arr;
+  }
   return STATE.unitMix;
+}
+// Replace the ENTIRE unit mix (proforma import paths). Must mutate the shared
+// array IN PLACE — `STATE.unitMix = out` would re-point only the view, leaving
+// CURRENT_PROPERTY.unitMix (what saveBasics persists + pushes) holding the old
+// rows: the import would look successful on screen and silently vanish on the
+// next reload. Same in-place discipline as mutateBasicsFieldsInPlace.
+function replaceUnitMix(rows) {
+  const m = getUnitMix();
+  m.length = 0;
+  m.push(...(Array.isArray(rows) ? rows : []));
+  return m;
 }
 function addUnitRow(row) {
   getUnitMix().push(row || { type: '', count: '', beds: '', baths: '', sqft: '', status: '' });
@@ -2322,10 +2406,14 @@ function renderUnitRow(r, i, rebuild) {
 // All non-flat data (per-building, per-tract, meta) is stored on STATE.survey.
 function ensureSurveyState() {
   if (!STATE.survey) {
-    STATE.survey = {
+    // Create on the underlying record and mirror the reference to the view —
+    // never on the view alone (view-only data renders but never persists).
+    const sv = {
       processed_at: null, source_pdf: '', scale_paper: '', ft_per_pixel: null,
       buildings: [], tracts: [], google_maps_notes: '', discrepancies: [],
     };
+    if (CURRENT_PROPERTY) CURRENT_PROPERTY.survey = sv;
+    STATE.survey = sv;
   }
   if (!Array.isArray(STATE.survey.buildings)) STATE.survey.buildings = [];
   if (!Array.isArray(STATE.survey.tracts)) STATE.survey.tracts = [];
@@ -3983,7 +4071,7 @@ function importProformaUnitMix(file, rebuild) {
         return;
       }
       if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from the proforma?`)) return;
-      STATE.unitMix = out;
+      replaceUnitMix(out);   // in place — a bare `STATE.unitMix = out` would not persist (view-only)
       syncUnitMixSumsToPhase1();
       saveBasics();
       // Full re-render (not just the unit-mix block) so every derived field —
@@ -4173,7 +4261,7 @@ async function pullProformaFromDrive(rebuild) {
     const out = parseSHIRSummaryRR(wb) || parseUnitsTab(wb) || parseUMixSum(wb) || parseProformaRR(wb) || parseGenericUnitMix(wb);
     if (!out || !out.length) { toast('Found the file but could not parse a unit mix from its RR tab.', 'error'); return; }
     if (getUnitMix().length && !confirm(`Replace the current ${getUnitMix().length} unit type(s) with ${out.length} from ${f.name}?`)) return;
-    STATE.unitMix = out;
+    replaceUnitMix(out);   // in place — a bare `STATE.unitMix = out` would not persist (view-only)
     syncUnitMixSumsToPhase1();
     saveBasics();
     // Full re-render so all derived fields reflect the import immediately.
@@ -4357,7 +4445,7 @@ async function pullBasicsAndUnitsFromDrive() {
     if (umOut && umOut.length) {
       const existingCount = getUnitMix().length;
       if (!existingCount || confirm(`Replace the current ${existingCount} unit type(s) with ${umOut.length} from ${f.name}?`)) {
-        STATE.unitMix = umOut;
+        replaceUnitMix(umOut);   // in place — a bare `STATE.unitMix = umOut` would not persist (view-only)
         syncUnitMixSumsToPhase1();
         filled.push(`${umOut.length} unit type${umOut.length === 1 ? '' : 's'}`);
       }
@@ -4378,7 +4466,11 @@ function isChecked(gi, si, ii) {
   return !!(STATE.checklist && STATE.checklist[ckKey(gi, si, ii)]);
 }
 function setChecked(gi, si, ii, val) {
-  if (!STATE.checklist) STATE.checklist = {};
+  if (!STATE.checklist) {
+    const m = {};
+    if (CURRENT_BUDGET_VERSION) CURRENT_BUDGET_VERSION.checklist = m;
+    STATE.checklist = m;
+  }
   const k = ckKey(gi, si, ii);
   if (val) STATE.checklist[k] = true; else delete STATE.checklist[k];
   saveBudget();
@@ -4399,7 +4491,11 @@ function isExcluded(gi, si, ii) {
   return !!(STATE.excluded && STATE.excluded[ckKey(gi, si, ii)]);
 }
 function setExcluded(gi, si, ii, val) {
-  if (!STATE.excluded) STATE.excluded = {};
+  if (!STATE.excluded) {
+    const m = {};
+    if (CURRENT_BUDGET_VERSION) CURRENT_BUDGET_VERSION.excluded = m;
+    STATE.excluded = m;
+  }
   const k = ckKey(gi, si, ii);
   if (val) STATE.excluded[k] = true; else delete STATE.excluded[k];
   saveBudget();
@@ -4763,7 +4859,11 @@ function setP3(gi, si, ii, patch) {
 // as a percentage references one group; its $ Amt = (qty / 100) × the group's
 // total (sum of non-% line items in the group, to prevent recursion).
 function ensureCapexGroups() {
-  if (!Array.isArray(STATE.capexGroups)) STATE.capexGroups = [];
+  if (!Array.isArray(STATE.capexGroups)) {
+    const arr = [];
+    if (CURRENT_BUDGET_VERSION) CURRENT_BUDGET_VERSION.capexGroups = arr;
+    STATE.capexGroups = arr;
+  }
   return STATE.capexGroups;
 }
 function findCapexGroup(id) {
@@ -4843,7 +4943,11 @@ function getSchemaItemByKey(ckKey) {
 // Custom items live on STATE.customItems (see DEFAULT_PROPERTY) and target an
 // existing schema Group+Section by NAME. Mirrors the CAPEX-group CRUD shape.
 function ensureCustomItems() {
-  if (!Array.isArray(STATE.customItems)) STATE.customItems = [];
+  if (!Array.isArray(STATE.customItems)) {
+    const arr = [];
+    if (CURRENT_BUDGET_VERSION) CURRENT_BUDGET_VERSION.customItems = arr;
+    STATE.customItems = arr;
+  }
   return STATE.customItems;
 }
 function findCustomItem(id) {
@@ -5667,7 +5771,11 @@ function groupSkipState(gi) {
 // per-row checkbox, recompute the summary, and refresh every Skip toggle.
 function bulkSetExcluded(gi, siList, excluded, summaryNode) {
   const g = SCHEMA.phase3[gi]; if (!g) return;
-  if (!STATE.excluded) STATE.excluded = {};
+  if (!STATE.excluded) {
+    const m = {};
+    if (CURRENT_BUDGET_VERSION) CURRENT_BUDGET_VERSION.excluded = m;
+    STATE.excluded = m;
+  }
   siList.forEach(si => {
     const sec = g.sections[si]; if (!sec) return;
     sec.items.forEach((_, ii) => {
@@ -9722,16 +9830,24 @@ async function pullBasicsFromDrive(opts = {}) {
     localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
     _syncState = 'idle';
     if (legacy) {
-      // Persist the just-split-out version locally, adopt it if we have none yet
-      // for this property, then push both files so Drive reflects the split for
-      // every teammate (not just this device).
-      STORE.budgetVersions[legacy.versionId] = legacy;
-      if (!CURRENT_BUDGET_VERSION || CURRENT_BUDGET_VERSION.propertyId !== p.id) {
-        CURRENT_BUDGET_VERSION = legacy;
-        STORE.currentBudgetVersionId = legacy.versionId;
+      // A combined-format file arrived even though this property may ALREADY
+      // have split versions (an old-code client re-pushed the stale shape).
+      // Only create a version from it when we have none — otherwise every such
+      // pull would mint a duplicate "Original" with a fresh id, and each would
+      // get its own Drive file. Either way, re-push the Basics-only shape so
+      // the stale file on Drive gets corrected.
+      const hasExisting = Object.values(STORE.budgetVersions).some(v => v.propertyId === p.id);
+      if (hasExisting) {
+        console.warn('pullBasicsFromDrive: remote file was combined-format but this property already has budget version(s) — ignoring its embedded budget fields (previously split; likely re-pushed by an old-code client).');
+      } else {
+        STORE.budgetVersions[legacy.versionId] = legacy;
+        if (!CURRENT_BUDGET_VERSION || CURRENT_BUDGET_VERSION.propertyId !== p.id) {
+          CURRENT_BUDGET_VERSION = legacy;
+          STORE.currentBudgetVersionId = legacy.versionId;
+        }
+        localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
+        pushBudgetToDrive({ silent: true });
       }
-      localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
-      pushBudgetToDrive({ silent: true });
       pushBasicsToDrive({ silent: true });
     }
     composeState();
