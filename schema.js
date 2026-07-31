@@ -2470,10 +2470,10 @@ window.SCHEMA = {
           },
           {
             "name": "Renovation Labor",
-            "default_cost_per_item": 6.5,
+            "default_cost_per_item": 3500.0,
             "notes": null,
             "gl_account": "17101: CIP Interior - Renovation Labor",
-            "default_qty_type": "Avg Sqft"
+            "default_qty_type": "Reno Unit"
           }
         ]
       },
