@@ -4683,6 +4683,18 @@ function qtyTypeMissingInputs(ut) {
   if (key) return basicsFieldNum(key) === null ? [basicsFieldLabel(key)] : [];
   return [];
 }
+// TRUE when a # Qty holds a real, user-entered number. A Basics-linked row whose
+// source field is blank auto-fills 0, so any POSITIVE # Qty on such a row can only
+// have been typed by hand — a deliberate HARDCODE (2026-07-31, per egordon). Those
+// rows keep their red # Qty cell + their Finalize warning (Basics genuinely is
+// incomplete) but no longer BLOCK the export, because the $ Amt they produce is
+// intentional rather than a silent 0. Also what stops renderDetailItem's
+// render-time auto-fill from wiping the value on the next re-render.
+function qtyIsHardcoded(qty) {
+  if (qty === '' || qty === null || qty === undefined) return false;
+  const n = Number(qty);
+  return Number.isFinite(n) && n > 0;
+}
 // Populate a Qty Type <select> with a leading "—" and every UNIT_TYPES entry,
 // inserting a disabled "----------" separator between the base types and the
 // appended Basics-linked ones. ('MF Unit', 'Building', and 'Park' are base
@@ -5003,7 +5015,9 @@ function getCustomItemTotal(ci) {
 // A "priced" Budget row (not skipped, effective $/Qty > 0) that uses a Basics-
 // linked Qty Type auto-fills its # Qty from a Basics field. If that field is
 // blank the row silently reads 0 — so we flag it (red # Qty inline + a Finalize
-// gate that blocks export) until the field is filled. Interior rows are exempt:
+// warning) until the field is filled. That warning only BLOCKS the export while
+// the row's # Qty is still empty/0; typing a # Qty by hand clears the block but
+// keeps the flag + warning (see qtyIsHardcoded). Interior rows are exempt:
 // their # Qty is bucket-computed from the Unit Mix, not from a Basics-linked
 // field, so a Basics-linked Qty Type there never auto-fills.
 function rowMissingInputs(gi, si, ii) {
@@ -5033,22 +5047,25 @@ function applyMissingInputFlag(itemWrap, gi, si, ii) {
 }
 // Priced, non-skipped Budget rows (schema + custom) whose Qty Type needs a Basics
 // field that's still blank. Feeds the Finalize sanity list + the export gate.
+// Each gap carries `overridden` = the user hardcoded a # Qty on that row, so it
+// prices off a real number: those gaps still WARN (and keep the red cell) but do
+// NOT block the export (see qtyIsHardcoded / the export-readiness block below).
 function collectBudgetBasicsGaps() {
-  const gaps = [];   // {name, ut, fields:[labels]}
+  const gaps = [];   // {name, ut, fields:[labels], qty, overridden}
   SCHEMA.phase3.forEach((g, gi) => {
     g.sections.forEach((s, si) => {
       s.items.forEach((it, ii) => {
         const fields = rowMissingInputs(gi, si, ii);
         if (fields.length) {
           const v = getP3(gi, si, ii);
-          gaps.push({ name: it.name, ut: v.unit_type || it.default_qty_type || '', fields });
+          gaps.push({ name: it.name, ut: v.unit_type || it.default_qty_type || '', fields, qty: v.qty, overridden: qtyIsHardcoded(v.qty) });
         }
       });
     });
   });
   ensureCustomItems().forEach(ci => {
     const fields = customMissingInputs(ci);
-    if (fields.length) gaps.push({ name: ci.name || '(unnamed custom item)', ut: ci.unit_type || '', fields });
+    if (fields.length) gaps.push({ name: ci.name || '(unnamed custom item)', ut: ci.unit_type || '', fields, qty: ci.qty, overridden: qtyIsHardcoded(ci.qty) });
   });
   return gaps;
 }
@@ -5854,11 +5871,18 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
   //  - Explicitly picked at least once — leave qty alone here; it's a normal
   //    editable field now (see below), and only re-fills when the user
   //    (re-)selects a Basics-linked Qty Type via the <select> change handler.
+  // EXCEPTION (2026-07-31): a default-riding row whose Basics source field is
+  // BLANK auto-fills 0, so re-seeding would silently wipe a # Qty the user typed
+  // by hand — the only number making that row price at all. Leave a hardcoded qty
+  // alone while the source is blank; once Basics carries a real value the
+  // live-sync resumes and wins again (and the row's red flag clears).
   {
     const cur0 = getP3(gi, si, ii);
     if (!cur0.unit_type) {
-      const bv0 = basicsQtyValue(item.default_qty_type || '');
-      if (bv0 != null) setP3(gi, si, ii, { qty: bv0 });
+      const dut = item.default_qty_type || '';
+      const bv0 = basicsQtyValue(dut);
+      const keepHardcoded = qtyIsHardcoded(cur0.qty) && qtyTypeMissingInputs(dut).length > 0;
+      if (bv0 != null && !keepHardcoded) setP3(gi, si, ii, { qty: bv0 });
     }
     v = getP3(gi, si, ii);   // refresh so the rest of this render sees the seed
   }
@@ -6030,9 +6054,15 @@ function renderDetailItem(gi, si, ii, item, summaryNode, tints) {
     if (bv != null) {
       qtyInp.readOnly = false;
       qtyInp.style.background = '';
-      qtyInp.title = bv
+      // Basics blank but a # Qty typed by hand: the cell stays flagged red (Basics
+      // really is missing) yet the row prices off that number and the export is
+      // NOT blocked — say so, otherwise the red cell reads as "broken".
+      const hardcoded = qtyIsHardcoded(cur.qty) && qtyTypeMissingInputs(effUT).length > 0;
+      qtyInp.title = hardcoded
+        ? basicsQtyTooltip(effUT) + ' (not set in Basics — pricing off the # Qty you entered; export is NOT blocked. The cell stays flagged until Basics is filled.)'
+        : bv
         ? basicsQtyTooltip(effUT) + ' — editable; re-select this Qty Type to re-fill it.'
-        : basicsQtyTooltip(effUT) + ' (not set — enter the value(s) on the Basics tab)';
+        : basicsQtyTooltip(effUT) + ' (not set — enter the value(s) on the Basics tab, or type a # Qty here to hardcode it)';
     } else if (AVG_QTY_TYPES.includes(effUT)) {
       // Avg-* "sizing" type: # Qty is a free unit/quantity count; the Unit-Mix
       // average is applied to the $ Amt (effectiveQtyForTotal), not to # Qty.
@@ -6291,12 +6321,11 @@ function renderCustomDetailItem(ci, opts, summaryNode) {
   setNumVal(costInp, (ci.unit_cost === '' || ci.unit_cost == null) ? '' : ci.unit_cost);
   const totalEl = el('div', { 'data-total': true, style: 'text-align:right;font-weight:700;font-size:13px;color:#0f172a' }, '');
 
-  function currentQty() {
-    if (ci.useBuckets) return computeBucketQty(ci);
-    const bv = basicsQtyValue(ci.unit_type);
-    if (bv != null) return bv;
-    return Number(ci.qty) || 0;
-  }
+  // (A `currentQty()` helper used to live here that returned the BASICS value in
+  // preference to ci.qty. It was unreferenced, and it contradicted how the total
+  // is actually computed — getCustomItemTotal reads ci.qty, which is what lets a
+  // hardcoded # Qty price a row whose Basics source is blank. Removed 2026-07-31
+  // so it can't be wired up later and reintroduce the wipe.)
   function refresh() {
     const total = ci.excluded ? 0 : getCustomItemTotal(ci);
     totalEl.textContent = fmtMoney(total);
@@ -6324,7 +6353,10 @@ function renderCustomDetailItem(ci, opts, summaryNode) {
     qtyInp.readOnly = false;
     qtyInp.style.background = '';
     const bv = basicsQtyValue(ci.unit_type);
-    qtyInp.title = bv != null ? basicsQtyTooltip(ci.unit_type) + ' — editable; re-select this Qty Type to re-fill it.' : '';
+    const hardcoded = qtyIsHardcoded(ci.qty) && qtyTypeMissingInputs(ci.unit_type).length > 0;
+    qtyInp.title = bv == null ? ''
+      : hardcoded ? basicsQtyTooltip(ci.unit_type) + ' (not set in Basics — pricing off the # Qty you entered; export is NOT blocked)'
+      : basicsQtyTooltip(ci.unit_type) + ' — editable; re-select this Qty Type to re-fill it.';
     setNumVal(qtyInp, (ci.qty === '' || ci.qty == null) ? '' : ci.qty);
   }
 
@@ -6916,11 +6948,16 @@ function renderPhase4() {
 
   // Missing-Basics guard: any priced, non-skipped Budget line whose Qty Type
   // pulls its # Qty from a Basics field that's still blank reads $0 silently.
-  // List each so the user fills the field (or skips the line) — and BLOCK export
-  // below until they do.
+  // List each so the user fills the field (or skips the line). Rows where the user
+  // HARDCODED a # Qty are still listed — the Basics gap is real and worth seeing —
+  // but they price off that number, so they don't block the export (2026-07-31).
   const basicsGaps = collectBudgetBasicsGaps();
-  basicsGaps.forEach(g => warnings.push(
-    `🚩 "${g.name}" uses Qty Type "${g.ut}" but ${g.fields.join(' + ')} ${g.fields.length > 1 ? 'are' : 'is'} blank in Basics — fill ${g.fields.length > 1 ? 'them' : 'it'} (or skip the line).`));
+  basicsGaps.forEach(g => {
+    const fieldList = `${g.fields.join(' + ')} ${g.fields.length > 1 ? 'are' : 'is'} blank in Basics`;
+    warnings.push(g.overridden
+      ? `🚩 "${g.name}" uses Qty Type "${g.ut}" but ${fieldList} — pricing off the hardcoded # Qty of ${formatNumberWithCommas(g.qty)} (export allowed; fill Basics to make it live again).`
+      : `🚩 "${g.name}" uses Qty Type "${g.ut}" but ${fieldList} — fill ${g.fields.length > 1 ? 'them' : 'it'}, type a # Qty on the row to hardcode it, or skip the line.`);
+  });
 
   // CONSOLIDATED "Sanity Check & Red Flags" at the TOP — the automated sanity
   // warnings + any red-flag/consideration notes, combined into one box (was two
@@ -6966,9 +7003,12 @@ function renderPhase4() {
   const missing = [];
   if (!STATE.phase1.prop_name) missing.push('a property name (Basics)');
   if (computeTotals().itemCount === 0) missing.push('at least one priced Budget item');
-  if (basicsGaps.length) {
-    const distinctFields = [...new Set(basicsGaps.flatMap(g => g.fields))];
-    missing.push(`the missing Basics value${distinctFields.length > 1 ? 's' : ''} for ${basicsGaps.length} Budget line${basicsGaps.length > 1 ? 's' : ''} (${distinctFields.join(', ')})`);
+  // Only gaps the user has NOT worked around block the export. A row where they
+  // typed a # Qty by hand exports its real numbers, so it warns without gating.
+  const blockingGaps = basicsGaps.filter(g => !g.overridden);
+  if (blockingGaps.length) {
+    const distinctFields = [...new Set(blockingGaps.flatMap(g => g.fields))];
+    missing.push(`the missing Basics value${distinctFields.length > 1 ? 's' : ''} for ${blockingGaps.length} Budget line${blockingGaps.length > 1 ? 's' : ''} (${distinctFields.join(', ')}) — or a hardcoded # Qty on ${blockingGaps.length > 1 ? 'those rows' : 'that row'}`);
   }
   const exportReady = missing.length === 0;
   const readyTip = exportReady ? '' : 'Add ' + missing.join(' and ') + ' to enable export.';
@@ -10688,7 +10728,7 @@ THE THREE TABS
 2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. On a brand-new property every row starts checked as "Skip" — nothing is priced until you say so; work down the list and uncheck Skip on anything the deal needs (existing deals keep whatever Skip pattern they already had — this only changes how new properties start out). Checking Skip grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. You can also skip in bulk: the Skip checkbox on any section or group header turns every item under it on or off at once, and a "Hide N/A" button at the top of the tab tucks all skipped rows out of view (tap "Show N/A" to bring them back). Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type (or any other Basics-linked quantity type) fills the quantity in from Basics automatically — it's still a normal editable box, though; type over it if needed, and switching the quantity type away and back re-fills it with the current Basics figure. Some quantity types fill the # Qty in for you from Basics this same way (for example "Walkway Sqft" = walkway length × width × count, or the railing/stair counts) — editable, and re-fills if you switch the quantity type away and back. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. Some interior items are also sized by the property's average unit square footage, beds, or baths as a separate multiplier ($ Amt = quantity × that average × rate); five fixture items (Lighting Fixtures, Plumbing Fixtures, Door Hardware, Door Repairs, Blinds) get one extra bedroom/bathroom added to that average automatically for common-area fixtures. CUSTOM ITEMS: if a cost isn't in the standard list, tap "+ Add custom item" at the bottom of any section to add your own line — give it a name, # Qty, Qty Type, and $/Qty, and use the Group/Section dropdowns under it to file it wherever it belongs. Tick "Apply to reno unit buckets" on a custom item to size its quantity from the Orig./Part./Reno unit counts just like an Interior item. Custom items count toward the totals and are included in the "Export to Excel" / "Place in Capex Folder" workbooks (rolled into their group's subtotal), AND they flow into the proforma too — "Place In Proforma" rebuilds each CAPEX group to fit however many items it has, so custom lines are inserted and picked up in the group and multifamily subtotals automatically (nothing special to do). At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee); custom items can't be a "%" base. A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. Every group and section also carries its own footer with a running total/per-unit and its own Collapse/Expand toggle. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 - NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
-3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab. Export is also blocked if a priced item's quantity type pulls from a Basics field that's still blank — its # Qty box turns red and the Sanity Check flags it until that Basics field is filled in (0 counts as filled); Interior items are exempt since their quantity comes from the Unit Mix, not Basics.
+3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab. Export is also blocked if a priced item's quantity type pulls from a Basics field that's still blank — its # Qty box turns red and the Sanity Check flags it. Two ways to clear the block: fill in that Basics field (0 counts as filled), OR just type the quantity into the row's # Qty box by hand. A hand-typed quantity unblocks the export and is what gets exported — the red box and the Sanity Check note stay as a reminder that Basics is still incomplete, which is expected, not an error. (Fill the Basics field later and the row goes back to auto-filling from it.) Interior items are exempt since their quantity comes from the Unit Mix, not Basics.
 
 SAVING & SYNC
 - You never press Save — it auto-saves to Drive a couple seconds after you stop typing. Google Drive is the source of truth. A status bar shows "Saving…" then "✓ Saved to Drive" (the ✓ auto-hides after a few seconds so it stays out of your way).
@@ -10702,7 +10742,7 @@ TROUBLESHOOTING
 - Export buttons grayed out → give the property a name and price at least one Budget item.
 - "Place In Proforma" with custom line items → nothing special needed; the import rebuilds each CAPEX group to fit its rows, so custom items are inserted and roll into the subtotals automatically.
 - Status stuck on "Saving…" → click it to resolve, or ☰ → Re-sync from Drive.
-- A priced item's # Qty box is red, or export won't unlock → its quantity type pulls from a Basics field that's still blank; fill in that field on the Basics tab (0 counts) and the flag clears.
+- A priced item's # Qty box is red, or export won't unlock → its quantity type pulls from a Basics field that's still blank. Either fill in that field on the Basics tab (0 counts) and the flag clears, or type the quantity straight into the row's # Qty box — that unlocks the export and exports your number, though the box stays red until Basics is filled.
 - Help chat itself needs the shared AI key, which loads once Google Drive is connected.`;
 
 let HELP_CHAT = [];      // [{ role:'user'|'assistant', text }]
