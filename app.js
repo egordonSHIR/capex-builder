@@ -210,28 +210,160 @@ function capexBuilderUrlForProperty(p) {
 }
 function _normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 
+// ---------- Fuzzy deal-name matching ----------
+// Deal names diverge between this app and Asana more than exact/substring
+// matching can absorb: Property Name is capped at 25 chars here (commit
+// 8613163) so users truncate and abbreviate; Asana tasks carry suffixes the app
+// drops ("Apartments", "Portfolio", "& Suites"); market codes disagree across
+// systems (Charleston is CHL SC here, CHS SC in Asana's Property Task Creator);
+// and both sides get typo'd. The old scorer was substring-or-nothing with a
+// >2-char token filter, so it also threw away decisive short tokens ("46" in
+// "46 Eleven", "BK" in "BK-ESA", the state code). Everything below replaces it
+// with a real similarity metric. `dealNameScore` returns 0-100.
+
+// Words that carry no identifying signal in a deal name — they'd otherwise let
+// any two "… Apartments" tasks look alike.
+const DEAL_NAME_STOPWORDS = new Set([
+  'the', 'a', 'an', 'at', 'of', 'and', 'on', 'in',
+  'apartments', 'apartment', 'apts', 'apt', 'homes', 'residences', 'residence',
+  'llc', 'lp', 'llp', 'ltd', 'inc', 'co', 'corp',
+  'deal', 'property', 'properties', 'portfolio',
+]);
+// The pipeline-wide market prefix: "AUS TX - Crestwood", "DAL TX - La Hacienda".
+// Split out so the market/state can be scored as their own signals instead of
+// diluting the deal name itself. Requires the 3-4 letter market, whitespace, a
+// 2-letter state, then a dash/colon — so "BK-ESA - Coit Road" is NOT parsed as
+// a prefix (no whitespace between BK and ESA).
+const DEAL_MARKET_PREFIX_RE = /^\s*([a-z]{2,4})\s+([a-z]{2})\s*[-–—:]\s*/i;
+
+// Split a deal name into the signals worth comparing separately.
+function parseDealName(raw) {
+  const s = String(raw || '');
+  const m = s.match(DEAL_MARKET_PREFIX_RE);
+  const body = _normName(m ? s.slice(m[0].length) : s);
+  return {
+    raw: s,
+    full: _normName(s),                                   // whole name, normalized
+    body,                                                 // name minus the market prefix
+    market: m ? m[1].toLowerCase() : '',                  // "aus", "dal", "chl"
+    state: m ? m[2].toLowerCase() : '',                   // "tx", "sc"
+    tokens: body.split(' ').filter(w => w && !DEAL_NAME_STOPWORDS.has(w)),
+  };
+}
+
+// Sørensen–Dice coefficient over character bigrams: 1 = identical, 0 = nothing in
+// common. Cheap, word-order tolerant, and degrades smoothly on typos and near
+// misses (CHL/CHS, Hacienda/Hasienda) — which a substring test can't do at all.
+function diceSimilarity(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a === b) return a ? 1 : 0;
+  if (a.length < 2 || b.length < 2) return 0;
+  const grams = new Map();
+  for (let i = 0; i < a.length - 1; i++) {
+    const g = a.slice(i, i + 2);
+    grams.set(g, (grams.get(g) || 0) + 1);
+  }
+  let hits = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const g = b.slice(i, i + 2);
+    const c = grams.get(g) || 0;
+    if (c > 0) { grams.set(g, c - 1); hits++; }   // consume, so repeats can't double-count
+  }
+  return (2 * hits) / (a.length + b.length - 2);
+}
+
+// Best pairing of the query's tokens against a candidate's, weighted by token
+// LENGTH so "hacienda" counts far more than "bk". Each candidate token is
+// consumed at most once. A prefix relationship scores near-exact, which is what
+// carries truncated 25-char property names. Returns 0-1.
+function dealTokenScore(qTokens, cTokens) {
+  if (!qTokens.length || !cTokens.length) return 0;
+  const pool = cTokens.slice();
+  let got = 0, want = 0;
+  for (const q of qTokens) {
+    want += q.length;
+    let bestI = -1, best = 0;
+    for (let i = 0; i < pool.length; i++) {
+      const c = pool[i];
+      const s = (c === q) ? 1
+        : (c.length > 3 && q.length > 3 && (c.startsWith(q) || q.startsWith(c))) ? 0.95
+        : diceSimilarity(q, c);
+      if (s > best) { best = s; bestI = i; }
+    }
+    if (bestI >= 0 && best >= 0.62) { got += q.length * best; pool.splice(bestI, 1); }
+  }
+  return want ? got / want : 0;
+}
+
+// 0-100 similarity between a property name and a candidate task name (both
+// already run through parseDealName). 100 and 97 are RESERVED for the two
+// "certainly the same deal" shapes, because the silent auto-link path trusts
+// them without asking; every fuzzy result is capped at 96 so it can never
+// silently link on its own.
+function dealNameScore(q, c) {
+  if (!q.full || !c.full) return 0;
+  if (q.full === c.full) return 100;                 // exact, normalized
+  if (q.body && q.body === c.body) return 97;        // same deal, market prefix differs or is absent
+
+  const tok = dealTokenScore(q.tokens, c.tokens);
+  const bodySim = diceSimilarity(q.body, c.body);
+  const whole = diceSimilarity(q.full, c.full);
+  // Containment is what survives the 25-char Property Name cap
+  // ("DAL TX - BK-ESA - Coit" vs "DAL TX - BK-ESA - Coit Road").
+  const contained = (q.body && c.body && (c.body.includes(q.body) || q.body.includes(c.body))) ? 1 : 0;
+
+  let score = 100 * (0.50 * tok + 0.25 * bodySim + 0.10 * whole + 0.15 * contained);
+
+  // State is the strongest disambiguator in this dataset — same-named properties
+  // in two states are a real thing — so a stated mismatch is penalized hard.
+  if (q.state && c.state) score += (q.state === c.state) ? 4 : -22;
+  if (q.market && c.market) {
+    if (q.market === c.market) score += 4;
+    else if (diceSimilarity(q.market, c.market) >= 0.5) score += 1;   // CHL vs CHS
+    else score -= 4;
+  }
+  // A task name much longer than the query is usually a bigger/different deal (or
+  // a portfolio) that merely contains the words.
+  const lo = Math.min(q.body.length, c.body.length), hi = Math.max(q.body.length, c.body.length, 1);
+  const ratio = lo / hi;
+  if (ratio < 0.5) score -= (0.5 - ratio) * 20;
+
+  return Math.max(0, Math.min(96, Math.round(score)));
+}
+
+const ASANA_TASK_PAGE_LIMIT = 100;   // Asana's max page size
+const ASANA_TASK_MAX_PAGES = 12;     // up to ~1,200 tasks per project
+
 // Score deal tasks against a property name. Pulls from every deal project
-// (PIPELINE + ExStay Conv. Pipeline) and dedupes by gid. Returns candidates
-// sorted best-first. (Each project list is capped at 100 tasks.)
+// (PIPELINE + ExStay Conv. Pipeline), dedupes by gid, and returns candidates
+// sorted best-first as {gid, name, score}.
 async function findAsanaCandidates(token, propName) {
   const byGid = new Map();
   for (const proj of ASANA_DEAL_PROJECTS) {
-    let data;
-    try { data = await asanaFetch(`/projects/${proj}/tasks?opt_fields=name&limit=100`, { token }); }
-    catch (e) { console.warn('findAsanaCandidates: project', proj, e); continue; }
-    for (const t of ((data && data.data) || [])) if (t && !byGid.has(t.gid)) byGid.set(t.gid, t);
+    // PAGINATE. This used to fetch a single 100-task page, so any deal past the
+    // first 100 in a pipeline was simply absent from the candidate set — which
+    // presents identically to "the matcher didn't find my deal" but is not a
+    // scoring problem at all.
+    const base = `/projects/${proj}/tasks?opt_fields=name&limit=${ASANA_TASK_PAGE_LIMIT}`;
+    let path = base;
+    for (let page = 0; page < ASANA_TASK_MAX_PAGES && path; page++) {
+      let data;
+      try { data = await asanaFetch(path, { token }); }
+      catch (e) { console.warn('findAsanaCandidates: project', proj, 'page', page, e); break; }
+      for (const t of ((data && data.data) || [])) if (t && t.gid && !byGid.has(t.gid)) byGid.set(t.gid, t);
+      const off = data && data.next_page && data.next_page.offset;
+      path = off ? base + '&offset=' + encodeURIComponent(off) : '';
+    }
   }
-  const tasks = Array.from(byGid.values());
-  const target = _normName(propName);
-  const targetTokens = target.split(' ').filter(w => w.length > 2);
-  return tasks.map(t => {
-    const n = _normName(t.name);
-    let score = 0;
-    if (n && n === target) score = 100;
-    else if (n && target && (n.includes(target) || target.includes(n))) score = 80;
-    else if (targetTokens.length) score = (targetTokens.filter(w => n.includes(w)).length / targetTokens.length) * 60;
-    return { gid: t.gid, name: t.name, score };
-  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+  const q = parseDealName(propName);
+  const scored = Array.from(byGid.values())
+    .map(t => ({ gid: t.gid, name: t.name, score: dealNameScore(q, parseDealName(t.name)) }))
+    .sort((a, b) => b.score - a.score || String(a.name || '').localeCompare(String(b.name || '')));
+  // >=30 = worth putting in front of the user. If nothing clears that, hand back
+  // the best few anyway so a weak match still gets a picker instead of a dead end
+  // (there is no other way to attach a task from inside the app).
+  const plausible = scored.filter(x => x.score >= 30);
+  return plausible.length ? plausible : scored.filter(x => x.score > 0).slice(0, 8);
 }
 
 // Ensure the property is matched to a PIPELINE task, then PUT the Capex Builder
@@ -261,16 +393,26 @@ async function syncCapexLinkToAsana(p, { interactive = true, silent = false } = 
       const candidates = await findAsanaCandidates(token, propName);
       if (!candidates.length) { if (interactive) toast('No PIPELINE task matched "' + propName + '" — link via ☰ → Asana', 'error'); return; }
       const best = candidates[0];
+      // Margin over the runner-up matters as much as the raw score: two tasks at
+      // 90 means "ambiguous", not "confident". Fuzzy scores cap at 96 (see
+      // dealNameScore), so 97+ is only ever an exact / prefix-only-difference hit.
+      const margin = best.score - (candidates[1] ? candidates[1].score : 0);
       if (!interactive) {
-        if (best.score >= 100) taskGid = best.gid;   // only auto-link on an exact name match
-        else return;                                 // ambiguous — wait for an interactive run
-      } else if (best.score >= 100 || (candidates.length === 1 && best.score >= 60)) {
-        if (!confirm('Link this property to Asana deal task:\n\n  "' + best.name + '"\n\nand set its Capex Builder Link?')) return;
+        // Silent auto-link stays deliberately strict — writing this property's
+        // link onto the WRONG deal task is silent and hard to notice, so fuzzy
+        // matches never qualify here. They surface on the next interactive run.
+        if (best.score >= 97 && margin >= 10) taskGid = best.gid;
+        else return;
+      } else if ((best.score >= 80 && margin >= 8) || (candidates.length === 1 && best.score >= 55)) {
+        if (!confirm('Link this property to Asana deal task:\n\n  "' + best.name + '"'
+          + (best.score < 97 ? '\n\n(closest match — ' + best.score + '% similar to "' + propName + '")' : '')
+          + '\n\nand set its Capex Builder Link?')) return;
         taskGid = best.gid;
       } else {
-        const top = candidates.slice(0, 8);
+        // Show the match % so an ambiguous set is judgeable at a glance.
+        const top = candidates.slice(0, 10);
         const pick = prompt('Which Asana deal task is "' + propName + '"? Enter a number (or Cancel):\n\n' +
-          top.map((c, i) => (i + 1) + '. ' + c.name).join('\n'));
+          top.map((c, i) => (i + 1) + '. ' + c.name + '   (' + c.score + '%)').join('\n'));
         const idx = parseInt(pick, 10);
         if (!idx || idx < 1 || idx > top.length) return;
         taskGid = top[idx - 1].gid;
