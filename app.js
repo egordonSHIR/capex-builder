@@ -682,6 +682,14 @@ function scheduleAutoPushBasics() {
   }, AUTO_PUSH_DEBOUNCE_MS);
 }
 let _autoPushBudgetTimer = null;
+// Cancel any pending debounced auto-push. MUST run before deleting a property
+// or budget version — a queued timer that fires during removeManifestEntry's
+// awaits would re-push the record that was just deleted (delete race, proven
+// live in Rent Comps Tracker 2026-08-03; same fix as its cancelAutoPush).
+function cancelAutoPush() {
+  if (_autoPushBasicsTimer) { clearTimeout(_autoPushBasicsTimer); _autoPushBasicsTimer = null; }
+  if (_autoPushBudgetTimer) { clearTimeout(_autoPushBudgetTimer); _autoPushBudgetTimer = null; }
+}
 function scheduleAutoPushBudget() {
   if (!CURRENT_BUDGET_VERSION || !CURRENT_PROPERTY || !CURRENT_PROPERTY.drive || !CURRENT_PROPERTY.drive.folderId) return;
   if (typeof getDriveToken === 'function' && !getDriveToken()) return;
@@ -908,6 +916,7 @@ function closeProperty() {
   // heartbeat. Fire-and-forget on the lock release; the heartbeat goes stale
   // (>2.5 min) anyway, so an inflight failure here is harmless.
   if (typeof stopAutoSync === 'function') stopAutoSync();
+  if (typeof cancelAutoPush === 'function') cancelAutoPush();
   if (typeof stopSurveyPoll === 'function') stopSurveyPoll();
   if (typeof stopProformaPoll === 'function') stopProformaPoll();
   if (typeof releaseEditorLock === 'function') releaseEditorLock().catch(() => {});
@@ -924,6 +933,16 @@ function closeProperty() {
   setHash('#/');   // back to the home URL
 }
 function deleteProperty(id) {
+  // Kill every pending/queued writer FIRST: a debounce timer or the sync
+  // interval firing during removeManifestEntry's awaits below would resurrect
+  // the manifest entry we're about to remove (delete race — see
+  // cancelAutoPush and the in-flight guards in upsertManifestEntry).
+  if (typeof cancelAutoPush === 'function') cancelAutoPush();
+  if (STORE.currentPropertyId === id) {
+    if (typeof stopAutoSync === 'function') stopAutoSync();
+    if (typeof stopSurveyPoll === 'function') stopSurveyPoll();
+    if (typeof stopProformaPoll === 'function') stopProformaPoll();
+  }
   delete STORE.properties[id];
   // Also drop every budget version that belonged to this property.
   Object.keys(STORE.budgetVersions).forEach(vid => {
@@ -1116,6 +1135,11 @@ function deleteBudgetVersion(versionId) {
   const siblings = Object.values(STORE.budgetVersions).filter(v => v.propertyId === bv.propertyId);
   if (siblings.length <= 1) { toast('A property must always have at least one budget version', 'error'); return false; }
   const wasCurrent = CURRENT_BUDGET_VERSION && CURRENT_BUDGET_VERSION.versionId === versionId;
+  // Same delete race as deleteProperty: a queued budget auto-push firing during
+  // removeBudgetVersionManifestEntry's awaits would resurrect the row. Cancel
+  // the pending timer (the 60s syncTick backstop re-pushes any still-dirty
+  // survivor, so nothing is lost).
+  if (_autoPushBudgetTimer) { clearTimeout(_autoPushBudgetTimer); _autoPushBudgetTimer = null; }
   delete STORE.budgetVersions[versionId];
   if (wasCurrent) {
     const remaining = siblings.filter(v => v.versionId !== versionId);
@@ -9127,25 +9151,37 @@ async function driveFindFile(folderId, filename) {
 }
 
 // Find or create a subfolder with the given name under parentId. Returns the subfolder id.
+// List-then-create is NOT safe under concurrency: the Basics and Budget auto-push
+// debounces (plus photo uploads) can resolve the same folder simultaneously right
+// after folder linking, and each creates a same-named twin (proven live in Rent
+// Comps Tracker 2026-08-03, ~115ms apart). Concurrent callers for the same
+// parent+name therefore share ONE in-flight promise, dropped in finally.
+const _ensureSubfolderInflight = new Map();   // parentId + '/' + name -> Promise<folderId>
 async function driveEnsureSubfolder(parentId, name) {
-  const safeName = name.replace(/'/g, "\\'");
-  const q = `'${parentId}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=10`;
-  const listR = await driveFetch(listUrl);
-  const listJ = await listR.json();
-  if ((listJ.files || []).length) return listJ.files[0].id;
-  // Create it.
-  const createR = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentId],
-    }),
-  });
-  const createJ = await createR.json();
-  return createJ.id;
+  const inflightKey = parentId + '/' + name;
+  if (_ensureSubfolderInflight.has(inflightKey)) return _ensureSubfolderInflight.get(inflightKey);
+  const work = (async () => {
+    const safeName = name.replace(/'/g, "\\'");
+    const q = `'${parentId}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=10`;
+    const listR = await driveFetch(listUrl);
+    const listJ = await listR.json();
+    if ((listJ.files || []).length) return listJ.files[0].id;
+    // Create it.
+    const createR = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [parentId],
+      }),
+    });
+    const createJ = await createR.json();
+    return createJ.id;
+  })();
+  _ensureSubfolderInflight.set(inflightKey, work);
+  try { return await work; } finally { _ensureSubfolderInflight.delete(inflightKey); }
 }
 
 // Look up a subfolder WITHOUT creating it — returns its id or null. Used by the
@@ -9942,6 +9978,7 @@ async function pushBasicsToDrive(opts = {}) {
   const { silent = false, force = false } = opts;
   const p = CURRENT_PROPERTY;
   if (!p) return;
+  if (!STORE.properties[p.id]) return;   // deleted after this push was queued — don't resurrect it on Drive
   if (!p.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
@@ -10083,6 +10120,7 @@ async function pushBudgetToDrive(opts = {}) {
   const bv = CURRENT_BUDGET_VERSION;
   const p = CURRENT_PROPERTY;
   if (!bv || !p) return;
+  if (!STORE.properties[p.id] || !STORE.budgetVersions[bv.versionId]) return;   // deleted after queueing — don't resurrect
   if (!p.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
@@ -10306,6 +10344,11 @@ async function writeManifest(data) {
 // acceptable for v1 since updates are sparse and small.
 async function upsertManifestEntry(entry) {
   const { data } = await fetchManifest();
+  // Deleted-while-in-flight guard: syncTick builds its heartbeat entry and then
+  // awaits in here. If the property was deleted from the local store during
+  // those awaits, writing now would resurrect the row removeManifestEntry just
+  // removed (it reappears org-wide as a remote card). Skip the write instead.
+  if (!STORE.properties[entry.id]) return data;
   const idx = data.properties.findIndex(p => p.id === entry.id);
   if (idx >= 0) data.properties[idx] = { ...data.properties[idx], ...entry };
   else data.properties.push({ ...entry });
@@ -10349,6 +10392,8 @@ function buildManifestEntry({ asEditor }) {
 // it locally) download it directly — see downloadBudgetVersionFile().
 async function upsertBudgetVersionManifestEntry(entry) {
   const { data } = await fetchManifest();
+  // Same deleted-while-in-flight guard as upsertManifestEntry, per version row.
+  if (!STORE.budgetVersions[entry.id]) return data;
   if (!Array.isArray(data.budgetVersions)) data.budgetVersions = [];
   const idx = data.budgetVersions.findIndex(v => v.id === entry.id);
   if (idx >= 0) data.budgetVersions[idx] = { ...data.budgetVersions[idx], ...entry };
