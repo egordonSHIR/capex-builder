@@ -648,8 +648,34 @@ function saveBasics() {
   _persistStoreLocally();
   scheduleAutoPushBasics();   // Drive-authoritative: converge the cache to Drive shortly after each edit
 }
+// TRUE once a version holds work a HUMAN did, as opposed to state the renderer
+// derived on its own. Deliberately ignores phase3 `qty`: renderDetailItem
+// re-seeds a Basics-linked row's # Qty from the property on every render (via
+// setP3 -> saveBudget), so qty alone is present on a version nobody has touched.
+// Everything else here can only be set by a user action.
+function budgetVersionHasAuthoredWork(bv) {
+  if (!bv) return false;
+  if (Object.keys(bv.excluded || {}).length) return true;      // any Skip toggle
+  if (Object.keys(bv.checklist || {}).length) return true;
+  if ((bv.customItems || []).length) return true;
+  if ((bv.capexGroups || []).length) return true;
+  return Object.values(bv.phase3 || {}).some(v => v && (
+    (v.unit_cost !== '' && v.unit_cost != null) ||
+    (v.unit_type !== '' && v.unit_type != null) ||
+    v.finish || v.notes || v.pct_group_id ||
+    v.pct_orig !== '' && v.pct_orig != null && v.pct_orig !== undefined ||
+    v.pct_part !== '' && v.pct_part != null && v.pct_part !== undefined ||
+    v.pct_reno !== '' && v.pct_reno != null && v.pct_reno !== undefined
+  ));
+}
+
 function saveBudget() {
   if (CURRENT_BUDGET_VERSION) {
+    // A fabricated placeholder stops being provisional the moment the user puts
+    // real work in it — from then on it is a genuine version and may push.
+    if (CURRENT_BUDGET_VERSION.provisional && budgetVersionHasAuthoredWork(CURRENT_BUDGET_VERSION)) {
+      delete CURRENT_BUDGET_VERSION.provisional;
+    }
     CURRENT_BUDGET_VERSION.versionUpdated = new Date().toISOString();
     CURRENT_BUDGET_VERSION.versionLastEditor = (CURRENT_USER && CURRENT_USER.email) || CURRENT_BUDGET_VERSION.versionLastEditor || '';
     if (STATE) { STATE.versionUpdated = CURRENT_BUDGET_VERSION.versionUpdated; STATE.versionLastEditor = CURRENT_BUDGET_VERSION.versionLastEditor; }
@@ -755,6 +781,13 @@ function attachBudgetVersionForOpen(p) {
       chosen.propertyId = p.id;
       chosen.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
       chosen.versionDrive.lastPushed = chosen.versionUpdated;
+      // Reaching here does NOT prove the deal has no versions — it usually just
+      // means MANIFEST_CACHE was not loaded yet (deep link, or the fetch had not
+      // landed). Marking it provisional is what stops this guess from becoming a
+      // durable second "Original": it cannot push, and
+      // adoptManifestBudgetVersionsIfAny may still replace it once the manifest
+      // arrives, even after the renderer has seeded qty values into phase3.
+      chosen.provisional = true;
     }
     STORE.budgetVersions[chosen.versionId] = chosen;
   }
@@ -774,12 +807,16 @@ async function adoptManifestBudgetVersionsIfAny() {
   if (typeof getDriveToken === 'function' && !getDriveToken()) return;
   const propId = CURRENT_PROPERTY.id;
   const bv = CURRENT_BUDGET_VERSION;
-  const pristine = !bv.versionDrive.fileId
-    && !Object.keys(bv.phase3 || {}).length
-    && !Object.keys(bv.excluded || {}).length
-    && !Object.keys(bv.checklist || {}).length
-    && !(bv.customItems || []).length;
-  if (!pristine) return;
+  // Adoptable = never pushed anywhere, and carrying nothing a human authored.
+  // The old test also required phase3 to be EMPTY, which quietly stopped working:
+  // opening the Budget tab makes renderDetailItem seed every Basics-linked row's
+  // # Qty into phase3, so the placeholder failed this check within a second of
+  // being looked at and could never be swapped for the deal's real version.
+  // budgetVersionHasAuthoredWork ignores those derived qty values, so a
+  // provisional placeholder stays adoptable until the user actually edits it.
+  const adoptable = !bv.versionDrive.fileId && !budgetVersionHasAuthoredWork(bv)
+    && (bv.provisional || !Object.keys(bv.phase3 || {}).length);
+  if (!adoptable) return;
   try { if (!MANIFEST_CACHE || !MANIFEST_CACHE.data) await fetchManifest(); } catch { return; }
   const rows = ((MANIFEST_CACHE.data && MANIFEST_CACHE.data.budgetVersions) || [])
     .filter(r => r && r.propertyId === propId && r.fileId && r.id !== bv.versionId);
@@ -10344,6 +10381,16 @@ async function pushBudgetToDrive(opts = {}) {
   const p = CURRENT_PROPERTY;
   if (!bv || !p) return;
   if (!STORE.properties[p.id] || !STORE.budgetVersions[bv.versionId]) return;   // deleted after queueing — don't resurrect
+  // A provisional placeholder must never reach Drive. It exists only because the
+  // manifest wasn't loaded when the deal was opened, so pushing it mints a rival
+  // "Original" file + manifest row for a deal that already has one — the re-mint
+  // bug that produced the duplicate records on Lantern and Villas del Tesoro.
+  // saveBudget() clears the flag as soon as the user authors anything real.
+  if (bv.provisional && !budgetVersionHasAuthoredWork(bv)) {
+    if (!silent) toast('This budget is still loading from Drive — nothing to push yet.', 'error');
+    else console.warn('pushBudgetToDrive: refusing to push provisional placeholder', bv.versionId);
+    return;
+  }
   if (!p.drive.folderId) { if (!silent) toast('Link a Drive folder first', 'error'); return; }
   if (!GOOGLE_CLIENT_ID) { if (!silent) toast('Set GOOGLE_CLIENT_ID in app.js first', 'error'); return; }
   try {
@@ -10767,6 +10814,7 @@ async function openRemoteProperty(entry) {
         bv.propertyId = p.id;
         bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
         bv.versionDrive.lastPushed = bv.versionUpdated;
+        bv.provisional = true;   // a guess, not a version — see attachBudgetVersionForOpen
       }
       STORE.budgetVersions[bv.versionId] = bv;
       STORE.currentBudgetVersionId = bv.versionId;
@@ -10816,6 +10864,13 @@ async function syncTick() {
     // 1. Push local changes if dirty — Basics and the open budget version each
     // have their own independent dirty-check + push, since they're now two files.
     const p = CURRENT_PROPERTY, bv = CURRENT_BUDGET_VERSION;
+    // Still sitting on a placeholder? The open-time adoption runs once, and it
+    // gives up if the manifest hasn't loaded yet. Retry here so a deal opened
+    // before the manifest landed still converges on its real version instead of
+    // stranding the user on an empty budget that can never push.
+    if (bv && bv.provisional && !budgetVersionHasAuthoredWork(bv)) {
+      await adoptManifestBudgetVersionsIfAny().catch((e) => console.warn('syncTick: adoption retry failed', e));
+    }
     const basicsDirty = p && (!p.drive.lastPushed || p.drive.lastPushed < p.updated);
     const budgetDirty = bv && (!bv.versionDrive.lastPushed || bv.versionDrive.lastPushed < bv.versionUpdated);
     let anyError = false, anyConflict = false;
