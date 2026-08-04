@@ -38,7 +38,7 @@ function resetOptionOverrides() {
   localStorage.removeItem(OPTIONS_KEY);
 }
 
-// ---------- Anthropic API key (for Process Survey) ----------
+// ---------- Anthropic API key (for the in-app "Ask Claude" help chat) ----------
 // Resolution order: personal key (this browser's localStorage) → org-shared
 // key (capex_builder_config.json in the central Drive sync folder). The shared
 // key lives ONLY on Drive — readable by company-domain accounts, never baked
@@ -61,8 +61,8 @@ function updateAnthropicKeyStatus() {
 }
 
 // Fetch the org-shared key from the sync folder. Requires Drive to be
-// connected (Process Survey already does). Cached per session; pass force to
-// refetch (e.g. after a 401 — the key may have been rotated).
+// connected. Cached per session; pass force to refetch (e.g. after a 401 —
+// the key may have been rotated).
 async function fetchSharedAnthropicKey(force) {
   if (!force && SHARED_ANTHROPIC_KEY_CACHE !== null) return SHARED_ANTHROPIC_KEY_CACHE;
   try {
@@ -85,7 +85,7 @@ async function shareAnthropicKeyOrgWide() {
   if (!confirm(
     'Share your Anthropic API key org-wide?\n\n' +
     'It will be stored in the shared Capex Builder sync folder on Drive. ' +
-    'Everyone in the company domains can then run 🛰 Process Survey billed to your Anthropic account.'
+    'Everyone in the company domains can then use the in-app "Ask Claude" help chat billed to your Anthropic account.'
   )) return;
   try {
     let existing = {};
@@ -101,7 +101,7 @@ async function shareAnthropicKeyOrgWide() {
     // one-time setup action gets unmistakable confirmation.
     const check = await fetchSharedAnthropicKey(true);
     if (check === k) {
-      alert('✅ API key shared org-wide.\n\nVerified: the key is now readable from the shared Drive sync folder. Teammates\' 🛰 Process Survey will use it automatically — no key entry needed.');
+      alert('✅ API key shared org-wide.\n\nVerified: the key is now readable from the shared Drive sync folder. Teammates\' in-app help chat will use it automatically — no key entry needed.');
     } else {
       alert('⚠️ Upload completed but verification read back a different value — try again, or check the sync folder (capex_builder_config.json).');
     }
@@ -2604,7 +2604,7 @@ function renderUnitRow(r, i, rebuild) {
 // regular schema section BELOW this block (injected at the top of that section's
 // body by renderPhase1). This block adds:
 //   - the repeatable per-building list (label/footprint/stories/height/pitch/roof_sf/facade_sf)
-//   - the 📥 Import Survey and 🛰 Process Survey buttons
+//   - the 📥 Import Survey / ⬆ Upload XLSX buttons (🛰 Process Survey removed 2026-08-04)
 //   - a small status line showing when the survey was last processed
 // All non-flat data (per-building, per-tract, meta) is stored on STATE.survey.
 function ensureSurveyState() {
@@ -2677,7 +2677,7 @@ function renderSurveyBlock() {
     // "Survey on file" indicator — same button size/shape as the actions, pushed ALL
     // THE WAY RIGHT. Reflects whether a survey PDF exists in the deal folder (async
     // Drive check, cached per property); click to re-check. The "Processed" indicator
-    // lives in the Process Survey slot (see surveyJobButton), not here.
+    // lives in the surveyJobButton slot, not here.
     const surveyChip = el('span', { class: 'um-btn secondary',
       style: 'white-space:nowrap;font-size:13px;padding:8px 10px;cursor:pointer;margin-left:auto' });
     actions.appendChild(surveyChip);
@@ -2707,11 +2707,8 @@ function renderSurveyBlock() {
     // below carry the result. Show the explanation only before the first process.
     const processed = !!s.processed_at;
 
-    // Persistent expectation-setting note (hidden once processed).
-    if (!processed) {
-      body.appendChild(el('div', { class: 'muted small', style: 'padding:2px 16px 6px;font-style:italic' },
-        '🛰 Process Survey runs the full survey-breakdown skill in the background — processing takes about 30 minutes to 1 hour. You can leave this page; the site fields fill in automatically when it’s done.'));
-    }
+    // (The "🛰 Process Survey takes 30 min–1 hour" expectation-setting note was
+    // removed 2026-08-04 along with the button it described.)
 
     // Active survey-job status (only while queued/processing).
     const jobLine = surveyJobStatusLine(rebuild);
@@ -2761,8 +2758,7 @@ function renderSurveyBlock() {
       ' to pick a file manually. Each import overwrites the flat fields below ',
       '(perimeter, parking lot SF, roof/facade totals, fencing notes, landscaping SF) ',
       'and replaces the buildings list with the Site-Total values from the workbook. ',
-      el('strong', {}, '🛰 Process Survey'),
-      ' button will request Claude to scan the survey and fill in the values below automatically, which can take up to an hour.'
+      'Use ', el('strong', {}, '+ Building'), ' to add a building by hand.'
     ));
     body.appendChild(instr);
 
@@ -3372,7 +3368,7 @@ async function importSurveyFromDrive(rebuild) {
     toast('Searching for survey report in Drive…');
     // Locate matching workbooks in 7. Title_Survey/ (newest first).
     const matches = await _listSurveyReportCandidates();
-    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/ — run 🛰 Process Survey or the skill first.', 'error'); return; }
+    if (!matches.length) { toast('No SurveyBreakdownSpecs workbook found in 7. Title_Survey/ — run the survey-breakdown-specs skill first, or use ⬆ Upload XLSX.', 'error'); return; }
     const dateOf = (name) => {
       const m = String(name || '').match(/(\d{4}-\d{2}-\d{2})/);
       return m ? m[1] : '';
@@ -3838,7 +3834,7 @@ async function checkSurveyJob() {
     stopSurveyPoll();
     setSurveyJob(null);
     refreshSurveyUI();
-    toast('Survey processing failed: ' + (job.error || 'unknown error') + ' — you can retry 🛰 Process Survey.', 'error');
+    toast('Survey processing failed: ' + (job.error || 'unknown error') + ' — run the survey-breakdown-specs skill, then 📥 Import Survey.', 'error');
   }
 }
 
@@ -3900,7 +3896,14 @@ function refreshSurveyUI() {
   if (CURRENT_VIEW === 'property') renderShell();
 }
 
-// The 🛰 button — a submit control when idle, a disabled progress chip while a job runs.
+// The 🛰 slot — a disabled progress chip while a job runs, a green "Processed"
+// indicator once a survey has been imported, and NOTHING when idle.
+// ⚠️ The "🛰 Process Survey" submit button was REMOVED 2026-08-04: the
+// `survey-job-worker` routine that drained the Drive job queue is retired, so
+// clicking it only enqueued a job nobody would ever pick up. `submitSurveyJob`
+// and the whole queue/poll machinery are deliberately LEFT IN PLACE (unreferenced
+// from the UI) so reviving the worker only needs this button back. The active-job
+// chip + its ✕ Cancel line stay so any pre-existing stuck job can still be cleared.
 function surveyJobButton(rebuild) {
   const job = getSurveyJob();
   if (surveyJobIsActive(job)) {
@@ -3911,18 +3914,14 @@ function surveyJobButton(rebuild) {
     return btn;
   }
   // Once the survey has been processed (and nothing is in flight), a "Processed"
-  // indicator takes the SAME slot as the Process Survey button — same size/shape,
-  // green, non-interactive. Show one OR the other, never both.
+  // indicator takes this slot — same button size/shape, green, non-interactive.
   if (STATE && STATE.survey && STATE.survey.processed_at) {
     return el('span', { class: 'um-btn secondary',
       style: 'white-space:nowrap;font-size:13px;padding:8px 10px;cursor:default;background:#dcfce7;color:#166534;border-color:#86efac',
       title: 'Survey processed — the fields below are filled in. Use 📥 Import Survey to re-load or replace.' },
       '📐 Processed ✓');
   }
-  return el('button', { class: 'um-btn secondary',
-    style: 'white-space:nowrap;font-size:13px;padding:8px 10px',
-    onClick: () => submitSurveyJob(rebuild), title: 'Run the survey-breakdown-specs skill for this deal and import the result' },
-    '🛰 Process Survey');
+  return null;   // idle: no submit control (el() skips null children)
 }
 
 // Status line shown beneath the action buttons while a survey job is active.
@@ -7219,22 +7218,22 @@ function renderPhase4() {
     ? `flex:1 1 0;min-width:180px;padding:18px;background:${activeBg};color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer`
     : `flex:1 1 0;min-width:180px;padding:18px;background:#cbd5e1;color:#f8fafc;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:not-allowed`;
 
-  // Export actions (side by side): download-only, place into 25. Capex, and place/refresh
-  // the capex into a proforma in 2. UW-Analysis (via the Cowork Excel-COM worker).
+  // Export actions (side by side): download-only, and place into 25. Capex.
+  // ⚠️ The "📥 Place In Proforma" / "🔄 Update CapexB in Proforma" BUTTON was REMOVED
+  // 2026-08-04: the `proforma-capex-import-worker` routine that drained the Drive job
+  // queue is retired, so clicking it only enqueued a job nobody would ever pick up
+  // (and it shipped with the blank-Qty export bug undercounting every import).
+  // `submitProformaCapexJob` + the job/poll machinery are deliberately LEFT IN PLACE
+  // (unreferenced from the UI) so reviving the worker only needs this button back.
   const proformaJob = getProformaJob();
   const proformaActive = proformaJobIsActive(proformaJob);
 
-  // The proforma button label depends on an async Drive check: if a "CapexB" (Capex
-  // Builder) import already exists in 2. UW-Analysis, the button becomes "Update CapexB
-  // in Proforma" and a line shows that file + when it was processed. Render with the
-  // cached answer, then refresh asynchronously.
-  const proformaBtn = el('button', {});
+  // Status line only (no button): the red in-flight note for any pre-existing job, or
+  // — from an async Drive check — a note naming the CapexB file already delivered to
+  // 2. UW-Analysis. Painted from the cache first, then refreshed asynchronously.
   const proformaStatus = el('div', { style: 'margin-top:6px;font-size:12px;font-style:italic' });
-  const paintProforma = (capexbFile) => {
+  const paintProformaStatus = (capexbFile) => {
     if (proformaActive) {
-      proformaBtn.textContent = proformaJob.status === 'processing' ? '⏳  Working in Proforma…' : '⏳  Proforma queued…';
-      proformaBtn.disabled = true; proformaBtn.style.cssText = btnStyle('#3477B2') + ';cursor:default'; proformaBtn.onclick = null;
-      proformaBtn.title = 'A proforma import is already running';
       // Pending-job note: red + larger so the "leave this page / ~30 min" status is unmissable.
       proformaStatus.style.color = '#dc2626';
       proformaStatus.style.fontSize = '15px';
@@ -7243,38 +7242,27 @@ function renderPhase4() {
       proformaStatus.style.display = '';
       return;
     }
-    // Custom (user-defined) line items are handled by the worker (v4) exactly like
-    // schema rows — it dynamically rebuilds each CAPEX group to the exported row count,
-    // so there's no special dry-run flow and no gate. Button behaves the same either way.
-    proformaBtn.style.cssText = btnStyle('#3477B2');
-    proformaBtn.disabled = !exportReady;
-    proformaBtn.onclick = exportReady ? submitProformaCapexJob : null;
     if (capexbFile) {
-      proformaBtn.textContent = '🔄  Update CapexB in Proforma';
-      proformaBtn.title = exportReady ? `Refresh the Capex Builder budget in ${capexbFile.name} (or import into another proforma)` : readyTip;
       const d = capexbFile.modifiedTime ? new Date(capexbFile.modifiedTime).toLocaleString() : 'unknown';
       proformaStatus.style.color = '#166534';
-      proformaStatus.textContent = `📄 Capex Builder already imported → ${capexbFile.name}  ·  processed ${d}.  "Update" overwrites it (or pick another proforma).`;
+      proformaStatus.textContent = `📄 Capex Builder already imported → ${capexbFile.name}  ·  processed ${d}.`;
       proformaStatus.style.display = '';
     } else {
-      proformaBtn.textContent = '📥  Place In Proforma';
-      proformaBtn.title = exportReady ? 'Place the capex budget into a proforma in 2. UW-Analysis' : readyTip;
       proformaStatus.style.display = 'none';
     }
   };
-  paintProforma((PROFORMA_CAPEXB_CACHE[STATE.id] || {}).file || null);
+  paintProformaStatus((PROFORMA_CAPEXB_CACHE[STATE.id] || {}).file || null);
 
   root.appendChild(el('div', { style: 'display:flex;gap:10px;margin-top:8px;flex-wrap:wrap' },
     el('button', { style: btnStyle('#1d2d47'), disabled: !exportReady, title: readyTip, onClick: exportXlsx }, '⬇  Export to Excel'),
-    el('button', { style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip, onClick: placeInCapexFolder }, '☁  Place in Capex Folder'),
-    proformaBtn
+    el('button', { style: btnStyle('#0f766e'), disabled: !exportReady, title: readyTip, onClick: placeInCapexFolder }, '☁  Place in Capex Folder')
   ));
   root.appendChild(proformaStatus);
 
-  // Which budget version's numbers are currently in this deal's proforma. Shown
-  // right under the push buttons — this is the decision point where "am I about
-  // to replace a teammate's numbers?" actually matters. Amber when it's someone
-  // else's version, green when it's the one you're looking at.
+  // Which budget version's numbers were last placed into this deal's proforma.
+  // Historical record now that the push button is gone — still worth showing so you
+  // know whose numbers are sitting in the proforma. Amber when it's someone else's
+  // version, green when it's the one you're looking at.
   const provLine = proformaProvenanceLine();
   if (provLine) {
     const prov = getProformaPushProvenance();
@@ -7284,13 +7272,13 @@ function renderPhase4() {
         + (mine ? 'background:#dcfce7;color:#166534' : 'background:#fef3c7;color:#92400e'),
       title: mine
         ? 'The proforma holds the budget version you currently have open'
-        : 'The proforma holds a DIFFERENT budget version — pushing from here will replace those numbers (you will be asked to confirm first)',
+        : 'The proforma holds a DIFFERENT budget version than the one you have open',
     }, provLine + (prov && prov.user ? ` · by ${prov.user}` : '')));
   }
 
-  // Async: check Drive for an existing CapexB proforma and repaint the button/label.
+  // Async: check Drive for an existing CapexB proforma and repaint the status line.
   if (!proformaActive) {
-    getExistingCapexBProforma(false).then((f) => { if (proformaBtn.isConnected) paintProforma(f); }).catch(() => {});
+    getExistingCapexBProforma(false).then((f) => { if (proformaStatus.isConnected) paintProformaStatus(f); }).catch(() => {});
   }
 
   if (!exportReady) {
@@ -8025,7 +8013,7 @@ async function checkProformaJob() {
     stopProformaPoll();
     setProformaJob(null);
     if (CURRENT_VIEW === 'property') renderApp();
-    toast('Proforma import failed: ' + (job.error || 'unknown error') + ' — you can retry from the Finalize tab (📥 Place In Proforma / 🔄 Update CapexB in Proforma).', 'error');
+    toast('Proforma import failed: ' + (job.error || 'unknown error') + ' — the in-app proforma import has been retired; export the budget from Finalize and place it by hand.', 'error');
   }
 }
 
@@ -11197,8 +11185,8 @@ async function pullAllFromDrive() {
 // ---------- Init ----------
 // ============ Help chat: "Ask Claude" in-app assistant ============
 // A floating chat widget (bottom-right) that answers "how do I use this app"
-// questions via the Anthropic Messages API — reusing the SAME key resolution as
-// Process Survey (personal localStorage key → org-shared key in the Drive sync
+// questions via the Anthropic Messages API — via getAnthropicKey()'s resolution
+// order (personal localStorage key → org-shared key in the Drive sync
 // folder). Knowledge lives in HELP_SYSTEM_PROMPT below; keep it in sync with the
 // user guide (GUIDE/Capex Builder - User Guide.docx) when app behavior changes.
 const HELP_MODEL = 'claude-haiku-4-5-20251001';   // fast + cheap for Q&A over a fixed KB
@@ -11221,11 +11209,11 @@ HOME SCREEN
 - TO UNARCHIVE / RESTORE a property: click the "🗄 Archived" toggle on the home screen to see archived properties, open that property's ⋮ menu, and choose "Unarchive (move to Live)". It returns to the main list.
 
 THE THREE TABS
-1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "🛰 Process Survey" hands the deal's survey off to a processing agent that runs the full survey-breakdown skill (it measures the ALTA/site survey and cross-checks Google Maps) — the button shows "queued/processing", you can leave the page, and after processing (usually 30 minutes to 1 hour) the site fields fill in automatically and the breakdown Excel is saved to the deal's "7. Title_Survey" folder; "📥 Import Survey" loads an already-processed survey workbook right away; "⬆ Upload XLSX" takes a file; "+ Building" adds one by hand. Building & Site also tracks property-wide figures pulled in by the survey — # Curb Cuts, Gross Building Area, Building Envelope (cubic feet), Building Height, and, for multifamily buildings specifically, a separate MF-only footprint and gross building area. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
-2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. On a brand-new property every row starts checked as "Skip" — nothing is priced until you say so; work down the list and uncheck Skip on anything the deal needs (existing deals keep whatever Skip pattern they already had — this only changes how new properties start out). Checking Skip grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. You can also skip in bulk: the Skip checkbox on any section or group header turns every item under it on or off at once, and a "Hide N/A" button at the top of the tab tucks all skipped rows out of view (tap "Show N/A" to bring them back). Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type (or any other Basics-linked quantity type) fills the quantity in from Basics automatically — it's still a normal editable box, though; type over it if needed, and switching the quantity type away and back re-fills it with the current Basics figure. Some quantity types fill the # Qty in for you from Basics this same way (for example "Walkway Sqft" = walkway length × width × count, or the railing/stair counts) — editable, and re-fills if you switch the quantity type away and back. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. Some interior items are also sized by the property's average unit square footage, beds, or baths as a separate multiplier ($ Amt = quantity × that average × rate); five fixture items (Lighting Fixtures, Plumbing Fixtures, Door Hardware, Door Repairs, Blinds) get one extra bedroom/bathroom added to that average automatically for common-area fixtures. CUSTOM ITEMS: if a cost isn't in the standard list, tap "+ Add custom item" at the bottom of any section to add your own line — give it a name, # Qty, Qty Type, and $/Qty, and use the Group/Section dropdowns under it to file it wherever it belongs. Tick "Apply to reno unit buckets" on a custom item to size its quantity from the Orig./Part./Reno unit counts just like an Interior item. Custom items count toward the totals and are included in the "Export to Excel" / "Place in Capex Folder" workbooks (rolled into their group's subtotal), AND they flow into the proforma too — "Place In Proforma" rebuilds each CAPEX group to fit however many items it has, so custom lines are inserted and picked up in the group and multifamily subtotals automatically (nothing special to do). At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee); custom items can't be a "%" base. A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. Every group and section also carries its own footer with a running total/per-unit and its own Collapse/Expand toggle. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
+1. BASICS — property identity, unit mix, area, and physical condition. Top buttons: "☁ Import Proforma Basics & Units" pulls facts + unit mix from the deal's proforma; "📋 Export Missing Fields" lists anything still blank. A green check appears on a section when its required fields are filled. Unit Mix (inside Units) can be imported from the proforma ("☁ Import > GDrive"), uploaded, or exported. Building & Site holds the site survey tools: "📥 Import Survey" loads an already-processed survey workbook (the newest *_SurveyBreakdownSpecs_*.xlsx from the deal's "7. Title_Survey" folder); "⬆ Upload XLSX" takes a file you pick; "+ Building" adds a building by hand. (There is no longer a "Process Survey" button in the app — the survey breakdown is produced outside the app by running the survey-breakdown-specs skill, then imported here.) Building & Site also tracks property-wide figures pulled in by the survey — # Curb Cuts, Gross Building Area, Building Envelope (cubic feet), Building Height, and, for multifamily buildings specifically, a separate MF-only footprint and gross building area. Below is the "Physical Characteristics" questionnaire (construction, roof, HVAC, plumbing, electrical, amenities) — fields appear only when relevant.
+2. BUDGET $ — EVERY capex line item is listed here, grouped by trade (Soft Costs, Ground Work, Building Work, Interior, Exterior, Amenities). There is no separate checklist tab anymore. On a brand-new property every row starts checked as "Skip" — nothing is priced until you say so; work down the list and uncheck Skip on anything the deal needs (existing deals keep whatever Skip pattern they already had — this only changes how new properties start out). Checking Skip grays the row out, locks its inputs, and forces its $ Amt to $0 (and drops it from the subtotal). Uncheck to turn a row back on. You can also skip in bulk: the Skip checkbox on any section or group header turns every item under it on or off at once, and a "Hide N/A" button at the top of the tab tucks all skipped rows out of view (tap "Show N/A" to bring them back). Price a row with: # Qty, Qty Type (MF Unit, Each, Sqft, Linear Ft, Allowance, %, …), $/Qty (a gray hint shows the default rate; type to override), an Options/finish picker (auto-fills the rate), and the calculated $ Amt. Choosing the "MF Unit" quantity type (or any other Basics-linked quantity type) fills the quantity in from Basics automatically — it's still a normal editable box, though; type over it if needed, and switching the quantity type away and back re-fills it with the current Basics figure. Some quantity types fill the # Qty in for you from Basics this same way (for example "Walkway Sqft" = walkway length × width × count, or the railing/stair counts) — editable, and re-fills if you switch the quantity type away and back. Interior items use Orig./Part./Reno percentage boxes instead of a plain quantity — the app sizes them from the unit mix. Some interior items are also sized by the property's average unit square footage, beds, or baths as a separate multiplier ($ Amt = quantity × that average × rate); five fixture items (Lighting Fixtures, Plumbing Fixtures, Door Hardware, Door Repairs, Blinds) get one extra bedroom/bathroom added to that average automatically for common-area fixtures. CUSTOM ITEMS: if a cost isn't in the standard list, tap "+ Add custom item" at the bottom of any section to add your own line — give it a name, # Qty, Qty Type, and $/Qty, and use the Group/Section dropdowns under it to file it wherever it belongs. Tick "Apply to reno unit buckets" on a custom item to size its quantity from the Orig./Part./Reno unit counts just like an Interior item. Custom items count toward the totals and are included in the "Export to Excel" / "Place in Capex Folder" workbooks (rolled into their group's subtotal), so they carry through to whoever pastes the budget into the proforma. At the bottom you can define CAPEX Groups (named buckets of items) and price any row as a "%" of a chosen group (e.g. contingency, management fee); custom items can't be a "%" base. A running subtotal (total and per-unit) shows at the top — pinned on a computer, and on a phone it scrolls with the page to save space. Every group and section also carries its own footer with a running total/per-unit and its own Collapse/Expand toggle. MOBILE: on a phone, Budget rows stack onto two lines (item name on top, inputs below) and the Interior Orig./Part./Reno % boxes are hidden — set those percentages on a computer; the quantities they produce still show and price on the phone.
 - PHOTOS: every Budget row ends with a 📷 button. On a phone it opens the camera — snap the item and keep moving; the full-resolution photo saves instantly on the device and uploads by itself in the background to the deal's Drive folder. On a computer you can also DRAG & DROP image files from your desktop straight onto a row's 📷 icon (it highlights when you drag over it) — drop one or several and they save to that line item just like a captured photo. Photos live in a "Capex Builder Pictures" folder inside the deal's "25. Capex" folder, filed to match the Budget page's layout — "25. Capex/Capex Builder Pictures/<Group>/<Section>/<Line Item>" (e.g. "25. Capex/Capex Builder Pictures/Interior/INTERIOR RENOVATION/Lighting Fixtures") — and each file is named with the property name, the word "capex", the item name, and a number (e.g. "Maple Gardens - capex - Lighting Fixtures - 1.jpg"). A number badge shows how many photos a row has (orange dot = still uploading); tap the badge to view them, open the folder in Drive, add more, open one photo, or delete. No signal on-site? Photos wait on the phone and upload automatically once you're back online with the app open — a "⬆ N photos uploading…" chip in the bottom-left corner shows what's left (tap it to retry). Requires the property's Drive deal folder to be linked. The Excel export's "Photos" column links each row to its Drive photo folder.
 - NOTES: next to the 📷 on every Budget row is a 📝 note button. Tap it to open a small box and type a note for that line item (e.g. a spec, a scope reminder, a vendor). The note saves automatically with the deal (in the deal's Drive file) and appears in that item's row in the "Notes" column of the Excel export and the proforma paste. The 📝 icon fills in once a row has a note.
-3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Three buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder; "📥 Place In Proforma" (shown as "🔄 Update CapexB in Proforma" once a Capex Builder version already exists in the deal) copies the capex budget straight into a proforma — it finds the proforma files in "2. UW-Analysis", asks which one, and a processing agent makes a new "Capex" version (with a bumped version #) with the capex values pasted into its CAPEX tab, saved back to 2. UW-Analysis (takes ~30 min–1 hour; you can leave the page). The workbook mirrors the proforma's capex tab. Export is also blocked if a priced item's quantity type pulls from a Basics field that's still blank — its # Qty box turns red and the Sanity Check flags it. Two ways to clear the block: fill in that Basics field (0 counts as filled), OR just type the quantity into the row's # Qty box by hand. A hand-typed quantity unblocks the export and is what gets exported — the red box and the Sanity Check note stay as a reminder that Basics is still incomplete, which is expected, not an error. (Fill the Basics field later and the row goes back to auto-filling from it.) Interior items are exempt since their quantity comes from the Unit Mix, not Basics.
+3. FINALIZE — automatic Sanity Check (flags inconsistencies), Revenue Drivers / Opex Reducers, Red Flags, and an Overall Notes box. Two buttons (enabled once the property has a name and at least one priced item): "⬇ Export to Excel" downloads the capex workbook; "☁ Place in Capex Folder" uploads it into the deal's "25. Capex" folder. The workbook mirrors the proforma's capex tab, so getting the numbers into the underwriting proforma is done from that exported file. (There is no longer a "Place In Proforma" / "Update CapexB in Proforma" button — that automated import was retired. If the deal already had a CapexB proforma delivered, a green line names that file and when it was processed, for reference.) Export is also blocked if a priced item's quantity type pulls from a Basics field that's still blank — its # Qty box turns red and the Sanity Check flags it. Two ways to clear the block: fill in that Basics field (0 counts as filled), OR just type the quantity into the row's # Qty box by hand. A hand-typed quantity unblocks the export and is what gets exported — the red box and the Sanity Check note stay as a reminder that Basics is still incomplete, which is expected, not an error. (Fill the Basics field later and the row goes back to auto-filling from it.) Interior items are exempt since their quantity comes from the Unit Mix, not Basics.
 
 SAVING & SYNC
 - You never press Save — it auto-saves to Drive a couple seconds after you stop typing. Google Drive is the source of truth. A status bar shows "Saving…" then "✓ Saved to Drive" (the ✓ auto-hides after a few seconds so it stays out of your way).
@@ -11237,7 +11225,7 @@ TROUBLESHOOTING
 - Proforma import pulls 0 units → the newest model may be an empty shell; use ⬆ Upload XLS with the right file.
 - A section won't show a green check → a required field is blank; use 📋 Export Missing Fields.
 - Export buttons grayed out → give the property a name and price at least one Budget item.
-- "Place In Proforma" with custom line items → nothing special needed; the import rebuilds each CAPEX group to fit its rows, so custom items are inserted and roll into the subtotals automatically.
+- Looking for "Place In Proforma" or "Process Survey" → both buttons were removed. Export the budget with "⬇ Export to Excel" / "☁ Place in Capex Folder" and take it into the proforma from there; for a survey, have the survey breakdown produced outside the app and then use "📥 Import Survey".
 - Status stuck on "Saving…" → click it to resolve, or ☰ → Re-sync from Drive.
 - A priced item's # Qty box is red, or export won't unlock → its quantity type pulls from a Basics field that's still blank. Either fill in that field on the Basics tab (0 counts) and the flag clears, or type the quantity straight into the row's # Qty box — that unlocks the export and exports your number, though the box stays red until Basics is filled.
 - Help chat itself needs the shared AI key, which loads once Google Drive is connected.`;
@@ -11299,7 +11287,7 @@ async function sendHelpMessage() {
   appendHelpBubble('user', text);
   const typing = appendHelpBubble('assistant', 'Claude is typing…', 'typing');
 
-  // Same key resolution as Process Survey: personal key → org-shared (Drive).
+  // Key resolution: personal key → org-shared (Drive).
   let usingShared = false;
   let apiKey = getAnthropicKey();
   if (!apiKey) { apiKey = await fetchSharedAnthropicKey(); usingShared = !!apiKey; }
