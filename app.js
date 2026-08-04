@@ -10128,6 +10128,166 @@ function versionFilenameForPush(bv) {
   const suffix = String((bv.versionDrive && bv.versionDrive.fileName) || '').match(/_(\d+)\.json$/);
   return suffix ? `${base.slice(0, base.length - 5)}_${suffix[1]}.json` : base;
 }
+
+// ---------- Same-name sibling guard (2026-08-04) ----------
+// Drive permits two files with the SAME NAME in one folder; the desktop mount
+// disambiguates them as "… (1).json" but the API does not, so `driveFindFile`
+// resolves such a pair arbitrarily and a push can land on either one. Two
+// budget-version files sharing a name is therefore never benign — it is how the
+// Falcon Point / Aviva / Lantern duplicates stayed invisible for a week. When we
+// see one, we make the user rename it rather than auto-picking a name, because
+// only they know which of the two is the real budget (the file contents are
+// genuinely different work, not a mechanical copy).
+//
+// Groups are returned oldest-first, so callers can leave the ORIGINAL file's
+// name alone and rename only the later intruder(s).
+function duplicateVersionFileGroups(files) {
+  const byName = new Map();
+  (files || []).forEach(f => {
+    if (!f || !/\.json$/i.test(f.name || '')) return;
+    if (!byName.has(f.name)) byName.set(f.name, []);
+    byName.get(f.name).push(f);
+  });
+  return [...byName.entries()]
+    .filter(([, fs]) => fs.length > 1)
+    .map(([name, fs]) => ({
+      name,
+      files: fs.slice().sort((a, b) => String(a.createdTime || '').localeCompare(String(b.createdTime || ''))),
+    }));
+}
+
+// Metadata-only Drive rename. Does NOT touch file contents, so it is safe to run
+// against a file another teammate is editing.
+async function driveRenameFile(fileId, newName) {
+  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,modifiedTime&supportsAllDrives=true`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName }),
+  });
+  if (!r.ok) throw new Error('Drive rename failed (' + r.status + ')');
+  return r.json();
+}
+
+// Folders already walked this session with no collisions left, so the common
+// (clean) case costs nothing after the first check.
+const _versionFolderNamesChecked = new Set();
+
+// Block until every same-name collision in a Versions/ folder is resolved by the
+// user. `filesOpt` lets callers that just listed the folder skip a round-trip.
+// Returns true when the folder is clean (or was already clean).
+//
+// SILENT callers must not use this — the auto-push tick would ambush the user
+// with a dialog. They detect, warn to the console, and leave the folder marked
+// unchecked so the next interactive push/open surfaces it.
+async function enforceUniqueVersionFilenames(versionsFolderId, filesOpt, opts = {}) {
+  const { silent = false } = opts;
+  if (!versionsFolderId) return true;
+  if (_versionFolderNamesChecked.has(versionsFolderId) && !filesOpt) return true;
+  let files = filesOpt;
+  try {
+    if (!files) files = await driveListFilesInFolder(versionsFolderId);
+  } catch (e) { console.warn('enforceUniqueVersionFilenames: could not list folder', e); return true; }
+
+  const groups = duplicateVersionFileGroups(files);
+  if (!groups.length) { _versionFolderNamesChecked.add(versionsFolderId); return true; }
+
+  if (silent) {
+    console.warn('enforceUniqueVersionFilenames: duplicate budget filenames present, deferring to the next interactive push:',
+      groups.map(g => `${g.name} ×${g.files.length}`).join(', '));
+    _versionFolderNamesChecked.delete(versionsFolderId);
+    return false;
+  }
+
+  const taken = new Set(files.map(f => f.name));
+  for (const group of groups) {
+    // Keep the oldest file's name; every later twin has to be renamed.
+    for (const dupe of group.files.slice(1)) {
+      // Read the twin so the prompt can tell the user what is actually IN it —
+      // "rename the duplicate" is unanswerable without knowing which is which.
+      let info = '';
+      let dupeVersionId = '';
+      let dupeCreatedBy = '';
+      try {
+        const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${dupe.id}?alt=media`);
+        const data = await r.json();
+        dupeVersionId = (data && data.versionId) || '';
+        // The new filename must be built from the file's OWN creator, exactly as
+        // budgetVersionFilename is everywhere else. Using the current user would
+        // both misattribute the file and — because the generated name would then
+        // differ from the sibling's — silently defeat the collision check below.
+        dupeCreatedBy = (data && data.versionCreatedBy) || '';
+        const rows = Object.keys((data && data.phase3) || {}).length;
+        const skips = Object.keys((data && data.excluded) || {}).length;
+        info = `\nThis copy: label “${(data && data.label) || '?'}”, last edited ${String((data && data.versionUpdated) || '?').slice(0, 16).replace('T', ' ')} by ${(data && data.versionLastEditor) || '?'}`
+             + `\n${rows} saved row${rows === 1 ? '' : 's'}, ${skips} skip flag${skips === 1 ? '' : 's'}`
+             + (skips === 0 ? '  ⚠️ no skip flags — this one may be an empty placeholder whose total is all schema defaults' : '');
+      } catch (e) { console.warn('enforceUniqueVersionFilenames: could not read twin', dupe.id, e); }
+
+      let newLabel = '';
+      for (;;) {
+        const answer = prompt(
+          `Two budget files in this deal share the name:\n\n    ${group.name}\n\n`
+          + `Drive allows that, but the app can no longer tell them apart, and pushes can land on the wrong one.\n`
+          + info + `\n\nEnter a NEW name for this copy (e.g. "Original v2", "GR draft"):`,
+          '');
+        if (answer === null) {
+          if (confirm('Leave the duplicate name unresolved?\n\nThe two files will keep diverging and a push may overwrite the wrong one. You will be asked again next time this deal is opened.')) {
+            _versionFolderNamesChecked.delete(versionsFolderId);
+            return false;
+          }
+          continue;
+        }
+        const label = String(answer).trim();
+        if (!label) { alert('A name is required.'); continue; }
+        const creator = dupeCreatedBy || (dupeVersionId && findVersionCreatorById(dupeVersionId)) || (CURRENT_USER && CURRENT_USER.email) || 'user';
+        const candidate = budgetVersionFilename(label, creator);
+        // Case-insensitive: Drive treats "Original_x.json" and "original_x.json"
+        // as distinct names, but the desktop mount and the humans reading it do not.
+        const clash = [...taken].some(n => n.toLowerCase() === candidate.toLowerCase());
+        if (clash) { alert(`“${candidate}” is already used in this folder. Pick a different name.`); continue; }
+        newLabel = label;
+        taken.delete(dupe.name);
+        taken.add(candidate);
+        try {
+          await driveRenameFile(dupe.id, candidate);
+        } catch (e) {
+          alert('Rename failed: ' + e.message + '\nPlease try a different name.');
+          taken.add(dupe.name);
+          taken.delete(candidate);
+          continue;
+        }
+        // Keep any local copy of that version in step, so the next push doesn't
+        // PATCH the old name straight back on top of the sibling.
+        const localBv = dupeVersionId && STORE.budgetVersions[dupeVersionId];
+        if (localBv) {
+          localBv.label = newLabel;
+          if (!localBv.versionDrive) localBv.versionDrive = {};
+          localBv.versionDrive.fileId = dupe.id;
+          localBv.versionDrive.fileName = candidate;
+          if (localBv === CURRENT_BUDGET_VERSION) saveBudget(); else _persistStoreLocally();
+          if (getDriveToken()) {
+            const entry = (localBv === CURRENT_BUDGET_VERSION)
+              ? buildBudgetVersionManifestEntry({ asEditor: true })
+              : passiveBudgetVersionManifestEntry(localBv);
+            upsertBudgetVersionManifestEntry(entry).catch((e) => console.warn('enforceUniqueVersionFilenames: manifest update failed', e));
+          }
+        }
+        toast(`Renamed to ${candidate}`, 'success');
+        break;
+      }
+      if (!newLabel) return false;
+    }
+  }
+  _versionFolderNamesChecked.add(versionsFolderId);
+  return true;
+}
+
+// The stable creator email a version's filename is built from, for a version
+// this device happens to hold. Falls back to '' so callers use the current user.
+function findVersionCreatorById(versionId) {
+  const bv = STORE.budgetVersions[versionId];
+  return (bv && bv.versionCreatedBy) || '';
+}
 // Resolve the Drive file for a version that has no fileId yet, creating one only
 // when the version genuinely isn't on Drive. Returns {id, modifiedTime, name}.
 //
@@ -10189,6 +10349,11 @@ async function pushBudgetToDrive(opts = {}) {
   try {
     if (!silent) toast('Pushing budget to Drive…');
     const versionsFolder = await resolveVersionsFolder();
+    // Never push into a folder that still holds two files with one name — the
+    // target is ambiguous and we could land on the wrong twin. Interactive
+    // pushes make the user rename; silent ones just flag it and carry on (the
+    // push itself is by fileId, so it is still safe for THIS version).
+    await enforceUniqueVersionFilenames(versionsFolder, null, { silent });
     let fileId = bv.versionDrive.fileId || null;
     let filename;
     if (fileId) {
@@ -10563,7 +10728,14 @@ async function openRemoteProperty(entry) {
       // teammate split it first, on a different device).
       const versionsFolder = await driveEnsureSubfolder(budgetFolder, 'Versions');
       p.drive.versionsFolderId = versionsFolder;
-      const files = await driveListFilesInFolder(versionsFolder);
+      let files = await driveListFilesInFolder(versionsFolder);
+      // Resolve same-name twins BEFORE adopting one of them: driveDownloadJson
+      // below resolves by NAME, so with a collision present it can hand us the
+      // wrong file's budget and we would then push edits onto it.
+      if (duplicateVersionFileGroups(files).length) {
+        await enforceUniqueVersionFilenames(versionsFolder, files);
+        files = await driveListFilesInFolder(versionsFolder);   // re-list: names just changed
+      }
       let bv = null;
       if (files.length) {
         const sorted = files.slice().sort((a, b) => String(b.modifiedTime || '').localeCompare(String(a.modifiedTime || '')));
