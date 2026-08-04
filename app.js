@@ -10103,9 +10103,10 @@ function budgetVersionFilename(label, username) {
 // folder already has a file with the same generated name (e.g. two "Draft"
 // versions by the same person). Only matters at creation — once a version has
 // a fileId, pushBudgetToDrive updates it by id, never by re-searching a name.
-async function uniqueBudgetVersionFilename(versionsFolderId, label, username) {
+// `existingFiles` is passed in by ensureBudgetVersionFile, which has already
+// listed the folder for its adoption scan.
+function uniqueBudgetVersionFilename(existingFiles, label, username) {
   const base = budgetVersionFilename(label, username);
-  const existingFiles = await driveListFilesInFolder(versionsFolderId);
   const taken = new Set(existingFiles.map(f => f.name));
   if (!taken.has(base)) return base;
   const stem = base.slice(0, base.length - 5);   // strip ".json"
@@ -10114,6 +10115,67 @@ async function uniqueBudgetVersionFilename(versionsFolderId, label, username) {
     if (!taken.has(candidate)) return candidate;
   }
   return `${stem}_${Date.now().toString(36)}.json`;
+}
+// The filename to PATCH with on an ordinary (already-has-a-fileId) push. Tracks
+// label renames, but PRESERVES any _N disambiguation suffix the file was created
+// with (remembered in versionDrive.fileName): renaming "Original_x_2.json" down
+// to "Original_x.json" would put it on top of the OTHER version's name, which is
+// how same-named siblings get created without any race at all. An _N suffix that
+// outlives the collision that caused it is cosmetic; a name collision is not.
+function versionFilenameForPush(bv) {
+  const base = budgetVersionFilename(bv.label, bv.versionCreatedBy);
+  const suffix = String((bv.versionDrive && bv.versionDrive.fileName) || '').match(/_(\d+)\.json$/);
+  return suffix ? `${base.slice(0, base.length - 5)}_${suffix[1]}.json` : base;
+}
+// Resolve the Drive file for a version that has no fileId yet, creating one only
+// when the version genuinely isn't on Drive. Returns {id, modifiedTime, name}.
+//
+// Two duplicate-file bugs proven live on 2026-08-04 (HOU TX - Falcon Point held
+// FOUR files for one "Original" version, holding 78 / 69 / 61 / 43 priced rows;
+// AUS TX - Aviva North Plaza held three) are closed here:
+//
+// 1. CREATE RACE -> same-name twins. Two concurrent first-time pushes of the same
+//    version both saw versionDrive.fileId empty, both picked the same filename,
+//    and driveUploadJson's name lookup found nothing yet, so both POSTed. Drive
+//    allows same-name siblings (the desktop mount renders the second as
+//    "… (1).json"), and the two then DIVERGED because each kept its own fileId.
+//    Concurrent callers for the same versionId now share ONE in-flight create,
+//    the same pattern driveEnsureSubfolder uses for folders.
+// 2. RE-MINT -> "…_2.json". A version record can be re-created locally for a
+//    property whose file is already on Drive (localStorage cleared, or a
+//    manifest placeholder that went dirty before adoptManifestBudgetVersionsIfAny
+//    could swap it). uniqueBudgetVersionFilename then deliberately sidestepped
+//    the existing name. We now scan for a file whose CONTENT carries this same
+//    versionId and adopt it. Matching on versionId (not name) is what keeps two
+//    genuinely different versions that share a label+creator getting their own
+//    _2 file, which is the behavior the naming scheme was built for.
+const _ensureVersionFileInflight = new Map();   // versionId -> Promise<{id, modifiedTime, name}>
+async function ensureBudgetVersionFile(versionsFolderId, bv) {
+  const key = bv.versionId;
+  if (_ensureVersionFileInflight.has(key)) return _ensureVersionFileInflight.get(key);
+  const work = (async () => {
+    const base = budgetVersionFilename(bv.label, bv.versionCreatedBy);
+    const stem = base.slice(0, base.length - 5);
+    const files = await driveListFilesInFolder(versionsFolderId);
+    // Only files this version could plausibly own are worth downloading: its own
+    // generated name, or that name with an _N suffix from a past re-mint.
+    const stemRe = new RegExp('^' + stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(_\\d+)?\\.json$');
+    for (const f of files.filter(f => stemRe.test(f.name))) {
+      try {
+        const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+        const data = await r.json();
+        if (data && data.versionId === key) {
+          console.warn(`ensureBudgetVersionFile: adopted existing Versions/${f.name} for version ${key} instead of creating a duplicate`);
+          return { id: f.id, modifiedTime: f.modifiedTime, name: f.name };
+        }
+      } catch (e) { console.warn('ensureBudgetVersionFile: could not read Versions/' + f.name, e); }
+    }
+    const filename = uniqueBudgetVersionFilename(files, bv.label, bv.versionCreatedBy);
+    const res = await driveUploadJson(versionsFolderId, filename, bv, null);
+    return { id: res.id, modifiedTime: res.modifiedTime, name: filename };
+  })();
+  _ensureVersionFileInflight.set(key, work);
+  try { return await work; } finally { _ensureVersionFileInflight.delete(key); }
 }
 async function pushBudgetToDrive(opts = {}) {
   const { silent = false, force = false } = opts;
@@ -10131,7 +10193,7 @@ async function pushBudgetToDrive(opts = {}) {
     if (fileId) {
       // Re-sent every push; PATCHes the Drive filename automatically if the
       // label was renamed since the last push (safe metadata-only rename).
-      filename = budgetVersionFilename(bv.label, bv.versionCreatedBy);
+      filename = versionFilenameForPush(bv);
       if (!force && bv.versionDrive.remoteModifiedTime) {
         const metaR = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,modifiedTime`);
         const meta = metaR.ok ? await metaR.json() : null;
@@ -10142,10 +10204,21 @@ async function pushBudgetToDrive(opts = {}) {
         }
       }
     } else {
-      filename = await uniqueBudgetVersionFilename(versionsFolder, bv.label, bv.versionCreatedBy);
+      // First push of this version: resolve (adopt-or-create) its file under a
+      // per-version lock, then fall through and PATCH by id below. That PATCH is
+      // redundant in the just-created case (one extra Drive call on a version's
+      // very first push) and load-bearing in every other: when we adopted an
+      // existing file, or shared another flight's create, this caller's data
+      // still has to land.
+      const ensured = await ensureBudgetVersionFile(versionsFolder, bv);
+      fileId = ensured.id;
+      bv.versionDrive.fileId = fileId;
+      bv.versionDrive.fileName = ensured.name;
+      filename = ensured.name;
     }
     const res = await driveUploadJson(versionsFolder, filename, bv, fileId);
     bv.versionDrive.fileId = res.id;
+    bv.versionDrive.fileName = filename;
     bv.versionDrive.lastPushed = new Date().toISOString();
     bv.versionDrive.remoteModifiedTime = res.modifiedTime;
     localStorage.setItem(STORE_KEY, JSON.stringify(STORE));
@@ -10509,9 +10582,18 @@ async function openRemoteProperty(entry) {
         }
       }
       if (!bv) {
+        // Nothing readable in Versions/ — fabricate a blank one, but stamp it
+        // not-dirty so the auto-sync tick can NEVER push this empty placeholder
+        // to Drive as a second "Original" (matching attachBudgetVersionForOpen's
+        // defensive branch, which has always done this). Reaching here does not
+        // prove the deal has no versions: a transient read failure on every file
+        // above lands here too, and pushing then created a rival empty version.
+        // Editing the budget bumps versionUpdated, which makes it dirty and
+        // pushes for real.
         bv = DEFAULT_BUDGET_VERSION();
         bv.propertyId = p.id;
         bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+        bv.versionDrive.lastPushed = bv.versionUpdated;
       }
       STORE.budgetVersions[bv.versionId] = bv;
       STORE.currentBudgetVersionId = bv.versionId;
