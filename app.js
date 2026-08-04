@@ -7445,8 +7445,6 @@ async function buildCapexWorkbook() {
     });
     gh.getCell(1).alignment = { vertical: 'middle', indent: 1 };
     gh.height = 20;
-    styleCurrency(gh.getCell(COL_TOTAL));
-    styleCurrency(gh.getCell(COL_PER_UNIT));
 
     let firstItemRowInGroup = null;
     let lastItemRowInGroup = null;
@@ -7584,9 +7582,12 @@ async function buildCapexWorkbook() {
     if (firstItemRowInGroup !== null) {
       subr.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
       setPerUnit(subr.getCell(COL_PER_UNIT), `J${subr.number}`, 0);   // $/Unit on the group subtotal
-      // Group header total = same range
-      gh.getCell(COL_TOTAL).value = { formula: `SUM(J${firstItemRowInGroup}:J${lastItemRowInGroup})`, result: 0 };
-      setPerUnit(gh.getCell(COL_PER_UNIT), `J${gh.number}`, 0);       // $/Unit on the group header
+      // The GROUP HEADER banner deliberately carries NO Total / $/Unit (removed
+      // 2026-08-04 per egordon): it duplicated the "<Group> Subtotal" row at the
+      // BOTTOM of the same band, so every group's number appeared twice. The
+      // bottom row is the one that stays — it's what groupSubtotalAddrs (and so
+      // MULTIFAMILY SUBTOTAL) sums, and what the proforma-import worker rebuilds
+      // as `=SUM(first:last)` against the DASH `MATCH` label contract.
       groupSubtotalAddrs.push(`J${subr.number}`);
     }
     styleCurrency(subr.getCell(COL_TOTAL));
