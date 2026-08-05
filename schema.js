@@ -2647,7 +2647,7 @@ window.SCHEMA = {
           },
           {
             "name": "Windows",
-            "default_cost_per_item": 2500.0,
+            "default_cost_per_item": 450.0,
             "notes": null,
             "gl_account": "17425: CIP Exterior - Windows",
             "default_qty_type": "Avg # BRs"
