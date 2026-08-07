@@ -943,6 +943,61 @@ function createProperty(name) {
   saveBudget();
   return p;
 }
+
+// ---------- One-time forced re-sync from Drive ----------
+// Bump FORCE_DRIVE_RESYNC to make every device re-pull every property from Drive
+// the next time it opens each one. The ordinary reconciles only adopt Drive when
+// the remote copy is NEWER, which is not enough after data has been repaired
+// out-of-band: a device's stale cache can carry an equal or later timestamp and
+// win, which is exactly how a rename got silently reverted. Clearing the cached
+// copy first leaves the reconcile nothing stale to prefer.
+//
+// Runs once per property per stamp, and NEVER discards a record with unpushed
+// local edits — that would throw away someone's work. Dirty records are left
+// exactly as they are (their own push carries them up), and skipped entirely
+// when Drive is not connected, so an offline device is not left looking at an
+// empty budget; it simply re-tries on a later open.
+const FORCE_DRIVE_RESYNC = '2026-08-07-drive-authoritative';
+const FORCE_RESYNC_KEY = 'capex_force_drive_resync_v1';
+function forceDriveResyncOnce(p) {
+  if (!p) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;   // retry once connected
+  let st;
+  try { st = JSON.parse(localStorage.getItem(FORCE_RESYNC_KEY) || '{}'); } catch (e) { st = {}; }
+  if (!st || st.stamp !== FORCE_DRIVE_RESYNC) st = { stamp: FORCE_DRIVE_RESYNC, done: [] };
+  if (!Array.isArray(st.done)) st.done = [];
+  if (st.done.indexOf(p.id) >= 0) return;
+
+  let keptDirty = 0;
+  // Basics: forget what we believe Drive last looked like so the reconcile sees
+  // the remote copy as newer and pulls it.
+  const basicsDirty = !p.drive || !p.drive.lastPushed || p.drive.lastPushed < p.updated;
+  if (basicsDirty) keptDirty++;
+  else if (p.drive) p.drive.remoteModifiedTime = '';
+
+  // Budget versions: drop the cached copy of anything already safely on Drive.
+  // attachBudgetVersionForOpen re-picks from the manifest and the reconcile
+  // downloads the real content.
+  Object.values(STORE.budgetVersions)
+    .filter(v => v.propertyId === p.id)
+    .forEach(v => {
+      const dirty = !v.versionDrive || !v.versionDrive.lastPushed
+        || v.versionDrive.lastPushed < v.versionUpdated;
+      if (dirty || !v.versionDrive || !v.versionDrive.fileId) { keptDirty++; return; }
+      delete STORE.budgetVersions[v.versionId];
+    });
+  if (STORE.currentBudgetVersionId && !STORE.budgetVersions[STORE.currentBudgetVersionId]) {
+    STORE.currentBudgetVersionId = null;
+    CURRENT_BUDGET_VERSION = null;
+  }
+
+  st.done.push(p.id);
+  try { localStorage.setItem(FORCE_RESYNC_KEY, JSON.stringify(st)); } catch (e) {}
+  _persistStoreLocally();
+  if (keptDirty) {
+    console.info(`forceDriveResyncOnce: kept ${keptDirty} record(s) with unpushed edits for ${p.name}`);
+  }
+}
 function openProperty(id) {
   if (!STORE.properties[id]) return;
   STORE.currentPropertyId = id;
@@ -955,6 +1010,9 @@ function openProperty(id) {
     p.name = p.phase1.prop_name;
     truncated = true;
   }
+  // One-time: discard this device's cached copies so the reconciles below pull
+  // Drive's data rather than preferring a stale local record.
+  forceDriveResyncOnce(p);
   attachBudgetVersionForOpen(p);
   composeState();
   if (truncated) saveBasics();   // persist + sync the truncation
