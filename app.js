@@ -476,7 +476,6 @@ const DEFAULT_BUDGET_VERSION = () => ({
   versionId: newBudgetVersionId(),
   propertyId: '',
   label: 'Original',
-  isDefault: true,
   versionCreatedAt: new Date().toISOString(),
   versionCreatedBy: '',
   versionUpdated: new Date().toISOString(),
@@ -585,7 +584,6 @@ function extractLegacyBudgetVersion(data, propertyId, creatorEmail) {
   const bv = DEFAULT_BUDGET_VERSION();
   bv.propertyId = propertyId;
   bv.label = 'Original';
-  bv.isDefault = true;
   bv.versionCreatedBy = data.lastEditor || creatorEmail || '';
   bv.versionCreatedAt = data.created || new Date().toISOString();
   bv.versionUpdated = data.updated || new Date().toISOString();
@@ -735,9 +733,9 @@ function scheduleAutoPushBudget() {
 // property should use, into CURRENT_BUDGET_VERSION. Order: (1) `p` itself is
 // still in the old combined shape -> split it now (persists both files right
 // after, so every teammate's next open adopts the split too); (2) an existing
-// local BudgetVersion for this property (prefer isDefault, else most-recently-
-// updated); (3) create a fresh default version (defensive — should only happen
-// for a property that somehow has neither).
+// local BudgetVersion for this property (the most recently edited one); (3)
+// create a fresh version (defensive — should only happen for a property that
+// somehow has neither).
 function attachBudgetVersionForOpen(p) {
   const legacy = extractLegacyBudgetVersion(p, p.id, (CURRENT_USER && CURRENT_USER.email) || p.lastEditor || '');
   if (legacy) {
@@ -751,8 +749,7 @@ function attachBudgetVersionForOpen(p) {
     return;
   }
   const versionsForThisProperty = Object.values(STORE.budgetVersions).filter(v => v.propertyId === p.id);
-  let chosen = versionsForThisProperty.find(v => v.isDefault) ||
-    versionsForThisProperty.sort((a, b) => String(b.versionUpdated || '').localeCompare(String(a.versionUpdated || '')))[0];
+  let chosen = newestLocalBudgetVersion(versionsForThisProperty);
   if (!chosen) {
     // No local version — before fabricating a blank one, check the org manifest
     // (already in memory when the home screen loaded): if a teammate created
@@ -762,13 +759,12 @@ function attachBudgetVersionForOpen(p) {
     const manifestRows = (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.budgetVersions))
       ? MANIFEST_CACHE.data.budgetVersions.filter(r => r && r.propertyId === p.id && r.fileId)
       : [];
-    const row = manifestRows.find(r => r.isDefault) || manifestRows[0];
+    const row = newestManifestVersionRow(manifestRows);
     if (row) {
       chosen = DEFAULT_BUDGET_VERSION();
       chosen.versionId = row.id;
       chosen.propertyId = p.id;
       chosen.label = row.label || 'Original';
-      chosen.isDefault = !!row.isDefault;
       chosen.versionCreatedAt = row.createdAt || chosen.versionCreatedAt;
       chosen.versionCreatedBy = row.createdBy || '';
       chosen.versionDrive.fileId = row.fileId;
@@ -821,7 +817,7 @@ async function adoptManifestBudgetVersionsIfAny() {
   const rows = ((MANIFEST_CACHE.data && MANIFEST_CACHE.data.budgetVersions) || [])
     .filter(r => r && r.propertyId === propId && r.fileId && r.id !== bv.versionId);
   if (!rows.length) return;
-  const row = rows.find(r => r.isDefault) || rows[0];
+  const row = newestManifestVersionRow(rows);
   const adopted = await downloadBudgetVersionFile(row.id);
   // Re-check nothing changed while we were fetching (user may have navigated or edited).
   if (!adopted || !CURRENT_PROPERTY || CURRENT_PROPERTY.id !== propId) return;
@@ -1003,12 +999,35 @@ function deleteProperty(id) {
   }
 }
 
-// ---------- Budget Versions: create / switch / rename / default / archive / delete ----------
+// ---------- Budget Versions: create / switch / rename / archive / delete ----------
+// There is NO default budget version. "Most recently edited" is the app's only
+// ordering and auto-selection rule: the switcher lists newest-first (leftmost),
+// and anywhere the app has to pick a version on the user's behalf it takes the
+// one edited last. Local edits stamp versionUpdated; manifest rows carry
+// lastModified — take whichever is newer, so a version a teammate just touched
+// still sorts correctly when this device's copy is older. ISO-8601 timestamps
+// compare lexicographically, so plain string compare is the right ordering.
+function budgetVersionLastEdited(local, remote) {
+  const a = (local && (local.versionUpdated || local.versionCreatedAt)) || '';
+  const b = (remote && (remote.lastModified || remote.createdAt)) || '';
+  return a > b ? a : b;
+}
+// Newest-first pick out of a list of local BudgetVersion records.
+function newestLocalBudgetVersion(list) {
+  return list.slice().sort((a, b) => String(b.versionUpdated || b.versionCreatedAt || '')
+    .localeCompare(String(a.versionUpdated || a.versionCreatedAt || '')))[0] || null;
+}
+// Newest-first pick out of a list of org-manifest budgetVersions[] rows.
+function newestManifestVersionRow(rows) {
+  return rows.slice().sort((a, b) => String(b.lastModified || b.createdAt || '')
+    .localeCompare(String(a.lastModified || a.createdAt || '')))[0] || null;
+}
 // Merge local (STORE.budgetVersions) + org-manifest (budgetVersions[]) rows for
-// ONE property, by versionId -> [{local, remote}]. Mirrors mergedHomeEntries()'s
-// local+manifest merge pattern, scoped to whichever property is open. Used by
-// the Budget-tab version switcher so it can list versions this device hasn't
-// downloaded yet (another teammate created them).
+// ONE property, by versionId -> [{local, remote}], MOST RECENTLY EDITED FIRST.
+// Mirrors mergedHomeEntries()'s local+manifest merge pattern, scoped to whichever
+// property is open. Used by the Budget-tab version switcher so it can list
+// versions this device hasn't downloaded yet (another teammate created them);
+// callers rely on the ordering, so every consumer shows the same sequence.
 function mergedBudgetVersionsForCurrentProperty() {
   if (!CURRENT_PROPERTY) return [];
   const propId = CURRENT_PROPERTY.id;
@@ -1025,7 +1044,10 @@ function mergedBudgetVersionsForCurrentProperty() {
         merged.set(e.id, cur);
       });
   }
-  return Array.from(merged.values());
+  const labelOf = (e) => String((e.local && e.local.label) || (e.remote && e.remote.label) || '');
+  return Array.from(merged.values()).sort((x, y) =>
+    budgetVersionLastEdited(y.local, y.remote).localeCompare(budgetVersionLastEdited(x.local, x.remote))
+    || labelOf(x).localeCompare(labelOf(y)));
 }
 // How many DISTINCT budget versions a property has (local + manifest-only),
 // for the home-screen "N budget versions" indicator. Cheap — manifest-only,
@@ -1096,7 +1118,6 @@ function createBudgetVersion(label, { blank = false } = {}) {
   const bv = DEFAULT_BUDGET_VERSION();
   bv.propertyId = CURRENT_PROPERTY.id;
   bv.label = (label || '').trim() || 'Untitled Version';
-  bv.isDefault = false;
   bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
   if (blank) {
     SCHEMA.phase3.forEach((g, gi) => {
@@ -1130,26 +1151,6 @@ function renameBudgetVersion(versionId, newLabel) {
   if (bv === CURRENT_BUDGET_VERSION) saveBudget();
   else { bv.versionUpdated = new Date().toISOString(); _persistStoreLocally(); }
 }
-// Mark ONE version as the property's default (home-screen display default —
-// does NOT gate Asana/proforma pushes, any version can push to those). Best-
-// effort pushes every sibling's updated isDefault flag to the manifest too, so
-// it stays consistent even for versions this device has never opened.
-function setDefaultBudgetVersion(versionId) {
-  const target = STORE.budgetVersions[versionId];
-  if (!target) return;
-  const siblings = Object.values(STORE.budgetVersions).filter(v => v.propertyId === target.propertyId);
-  siblings.forEach(v => { v.isDefault = (v.versionId === versionId); });
-  if (target === CURRENT_BUDGET_VERSION) saveBudget();
-  else { target.versionUpdated = new Date().toISOString(); _persistStoreLocally(); }
-  if (getDriveToken()) {
-    siblings.forEach(v => {
-      const entry = (v === CURRENT_BUDGET_VERSION)
-        ? buildBudgetVersionManifestEntry({ asEditor: true })
-        : passiveBudgetVersionManifestEntry(v);
-      upsertBudgetVersionManifestEntry(entry).catch((e) => console.warn('setDefaultBudgetVersion: manifest update failed for', v.versionId, e));
-    });
-  }
-}
 function setBudgetVersionArchived(versionId, archived) {
   const bv = STORE.budgetVersions[versionId];
   if (!bv) return;
@@ -1180,7 +1181,7 @@ function deleteBudgetVersion(versionId) {
   delete STORE.budgetVersions[versionId];
   if (wasCurrent) {
     const remaining = siblings.filter(v => v.versionId !== versionId);
-    const next = remaining.find(v => v.isDefault) || remaining[0];
+    const next = newestLocalBudgetVersion(remaining) || remaining[0];
     STORE.currentBudgetVersionId = next.versionId;
     CURRENT_BUDGET_VERSION = next;
     composeState();
@@ -5592,11 +5593,9 @@ function renderBudgetVersionSwitcher() {
     .map(({ local, remote }) => ({
       versionId: (local && local.versionId) || (remote && remote.id),
       label: (local && local.label) || (remote && remote.label) || 'Untitled Version',
-      isDefault: !!((local && local.isDefault) || (remote && remote.isDefault)),
       archived: !!((local && local.archived) || (remote && remote.archived)),
     }))
-    .filter(e => !e.archived)
-    .sort((a, b) => (b.isDefault - a.isDefault) || a.label.localeCompare(b.label));
+    .filter(e => !e.archived);   // mergedBudgetVersionsForCurrentProperty already returns most-recently-edited first
 
   // Which version's numbers are currently sitting in the deal's real proforma —
   // marked 📥 on that pill, so "whose numbers are live downstream" is visible at
@@ -5614,11 +5613,11 @@ function renderBudgetVersionSwitcher() {
       : '';
     const pill = el('button', {
       type: 'button',
-      title: (active ? 'Currently open — click to rename/set default/archive/delete' : `Switch to "${e.label}"`) + provTitle,
+      title: (active ? 'Currently open — click to rename/archive/delete' : `Switch to "${e.label}"`) + provTitle,
       style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 12px;border-radius:14px;cursor:pointer;border:1px solid '
         + (active ? '#fff' : 'rgba(255,255,255,0.35)')
         + `;background:${active ? '#fff' : 'transparent'};color:${active ? '#0f172a' : '#fff'}`,
-    }, (e.isDefault ? '★ ' : '') + e.label + (inProforma ? ' 📥' : ''));
+    }, e.label + (inProforma ? ' 📥' : ''));
     pill.addEventListener('click', () => { if (active) budgetVersionMenu(e.versionId); else switchBudgetVersion(e.versionId); });
     wrap.appendChild(pill);
   });
@@ -5636,7 +5635,7 @@ function renderBudgetVersionSwitcher() {
     const mgmtBtn = el('button', {
       type: 'button',
       style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 10px;border-radius:14px;cursor:pointer;border:1px solid rgba(255,255,255,0.35);background:transparent;color:#fff;margin-left:auto',
-      title: 'Rename, set default, archive, or delete a budget version',
+      title: 'Rename, archive, or delete a budget version',
     }, '⚙ Manage');
     mgmtBtn.addEventListener('click', () => manageBudgetVersionsMenu());
     wrap.appendChild(mgmtBtn);
@@ -5662,22 +5661,19 @@ function promptNewBudgetVersion() {
 function budgetVersionMenu(versionId) {
   const bv = STORE.budgetVersions[versionId];
   const label = (bv && bv.label) || 'this version';
-  const isDefault = bv && bv.isDefault;
   const archived = bv && bv.archived;
   const choice = prompt(
-    `"${label}"\n\n1. Rename\n2. ${isDefault ? 'Already the default ★' : 'Set as default (★ home-screen display)'}\n`
-    + `3. ${archived ? 'Unarchive' : 'Archive'}\n4. Delete\n\nEnter 1-4:`
+    `"${label}"\n\n1. Rename\n`
+    + `2. ${archived ? 'Unarchive' : 'Archive'}\n3. Delete\n\nEnter 1-3:`
   );
   if (choice === '1') {
     const n = prompt('New name for this budget version?', label);
     if (n !== null && n.trim()) { renameBudgetVersion(versionId, n.trim()); renderApp(); }
   } else if (choice === '2') {
-    if (!isDefault) { setDefaultBudgetVersion(versionId); renderApp(); toast(`"${label}" is now the default version`, 'success'); }
-  } else if (choice === '3') {
     setBudgetVersionArchived(versionId, !archived);
     renderApp();
     toast(archived ? `Restored "${label}"` : `Archived "${label}"`, 'success');
-  } else if (choice === '4') {
+  } else if (choice === '3') {
     if (confirm(`Delete "${label}"?\n\nThis only removes the local copy — the Drive file is NOT affected.`)) {
       const ok = deleteBudgetVersion(versionId);
       if (ok) renderApp();
@@ -7704,12 +7700,10 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 async function buildCapexBlob() {
   const propName = STATE.phase1.prop_name || '';
   const workbook = await buildCapexWorkbook();
-  // Non-default budget versions get their label baked into the filename, so two
-  // versions' exports don't land in the same Drive folder looking identical. The
-  // default version keeps the original filename shape (no gratuitous churn for
-  // the single-version case, which is still most deals).
+  // The version's label is baked into the filename so two versions' exports
+  // don't land in the same Drive folder looking identical.
   const bv = CURRENT_BUDGET_VERSION;
-  const verPart = (bv && !bv.isDefault && bv.label)
+  const verPart = (bv && bv.label)
     ? '_' + String(bv.label).replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
     : '';
   const filename = `Capex_${(propName || 'property').replace(/[^a-z0-9]+/gi, '_')}${verPart}_${new Date().toISOString().slice(0, 10)}.xlsx`;
@@ -9902,7 +9896,7 @@ function findBudgetVersionForProperty(propId, preferVersionId) {
     return STORE.budgetVersions[preferVersionId];
   }
   const matches = Object.values(STORE.budgetVersions).filter(v => v.propertyId === propId);
-  return matches.find(v => v.isDefault) || matches[0] || null;
+  return newestLocalBudgetVersion(matches);
 }
 function setItemPhotoFolderId(propId, k, folderId) {
   const isOpen = STATE && STATE.id === propId;
@@ -10691,7 +10685,6 @@ function buildBudgetVersionManifestEntry({ asEditor }) {
     id: bv.versionId,
     propertyId: bv.propertyId,
     label: bv.label,
-    isDefault: !!bv.isDefault,
     archived: !!bv.archived,
     fileId: bv.versionDrive.fileId || '',
     createdAt: bv.versionCreatedAt,
@@ -10703,14 +10696,13 @@ function buildBudgetVersionManifestEntry({ asEditor }) {
   };
 }
 // Manifest-row shape for a version this device is NOT currently editing (used
-// by setDefaultBudgetVersion to push a consistent isDefault flag to every
-// sibling version, including ones that have never been opened on this device).
+// when pushing a sibling version's updated flags, including ones that have
+// never been opened on this device).
 function passiveBudgetVersionManifestEntry(v) {
   return {
     id: v.versionId,
     propertyId: v.propertyId,
     label: v.label,
-    isDefault: !!v.isDefault,
     archived: !!v.archived,
     fileId: v.versionDrive.fileId || '',
     createdAt: v.versionCreatedAt,
@@ -10783,8 +10775,7 @@ async function openRemoteProperty(entry) {
                 propertyId: p.id,
                 versionDrive: { fileId: dl.id, lastPushed: now, lastPulled: now, remoteModifiedTime: dl.modifiedTime },
               });
-              if (cand.isDefault || !bv) bv = cand;
-              if (cand.isDefault) break;
+              if (!bv) { bv = cand; break; }   // `sorted` is newest-first
             }
           } catch (e) { console.warn('openRemoteProperty: failed reading Versions/' + f.name, e); }
         }
