@@ -830,6 +830,88 @@ async function adoptManifestBudgetVersionsIfAny() {
   if (CURRENT_VIEW === 'property') renderApp();
 }
 
+// ---------- Drive-authoritative version reconcile ----------
+// The org index is a CACHE of what lives in each property's Versions/ folder —
+// Drive is the truth. Nothing outside the app maintains that index, so a budget
+// file arriving any other way (a client that died mid-push, a file copied or
+// restored straight into Drive, a duplicated deal folder) sits there invisible:
+// the switcher only ever lists indexed rows. This walks the folder on open and
+// closes the gap in both directions, so "in the Versions folder" and "in the
+// app" mean the same thing.
+//
+// Deliberately conservative: it only ever adopts a file whose propertyId matches
+// the open property, never indexes a second file for a versionId already listed
+// (that is a stale duplicate, and indexing it would show one budget twice), and
+// only drops a row after Drive positively confirms the file is missing or
+// trashed — a network failure must never remove someone's version.
+async function reconcileVersionsFolderWithManifest() {
+  if (!CURRENT_PROPERTY) return;
+  if (typeof getDriveToken === 'function' && !getDriveToken()) return;
+  const propId = CURRENT_PROPERTY.id;
+  let folderId;
+  try { folderId = await resolveVersionsFolder(); } catch { return; }   // no Drive folder linked yet
+  const files = (await driveListFilesInFolder(folderId)).filter(f => /\.json$/i.test(f.name));
+  const { data } = await fetchManifest();
+  if (!Array.isArray(data.budgetVersions)) data.budgetVersions = [];
+  if (!CURRENT_PROPERTY || CURRENT_PROPERTY.id !== propId) return;      // navigated away mid-flight
+
+  const indexedFileIds = new Set(data.budgetVersions.map(v => v.fileId).filter(Boolean));
+  const indexedVersionIds = new Set(data.budgetVersions.map(v => v.id));
+  const added = [];
+  for (const f of files) {
+    if (indexedFileIds.has(f.id)) continue;
+    let d = null;
+    try {
+      const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+      if (r.ok) d = await r.json();
+    } catch (e) { console.warn('reconcile: could not read Versions/' + f.name, e); }
+    if (!d || d.propertyId !== propId || !d.versionId) continue;
+    if (indexedVersionIds.has(d.versionId)) continue;
+    if (!LEGACY_BUDGET_FIELDS.some(k => Object.prototype.hasOwnProperty.call(d, k))) continue;
+    const row = {
+      id: d.versionId,
+      propertyId: propId,
+      label: d.label || 'Untitled Version',
+      archived: !!d.archived,
+      fileId: f.id,
+      createdAt: d.versionCreatedAt || f.createdTime || '',
+      createdBy: d.versionCreatedBy || '',
+      lastModified: d.versionUpdated || f.modifiedTime || '',
+      lastEditor: d.versionLastEditor || '',
+      currentEditor: '',
+      currentEditorHeartbeatAt: '',
+    };
+    data.budgetVersions.push(row);
+    indexedFileIds.add(f.id);
+    indexedVersionIds.add(d.versionId);
+    added.push(row.label);
+  }
+
+  const present = new Set(files.map(f => f.id));
+  const dropped = [];
+  const keep = [];
+  for (const v of data.budgetVersions) {
+    if (v.propertyId !== propId || !v.fileId || present.has(v.fileId)) { keep.push(v); continue; }
+    let gone = false;
+    try {
+      const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${v.fileId}?fields=trashed`);
+      if (r.status === 404) gone = true;
+      else if (r.ok) gone = !!(await r.json()).trashed;
+    } catch (e) { gone = false; }   // never drop a row because the network hiccuped
+    if (gone) { dropped.push(v.label); delete STORE.budgetVersions[v.id]; }
+    else keep.push(v);
+  }
+
+  if (!added.length && !dropped.length) return;
+  if (!CURRENT_PROPERTY || CURRENT_PROPERTY.id !== propId) return;
+  data.budgetVersions = keep;
+  await writeManifest(data);
+  _persistStoreLocally();
+  if (added.length) toast(`Found ${added.length} budget version${added.length > 1 ? 's' : ''} on Drive: ${added.join(', ')}`, 'success');
+  if (dropped.length) toast(`Removed ${dropped.length} version${dropped.length > 1 ? 's' : ''} whose Drive file is gone: ${dropped.join(', ')}`);
+  if (CURRENT_VIEW === 'property') renderApp();
+}
+
 function createProperty(name) {
   const p = DEFAULT_PROPERTY();
   p.name = (name || '').trim() || 'Untitled Property';
@@ -895,7 +977,13 @@ function openProperty(id) {
   setHash(propertyHash(STATE));   // reflect the open property in the URL (#/prop/<slug>)
   reconcileBasicsFromDrive();   // Drive-authoritative: adopt a newer remote Basics copy if this device is clean
   reconcileBudgetFromDrive();   // same, for the currently-selected budget version's own file
-  adoptManifestBudgetVersionsIfAny().catch((e) => console.warn('adoptManifestBudgetVersionsIfAny failed:', e));
+  // Drive is authoritative for WHICH versions exist: index anything in the
+  // Versions/ folder the org index is missing (and drop rows whose file is
+  // gone) before the adoption pass reads that index.
+  reconcileVersionsFolderWithManifest()
+    .catch((e) => console.warn('reconcileVersionsFolderWithManifest failed:', e))
+    .then(() => adoptManifestBudgetVersionsIfAny())
+    .catch((e) => console.warn('adoptManifestBudgetVersionsIfAny failed:', e));
 }
 // Drive-authoritative reconcile (Basics): after a cache-first open, if the
 // deal-folder copy is newer than our cache AND we have no unsynced local edits,
