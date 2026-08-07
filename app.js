@@ -1100,6 +1100,17 @@ function budgetVersionLastEdited(local, remote) {
   const b = (remote && (remote.lastModified || remote.createdAt)) || '';
   return a > b ? a : b;
 }
+// A version's NAME comes from whichever side was edited last, for the same
+// reason the ordering does. The local record is only a cache: a rename made on
+// another device (or by anything writing the index directly) shows up in the
+// manifest row first, so preferring local.label unconditionally kept displaying
+// the stale name until this device happened to re-download that version's file.
+function budgetVersionLabelOf(local, remote) {
+  const lt = (local && (local.versionUpdated || local.versionCreatedAt)) || '';
+  const rt = (remote && (remote.lastModified || remote.createdAt)) || '';
+  const pick = (!local || (remote && rt > lt)) ? remote : local;
+  return (pick && pick.label) || (local || {}).label || (remote || {}).label || 'Untitled Version';
+}
 // Newest-first pick out of a list of local BudgetVersion records.
 function newestLocalBudgetVersion(list) {
   return list.slice().sort((a, b) => String(b.versionUpdated || b.versionCreatedAt || '')
@@ -1132,7 +1143,7 @@ function mergedBudgetVersionsForCurrentProperty() {
         merged.set(e.id, cur);
       });
   }
-  const labelOf = (e) => String((e.local && e.local.label) || (e.remote && e.remote.label) || '');
+  const labelOf = (e) => String(budgetVersionLabelOf(e.local, e.remote));
   return Array.from(merged.values()).sort((x, y) =>
     budgetVersionLastEdited(y.local, y.remote).localeCompare(budgetVersionLastEdited(x.local, x.remote))
     || labelOf(x).localeCompare(labelOf(y)));
@@ -5680,7 +5691,7 @@ function renderBudgetVersionSwitcher() {
   const entries = mergedBudgetVersionsForCurrentProperty()
     .map(({ local, remote }) => ({
       versionId: (local && local.versionId) || (remote && remote.id),
-      label: (local && local.label) || (remote && remote.label) || 'Untitled Version',
+      label: budgetVersionLabelOf(local, remote),
       archived: !!((local && local.archived) || (remote && remote.archived)),
     }))
     .filter(e => !e.archived);   // mergedBudgetVersionsForCurrentProperty already returns most-recently-edited first
@@ -5772,7 +5783,7 @@ function manageBudgetVersionsMenu() {
   if (!CURRENT_PROPERTY) return;
   const entries = mergedBudgetVersionsForCurrentProperty().map(({ local, remote }) => ({
     versionId: (local && local.versionId) || (remote && remote.id),
-    label: (local && local.label) || (remote && remote.label) || 'Untitled Version',
+    label: budgetVersionLabelOf(local, remote),
     archived: !!((local && local.archived) || (remote && remote.archived)),
   }));
   if (!entries.length) return;
@@ -10752,7 +10763,15 @@ async function upsertBudgetVersionManifestEntry(entry) {
   if (!STORE.budgetVersions[entry.id]) return data;
   if (!Array.isArray(data.budgetVersions)) data.budgetVersions = [];
   const idx = data.budgetVersions.findIndex(v => v.id === entry.id);
-  if (idx >= 0) data.budgetVersions[idx] = { ...data.budgetVersions[idx], ...entry };
+  if (idx >= 0) {
+    const cur = data.budgetVersions[idx];
+    const merged = { ...cur, ...entry };
+    // Last-edited wins on the NAME too: if the indexed row was modified more
+    // recently than the record being pushed, this device's copy is stale and its
+    // label must not overwrite the newer one.
+    if ((cur.lastModified || '') > (entry.lastModified || '')) merged.label = cur.label;
+    data.budgetVersions[idx] = merged;
+  }
   else data.budgetVersions.push({ ...entry });
   await writeManifest(data);
   return data;
