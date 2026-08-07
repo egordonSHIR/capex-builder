@@ -5770,7 +5770,7 @@ function renderBudgetVersionSwitcher() {
       : '';
     const pill = el('button', {
       type: 'button',
-      title: (active ? 'Currently open — click to rename/archive/delete' : `Switch to "${e.label}"`) + provTitle,
+      title: (active ? 'Currently open — click to rename/copy/archive/delete' : `Switch to "${e.label}"`) + provTitle,
       style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 12px;border-radius:14px;cursor:pointer;border:1px solid '
         + (active ? '#fff' : 'rgba(255,255,255,0.35)')
         + `;background:${active ? '#fff' : 'transparent'};color:${active ? '#0f172a' : '#fff'}`,
@@ -5792,19 +5792,93 @@ function renderBudgetVersionSwitcher() {
     const mgmtBtn = el('button', {
       type: 'button',
       style: 'white-space:nowrap;font-size:12px;font-weight:600;padding:5px 10px;border-radius:14px;cursor:pointer;border:1px solid rgba(255,255,255,0.35);background:transparent;color:#fff;margin-left:auto',
-      title: 'Rename, archive, or delete a budget version',
+      title: 'Rename, copy, archive, or delete a budget version',
     }, '⚙ Manage');
     mgmtBtn.addEventListener('click', () => manageBudgetVersionsMenu());
     wrap.appendChild(mgmtBtn);
   }
   return wrap;
 }
+
+// ---------- Unique version names ----------
+// Two versions of one property sharing a name is the exact ambiguity this app
+// spent a long clean-up escaping ("which Original is which?"), so a name is
+// checked against BOTH local records and manifest rows — a name a teammate used
+// on a version this device has never opened still counts as taken. Compared
+// case-insensitively on the trimmed text, since "Elan v1" and "elan v1 " are the
+// same name to a human reading the switcher.
+function budgetVersionLabelTaken(propId, label, exceptVersionId) {
+  const want = String(label || '').trim().toLowerCase();
+  if (!want) return false;
+  const taken = [];
+  Object.values(STORE.budgetVersions)
+    .filter(v => v.propertyId === propId && v.versionId !== exceptVersionId)
+    .forEach(v => taken.push(v.label));
+  if (MANIFEST_CACHE && MANIFEST_CACHE.data && Array.isArray(MANIFEST_CACHE.data.budgetVersions)) {
+    MANIFEST_CACHE.data.budgetVersions
+      .filter(v => v.propertyId === propId && v.id !== exceptVersionId)
+      .forEach(v => taken.push(v.label));
+  }
+  return taken.some(l => String(l || '').trim().toLowerCase() === want);
+}
+// Keep asking until the name is non-empty and unused for this property. Returns
+// null if the user cancels out.
+function promptUniqueBudgetVersionName(propId, message, initial, exceptVersionId) {
+  let value = initial || '';
+  for (;;) {
+    const answer = prompt(message, value);
+    if (answer === null) return null;
+    value = String(answer).trim();
+    if (!value) { message = 'Enter a name for this budget version:'; continue; }
+    if (budgetVersionLabelTaken(propId, value, exceptVersionId)) {
+      message = `"${value}" is already the name of another budget version for this property.\n\nPick a different name:`;
+      continue;
+    }
+    return value;
+  }
+}
+// Copy a version: identical numbers under a new name, edited independently from
+// here on. Works on any version in the switcher, including one this device has
+// never opened (it is pulled from Drive first, so the copy is made from Drive's
+// current numbers rather than a stale local cache).
+async function copyBudgetVersion(versionId) {
+  if (!CURRENT_PROPERTY) return;
+  let source = STORE.budgetVersions[versionId];
+  if (!source) {
+    toast('Loading that budget version from Drive…');
+    try { source = await downloadBudgetVersionFile(versionId); } catch (e) { source = null; }
+    if (!source) { toast('Could not load that budget version', 'error'); return; }
+  }
+  const from = source.label || 'this version';
+  const label = promptUniqueBudgetVersionName(
+    CURRENT_PROPERTY.id, `Name for the copy of "${from}":`, `${from} copy`);
+  if (label === null) return;
+  const bv = DEFAULT_BUDGET_VERSION();
+  bv.propertyId = CURRENT_PROPERTY.id;
+  bv.label = label;
+  bv.versionCreatedBy = (CURRENT_USER && CURRENT_USER.email) || '';
+  bv.phase3 = JSON.parse(JSON.stringify(source.phase3 || {}));
+  bv.capexGroups = JSON.parse(JSON.stringify(source.capexGroups || []));
+  // Fresh ids so the copy's custom items are never the same objects as the
+  // original's (same rule createBudgetVersion follows).
+  bv.customItems = JSON.parse(JSON.stringify(source.customItems || []))
+    .map(ci => ({ ...ci, id: 'ci_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) }));
+  bv.excluded = JSON.parse(JSON.stringify(source.excluded || {}));
+  bv.checklist = JSON.parse(JSON.stringify(source.checklist || {}));
+  bv.phase4 = JSON.parse(JSON.stringify(source.phase4 || { contingency_pct: 0.10, mgmt_fee_pct: 0.10, notes: '' }));
+  STORE.budgetVersions[bv.versionId] = bv;
+  STORE.currentBudgetVersionId = bv.versionId;
+  CURRENT_BUDGET_VERSION = bv;
+  composeState();
+  saveBudget();   // stamps versionUpdated and schedules the push, so it gets its own Drive file
+  renderApp();
+  toast(`Copied "${from}" to "${label}" — you are now editing the copy`, 'success');
+}
 function promptNewBudgetVersion() {
   if (!CURRENT_PROPERTY) return;
-  const label = prompt('Name this budget version (e.g. "Conservative", "Full Reno"):');
-  if (label === null) return;
-  const trimmed = label.trim();
-  if (!trimmed) { toast('Enter a name for the version', 'error'); return; }
+  const trimmed = promptUniqueBudgetVersionName(
+    CURRENT_PROPERTY.id, 'Name this budget version (e.g. "Conservative", "Full Reno"):');
+  if (trimmed === null) return;
   const curLabel = (CURRENT_BUDGET_VERSION && CURRENT_BUDGET_VERSION.label) || 'the current version';
   const choice = prompt(
     `Start "${trimmed}" from:\n\n1. ${curLabel}'s current numbers (recommended)\n2. Blank slate (everything skipped)\n\nEnter 1-2:`, '1'
@@ -5820,17 +5894,23 @@ function budgetVersionMenu(versionId) {
   const label = (bv && bv.label) || 'this version';
   const archived = bv && bv.archived;
   const choice = prompt(
-    `"${label}"\n\n1. Rename\n`
-    + `2. ${archived ? 'Unarchive' : 'Archive'}\n3. Delete\n\nEnter 1-3:`
+    `"${label}"\n\n1. Rename\n2. Copy (same numbers, new name)\n`
+    + `3. ${archived ? 'Unarchive' : 'Archive'}\n4. Delete\n\nEnter 1-4:`
   );
   if (choice === '1') {
-    const n = prompt('New name for this budget version?', label);
-    if (n !== null && n.trim()) { renameBudgetVersion(versionId, n.trim()); renderApp(); }
+    const n = promptUniqueBudgetVersionName(
+      CURRENT_PROPERTY.id, 'New name for this budget version?', label, versionId);
+    if (n !== null) { renameBudgetVersion(versionId, n); renderApp(); }
   } else if (choice === '2') {
+    copyBudgetVersion(versionId).catch((e) => {
+      console.warn('copyBudgetVersion failed:', e);
+      toast('Could not copy that budget version', 'error');
+    });
+  } else if (choice === '3') {
     setBudgetVersionArchived(versionId, !archived);
     renderApp();
     toast(archived ? `Restored "${label}"` : `Archived "${label}"`, 'success');
-  } else if (choice === '3') {
+  } else if (choice === '4') {
     if (confirm(`Delete "${label}"?\n\nThis only removes the local copy — the Drive file is NOT affected.`)) {
       const ok = deleteBudgetVersion(versionId);
       if (ok) renderApp();
